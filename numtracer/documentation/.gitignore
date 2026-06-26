@@ -1,0 +1,5 @@
+# Generated documentation artefacts — never committed.
+_build/
+doxygen/
+.venv*
+*.log

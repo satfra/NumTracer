@@ -1,0 +1,20 @@
+# FORM trace caches created by the gen_*_form.wls timing scripts (regenerable; the scripts
+# empty their own cache at startup so each run is a clean cold trace).
+TraceCache_*form/
+# stray TensorBases cache if a script runs with cwd=numtracer (the canonical one is at repo root)
+TBCache/
+
+# compile_bench.sh run artifacts (the script + bench/iso TUs are the deliverable, not the outputs)
+bench/compile_bench.*.txt
+bench/compile_bench.*.report
+bench/compile_bench.*.report.json
+
+# Numeric-backend GENERATOR intermediates: the MakeNTKernel "Numeric" path emits a build-time
+# generator program (main TU + per-net unit TUs + a decl header) into tests/gen/, compiles+runs it
+# to produce the committed straight-line kernels, then the program is disposable. Only the FINAL
+# kernels (*_kernel.hh / *_kernels.hh) are the deliverable; these regenerable intermediates were
+# ~62 MB of repo bloat. The gen_*.wls SOURCE scripts (different extension) are kept.
+tests/gen/gen_*.cpp
+tests/gen/gen_*_nets.hh
+
+build*/

@@ -1,0 +1,9 @@
+# Python packages for building the NumTracer documentation site.
+#
+# IMPORTANT: doxysphinx supports Python 3.9–3.12 only (not 3.13+). Build the
+# docs in a 3.12 virtualenv. The non-Python requirement is a system `doxygen`.
+sphinx>=7,<9
+pydata-sphinx-theme>=0.15
+myst-parser>=2
+sphinx-design>=0.5
+doxysphinx>=3.3

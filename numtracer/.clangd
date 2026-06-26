@@ -1,0 +1,3 @@
+# GCC-only flags used by the bench target; strip them so clangd (clang) doesn't error.
+CompileFlags:
+  Remove: [-fconstexpr-ops-limit*, -fconstexpr-loop-limit*]
