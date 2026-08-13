@@ -3228,6 +3228,14 @@ ntRuntimeIncludes[runInc_] := If[runInc === None || runInc === "",
     {},
     {runInc}];
 
+ntApplyTraceComplexOverride[header_String, hdrInc_String, kns_String, sns_String, complexQ_] :=
+  If[TrueQ[complexQ] && kns === "DiFfRG" && sns === "DiFfRG",
+    StringReplace[header,
+      "#include \"" <> hdrInc <> "\"" ->
+        "#ifndef NT_TRACE_COMPLEX\n#define NT_TRACE_COMPLEX DiFfRG::complex<double>\n#endif\n#include \"" <> hdrInc <> "\"",
+      1],
+    header];
+
 (* the dressing-parameter type: Automatic -> `const auto&` (fully generic, self-contained);
    else the given concrete type string (e.g. a consumer's interpolator type). *)
 
@@ -3245,6 +3253,7 @@ Options[mkGenerateKernel] =
     "Dressings" -> {},
     "ScalarParams" -> {},
     "ADParams" -> {},
+    "ParameterOrder" -> Automatic,
     "IncludeDir" -> Automatic,
     "RunGenerator" -> True,
     "FullParallel" -> False,
@@ -3801,7 +3810,7 @@ diagColPolys[colnetStrs_, includeDir_] :=
         the fundamental symbols and calls the generated trN(f). *)
 
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
-  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, sigArgs, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, mkKernelFn, timedBody, realOut, endProject, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, mVarIdx = -1, mEvenBody = False, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
+  Module[{name, ns, dress, scalarParams, adParams, parameterOrder, adNames, scalarTy, args, sigArgs, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, runtimeParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, mkKernelFn, timedBody, realOut, endProject, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, mVarIdx = -1, mEvenBody = False, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
 (* diagData lives HERE, in the outer Module, not in the net-build Module below that assigns it.
    It used to be declared local to that inner Module (which spans the net-build loop and closes
    right after the `integrand` Sum), while `pruneG` reads it AFTER that close. Out of scope there,
@@ -3824,6 +3833,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
     name = OptionValue["Name"];
     dress = OptionValue["Dressings"];
     scalarParams = OptionValue["ScalarParams"];(* loop-independent scalar doubles threaded into the signature *)
+    parameterOrder = OptionValue["ParameterOrder"];
 (* AD-flagged scalars (d1V, d2V for FE-potential flows) must be `const auto&` so the kernel also
    accepts autodiff::real from the integrator_AD twin; everything else stays `const double&`. *)
     adParams = OptionValue["ADParams"];
@@ -4432,12 +4442,52 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    Drop the duplicate from the ARGS side, not the scalarParams side: scalarParams is what
    constParams and the hoist function are built from as well, so removing it there would make
    constant() lose a parameter DiFfRG still passes it. args keeps its full form for fillArgs — the
-   frame genuinely needs the symbol — so only the signature is de-duplicated. Order is unaffected:
-   the DiFfRG call order is coordinates, k, then the remaining scalars in "Parameters" order, which
-   is exactly where the scalarParams block sits. *)
+   frame genuinely needs the symbol — so only the signature is de-duplicated.
+
+   Backend-agnostic generation retains the historical scalar-then-dressing order. A backend with a
+   positional ABI can supply ParameterOrder; MakeNTKernelDiFfRG passes DiFfRG's original Parameters
+   order so interleaved scalar/interpolator packs match the integrator's forwarded tuple exactly. *)
     With[{scalarParamNames = ToString /@ scalarParams},
       sigArgs = DeleteCases[args, a_ /; MemberQ[scalarParamNames, ToString[a]]]];
-      kernelParams = Join[mkParam[#, "double"]& /@ sigArgs, mkParam[#, scalarTy[#]]& /@ scalarParams, mkParam[#, dressTy[#]]& /@ dress, mkParam[#, "double"]& /@ hoistSyms];
+      runtimeParams =
+        With[{runtimeNames = Join[scalarParams, dress]},
+          With[{orderedEntries =
+              If[parameterOrder === Automatic,
+                runtimeNames,
+                Join[
+                  Select[
+                    parameterOrder,
+                    MemberQ[
+                      ToString /@ runtimeNames,
+                      ToString[If[AssociationQ[#], #["Name"], #]]
+                    ] &
+                  ],
+                  Select[
+                    runtimeNames,
+                    !MemberQ[
+                      ToString /@ (If[AssociationQ[#], #["Name"], #] & /@ parameterOrder),
+                      ToString[#]
+                    ] &
+                  ]
+                ]
+              ]},
+            Map[
+              Function[entry,
+                With[{nm = If[AssociationQ[entry], entry["Name"], entry]},
+                  If[MemberQ[scalarParamNames, ToString[nm]],
+                    mkParam[nm, scalarTy[nm]],
+                    mkParam[
+                      nm,
+                      If[AssociationQ[entry], entry["Type"], dressTy[nm]]
+                    ]
+                  ]
+                ]
+              ],
+              orderedEntries
+            ]
+          ]
+        ];
+      kernelParams = Join[mkParam[#, "double"]& /@ sigArgs, runtimeParams, mkParam[#, "double"]& /@ hoistSyms];
 (* The loop-independent `constant` is called by DiFfRG as constant(pos..., k, scalars..., dressings...),
    where pos is the FULL coordinate tuple of the flow's grid (quadrature_integrator.hh builds
    full_args = tuple_cat(coordinates.forward(idx), m_args)). Matching only `p` and `k` by name works
@@ -4445,7 +4495,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    DROPS all three coordinates, and a constant body referring to them then fails to compile with
    "identifier S0 is undefined". "CoordinateArgs" carries the real coordinate names; `args` already
    lists coordinates before k, so filtering preserves the order DiFfRG passes them in. *)
-      constParams = Join[mkParam[#, "double"]& /@ Select[args, constArgQ], mkParam[#, scalarTy[#]]& /@ scalarParams, mkParam[#, dressTy[#]]& /@ dress, mkParam[#, "double"]& /@ hoistSyms];
+      constParams = Join[mkParam[#, "double"]& /@ Select[args, constArgQ], runtimeParams, mkParam[#, "double"]& /@ hoistSyms];
 (* the host-side evaluator for the hoisted k-only lookups. The DiFfRG wrapper (patched by
    DiFfRG_compat.m) calls it once per map()/get() invocation and appends its results to the
    integrator call, in hoistSyms order. Host-only by construction (.CPU()); the expressions are
@@ -4457,8 +4507,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
           Module[{hkParams, vals},
             hkParams = Join[
               mkParam[#, "double"]& /@ Select[args, # === Global`k&],
-              mkParam[#, scalarTy[#]]& /@ scalarParams,
-              mkParam[#, dressTy[#]]& /@ dress];
+              runtimeParams];
             vals = (SymbolName[Head[#]] <> ".CPU()(" <> cppFlat[#[[1]]] <> ")")& /@ hoistCalls;
             "static device::array<double, " <> ToString[Length[hoistCalls]] <> "> ntHoisted(" <>
               StringRiffle[FunKit`MakeParameterString /@ hkParams, ", "] <> ")\n{\n  " <>
@@ -4577,10 +4626,13 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
             decor, regTemplate, regAlias, If[complexQ, {ntReImDefs[decor]}, {}]];
           hdrInc = FileNameTake[headerFile];
           header =
-            FunKit`MakeCppHeader[
+            ntApplyTraceComplexOverride[
+              FunKit`MakeCppHeader[
 (* the numeric kernel is flat straight-line arithmetic: the generated trace functions (hdrInc) plus
    the support runtime; no tensor-engine headers. A complex flow pulls the verdict header unless
    ComplexEndProjection emits an unconditional end-real body with no probe/verdict. *)"Includes" -> Join[extraInc, ntRuntimeIncludes[runInc], {"numtracer/sun/sun_data.hpp", hdrInc}, If[complexQ && !endProject, {ntVerdictFile}, {}]], "Body" -> ntWrapBody[kns, classStr, name]
+              ],
+              hdrInc, kns, sns, complexQ
             ];],
       " s"];
     (* emit the generator source (the numeric matrix-product backend is the single generation path).
@@ -4851,7 +4903,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    the fundamental symbols and calls the traces. Options are forwarded to the generator
    (see Options[mkGenerateKernel] for the set). *)
 
-Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "ComplexRuntimeProjection" -> False, "ComplexEndProjection" -> False, "RealOutput" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None};
+Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "ParameterOrder" -> Automatic, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "ComplexRuntimeProjection" -> False, "ComplexEndProjection" -> False, "RealOutput" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None};
 
 MakeNTKernel::nfiles = "MakeNTKernel needs three output files: MakeNTKernel[ntk, genFile, kernelFile, tracesFile].";
 
