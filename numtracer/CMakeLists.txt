@@ -389,6 +389,15 @@ if(NUMTRACER_BUILD_TESTS)
   target_include_directories(compare_flavour_ingroup PRIVATE tests/gen tests/refshim)
   target_link_libraries(compare_flavour_ingroup PRIVATE NumTracer::NumTracer)
 
+  # A FUNDAMENTAL flavour index with NO flavour generators anywhere (a kaon-like doublet). The only
+  # flow whose flavour deltas form a WEB the blind contraction cannot close, so the only one that
+  # exercises promoteFlavResidue handing the residue to the SU(N) engine. Validated by exact
+  # equivalence between the plain deltaFundFlav spelling and the Sqrt[2 Nf] TFlav[0,..] spelling of
+  # the same object, so no external oracle is needed (kernels by gen/gen_kaon_tadpole.wls).
+  add_executable(compare_kaon_tadpole tests/refshim/compare_kaon_tadpole.cpp)
+  target_include_directories(compare_kaon_tadpole PRIVATE tests/gen tests/refshim)
+  target_link_libraries(compare_kaon_tadpole PRIVATE NumTracer::NumTracer)
+
   # Per-component ADJOINT dressing (gluon condensation): an SU(3)-adjoint line dressed component-by-
   # component (Z_A^a, 8 components) folded through the group. Validated by the collapse property
   # (all components equal == the colour-blind kernel) + per-component breaking — no external oracle
@@ -598,6 +607,7 @@ if(NUMTRACER_BUILD_TESTS)
   add_test(NAME flow_zq_num COMMAND compare_zq_num)
   add_test(NAME flow_flavour_split COMMAND compare_flavour_split)
   add_test(NAME flow_flavour_ingroup COMMAND compare_flavour_ingroup)
+  add_test(NAME flow_kaon_tadpole COMMAND compare_kaon_tadpole)
   add_test(NAME flow_gluon_condensate COMMAND compare_gluon_condensate)
   add_test(NAME color_su3 COMMAND sun_contract 3)
 
@@ -616,6 +626,29 @@ if(NUMTRACER_BUILD_TESTS)
              COMMAND "${NT_WOLFRAM_EXE}" -noprompt
                      -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_complex_projection.wls")
     set_tests_properties(wolfram_complex_projection PROPERTIES LABELS wolfram TIMEOUT 300)
+
+    # Fundamental-flavour contraction: contractFlavour's symmetry (a Kronecker delta is symmetric,
+    # but the rules were head-to-tail only) and promoteFlavResidue, which hands whatever the blind
+    # rules cannot close to the SU(N) engine. The design check is that the promotion is a strict
+    # no-op when the flavour lines already close — that is what keeps the committed quark flows
+    # byte-identical, and it is exactly what flow_kaon_tadpole (behind NT_RUN_CODEGEN) cannot see.
+    add_test(NAME wolfram_flavour_contract
+             COMMAND "${NT_WOLFRAM_EXE}" -noprompt
+                     -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_flavour_contract.wls")
+    set_tests_properties(wolfram_flavour_contract PROPERTIES LABELS wolfram TIMEOUT 300)
+
+    # The C++ TYPE of each runtime kernel parameter: an AD-flagged scalar must be emitted
+    # `const auto&` (an abbreviated template, the only thing that binds autodiff::real) and not
+    # `const double&`. The ParameterOrder rework lost that to a With[] that closed one line early,
+    # and NOTHING else in this repo can see it: generation succeeds, net counts are unchanged, the
+    # kernels are numerically identical and the ordinary get() compiles — only the consumer's
+    # AD_get.cc fails. "ADParams" is also reachable only through MakeNTKernelDiFfRG, which no test
+    # calls, and no committed kernel under tests/gen contains `const auto&`, so even codegen_regen
+    # is blind to this by construction. This is the only gate that observes the property.
+    add_test(NAME wolfram_ad_param_typing
+             COMMAND "${NT_WOLFRAM_EXE}" -noprompt
+                     -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ad_param_typing.wls")
+    set_tests_properties(wolfram_ad_param_typing PROPERTIES LABELS wolfram TIMEOUT 300)
   else()
     message(STATUS "NumTracer: no Wolfram kernel found; the fast mathematica/ unit tests are skipped")
   endif()

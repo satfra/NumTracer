@@ -24,6 +24,6 @@ template<class L> NetVal sc(NetVal x){ return scale(litco<L>::v, std::move(x)); 
 }
 using namespace numtracer::network;
 using namespace numtracer::numeric;
-std::vector<DSlotOpt> optp0(){ return {DSlotOpt{Cx{1,0}, {}, {}, {}}, DSlotOpt{Cx{1,0}, {}, {dslash({{1.,16}})}, {}}, DSlotOpt{Cx{1,0}, {}, {dslash({{-1.,16}, {-1.,24}})}, {}}, DSlotOpt{Cx{1,0}, {}, {dslash({{-1.,16}, {1.,28}})}, {}}, DSlotOpt{Cx{1,0}, {}, {dslash({{1.,16}, {-1.,24}})}, {}}, DSlotOpt{Cx{1,0}, {}, {dslash({{1.,16}, {-1.,28}, {-1.,24}})}, {}}}; }
+const NetVal& lc3(){ static const NetVal v = contract(tproj<37, 1, 20, 7, 44>(), tproj<42, 37, 16, 7, 45>(), tproj<42, 2, 16, 7, 45>(), tproj<38, 3, 20, 7, 44>(), tproj<38, 39, 20, 7, 44>(), tproj<39, 40, 20, 7, 44>(), tproj<41, 40, 16, 7, 45>(), tproj<41, 0, 16, 7, 45>()); return v; }
 const NetVal& lc1(){ static const NetVal v = contract(tproj<37, 0, 20, 7, 44>(), tproj<37, 38, 20, 7, 44>(), tproj<42, 38, 16, 7, 45>(), tproj<41, 42, 16, 7, 45>(), tproj<41, 3, 16, 7, 45>(), tproj<39, 2, 20, 7, 44>(), tproj<40, 39, 16, 7, 45>(), tproj<40, 1, 16, 7, 45>()); return v; }
-const NetVal& lc4(){ static const NetVal v = contract(tproj<40, 2, 0, 7, 40>(), tproj<43, 40, 4, 7, 41>(), tproj<43, 1, 4, 7, 41>(), tproj<41, 4, 0, 7, 40>(), tproj<41, 42, 0, 7, 40>(), tproj<42, 3, 4, 7, 41>()); return v; }
+std::vector<DSlotOpt> optp0(){ return {DSlotOpt{Cx{1,0}, {}, {}, {}}, DSlotOpt{Cx{1,0}, {}, {dslash({{1.,16}})}, {}}, DSlotOpt{Cx{1,0}, {}, {dslash({{1.,24}})}, {}}, DSlotOpt{Cx{1,0}, {}, {dslash({{1.,28}})}, {}}}; }

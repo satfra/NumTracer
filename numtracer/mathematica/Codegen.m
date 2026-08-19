@@ -49,6 +49,48 @@ ntWolframRssMB[] := Quiet @ Check[
 
 cppNum[x_] := ToString[CForm[N[x, 17]]];
 
+(* ---- integer-table text ----------------------------------------------------------------------
+   The emitted generator is dominated by flat integer tables: 99.9% of ZAAqbq2's 25.7 MB main TU is
+   ntSidxU/ntDscU/sdrU literals (6.0 M numeric tokens). `ToString /@ list` walks them one downvalue
+   at a time; `IntegerString` is listable and runs over the packed array in one kernel call —
+   measured 8.2 s -> 4.1 s on 6.3 M integers, output identical.
+
+   THE TRAP: IntegerString DROPS THE SIGN. IntegerString[-5] is "5", not "-5". Every table here is
+   an index or an exponent and so non-negative today, but a table that ever grew a negative entry
+   would be silently miswritten — an off-by-a-sign index into a trace table, i.e. exactly the
+   compiles-fine-but-wrong failure this file's guards exist for. Hence the Min >= 0 gate (a packed
+   Min is C-speed) and the ToString fallback; the guard costs nothing measurable. *)
+
+ntIntStrs[l_List] :=
+  If[l === {},
+    {},
+    If[VectorQ[l, IntegerQ] && Min[l] >= 0,
+      IntegerString[l],
+      ToString /@ l]];
+
+(* one braced C++ initialiser row from a list of integers *)
+
+ntIntRow[l_List] := "{" <> StringRiffle[ntIntStrs[l], ","] <> "}";
+
+(* ---- first-appearance interner --------------------------------------------------------------
+   Returns {intern, harvest}: `intern[v]` gives v's 0-based id, minting a new one on first sight;
+   `harvest[]` gives the distinct values in id order. This is deliberately the SAME order a
+   `DeleteDuplicates` over the flattened column would produce, which is what lets the emitter carry
+   its key columns as integers from the start without moving a single emitted byte — see the
+   emitNumericGenerator note on integer key columns.
+   `Internal`Bag` for the value list: appending to a plain list is O(n^2) at the scale this runs. *)
+
+ntMkIntern[] :=
+  Module[{idx = <||>, bag = Internal`Bag[], n = 0},
+    {Function[v,
+       Module[{k = Lookup[idx, Key[v], Missing[]]},
+         If[MissingQ[k],
+           idx[v] = n;
+           Internal`StuffBag[bag, v];
+           n++,
+           k]]],
+     Function[Null, Internal`BagPart[bag, All]]}];
+
 (* CppForm, flattened to a single line — the fill formulas are emitted INSIDE C++ string
    literals, so CppForm's line-wrapping (newlines) must be collapsed or they break the string. *)
 
@@ -105,23 +147,51 @@ $ntCppLeakPatterns =
    TB3PToS0S1SPhi / TB3PToS0as (Kinematics.m) when they land in a tensor slot no rule rewrites.
    No legitimate emitted identifier contains `$`: verified zero `$` characters across all 630
    committed generated .hh/.cpp under tests/gen. *)
-    RegularExpression["(?<![A-Za-z0-9_$])[A-Za-z][A-Za-z0-9]*\\$[0-9]+"]};
+    RegularExpression["(?<![A-Za-z0-9_$])[A-Za-z][A-Za-z0-9]*\\$[0-9]+"],
+(* A symbol from a PRIVATE Mathematica context. CForm renders the context marks as underscores, so
+   NumTracer`Private`flavDelta[F1,F2] prints as `NumTracer_Private_flavDelta(F1, F2)`. Neither
+   generic rule above can see it: it carries no `List(...)` tail (its arguments are bare index
+   symbols) and no `$nnn` (FunKit names an internal index with Unique["F"], which yields `F45`,
+   not `F$45` — Routing.m:497). And COEN hoists it into `const auto _interpN = ...`, indistinguishable
+   from a legitimate dressing lookup, so nothing upstream objects either. That is how the
+   uncontracted fundamental-flavour delta reached a kernel.
+   A private symbol is BY CONSTRUCTION not part of any emitted interface, so its appearance in
+   generated text is always a leak, whichever package it escaped from — this also covers
+   FunKit`Private`* and TensorBases`Private`*. Matching `_Private_` rather than `NumTracer_` is
+   deliberate: the kernel "Name" option is user-supplied, so a package prefix could be a legitimate
+   identifier. Verified zero matches across all 661 committed generated .hh/.cpp under tests/gen. *)
+    RegularExpression["(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9]*_Private_"]};
 
+(* ONE pass, not thirteen. The scan runs over EVERY generated file, and on a dense flow that is tens
+   of megabytes (ZAAqbq2: 45.9 MB across 83 files) — pattern-at-a-time meant 13 full sweeps, five of
+   them with the regex engine. StringPosition takes the pattern LIST as alternatives and matches them
+   in a single sweep: measured 37.7 s -> 14.4 s on a 309 MB string (2.6x). `StringContainsQ` with the
+   same list is NOT the faster form (measured 39 s) — do not "simplify" this to it.
+   Which pattern hit is recovered afterwards from the 300-character context window, which is small
+   enough that re-testing all thirteen there is free. The context is what the message quotes anyway:
+   the matched token alone rarely identifies which structure it came from, and the emitted lines are
+   thousands of characters wide. *)
 ntExportCpp[file_, text_] := (
-    Function[patt,
-        Module[{pos = StringPosition[text, patt, 1]},
-          If[pos =!= {},
-(* quote the leak IN CONTEXT — the matched token alone rarely identifies which structure it
-   came from, and the emitted lines are thousands of characters wide. *)
-            Message[MakeNTKernel::cppleak, "ntExportCpp", StringTake[text, First[pos]], file <> "\n  context: ..." <> StringTake[text, {Max[1, pos[[1, 1]] - 150], Min[StringLength[text], pos[[1, 2]] + 150]}] <> "..."];
-            Abort[]]]
-      ] /@ $ntCppLeakPatterns;
+    ntLog["[prof] ntExportCpp leak scan (", Round[StringLength[text] / 1048576.], " MB, ", FileNameTake[file], "): ",
+      First @
+        AbsoluteTiming[
+          Module[{pos = StringPosition[text, $ntCppLeakPatterns, 1], ctx, culprit},
+            If[pos =!= {},
+              ctx = StringTake[text, {Max[1, pos[[1, 1]] - 150], Min[StringLength[text], pos[[1, 2]] + 150]}];
+              culprit = FirstCase[$ntCppLeakPatterns, q_ /; StringContainsQ[ctx, q] :> q, "<unidentified>"];
+              Message[MakeNTKernel::cppleak, "ntExportCpp", StringTake[text, First[pos]], file <> "\n  pattern: " <> ToString[culprit] <> "\n  context: ..." <> ctx <> "..."];
+              Abort[]]]],
+      " s"];
     (* ensure the target directory exists — a fresh checkout may have neither flows/<name>/ nor gen/
-       yet, and Export does not create parents (it errors instead). Cheap and idempotent. *)
+       yet, and OpenWrite does not create parents (it fails instead). Cheap and idempotent. *)
     Module[{dir = DirectoryName[file]},
       If[StringQ[dir] && dir =!= "" && !DirectoryQ[dir],
         CreateDirectory[dir, CreateIntermediateDirectories -> True]]];
-    Export[file, text, "Text"]);
+(* WriteString, not Export[...,"Text"]: byte-identical output (verified) but Export re-encodes the
+   whole string through its converter stack, which is measurable on a 26 MB main TU. *)
+    Module[{st = OpenWrite[file, CharacterEncoding -> "UTF8"]},
+      WriteString[st, text];
+      Close[st]]);
 
 (* ---- GlobalCollect: dressing-coefficient decomposition (the Route-B front-end) ----------------
    A diagram's dressing/kinematic coefficient is decomposed into a SUM of monomials, each
@@ -236,6 +306,8 @@ MakeNTKernel::toknest = "ntRePartLinear: a trace token in this summand is not a 
 
 MakeNTKernel::cppleak = "`1`: the generated source still contains un-lowered Mathematica — the text `2` appears in it. Writing it would produce a file that either fails to compile or, worse, compiles into a silently wrong kernel. This means some expression reached the emitter without being turned into C++; the fragment above should identify which. Offending file:\n`3`";
 
+MakeNTKernel::adtype = "ntRuntimeParamType: `1` runtime parameter(s) named in ADParams were NOT typed auto, so they are emitted as const double& instead of const auto&. That is a SILENT defect here and a failure 20 minutes away in the consumer: an auto parameter is what makes the emitted function an abbreviated template, and it is the only reason kernel()/constant() can bind autodiff::real. Typed double, the flow generates cleanly, the net counts are unchanged, the kernels are numerically identical and the ordinary get() compiles and runs — only the AD twin AD_get.cc fails to instantiate, in a project this repo never builds. That is exactly how the ParameterOrder rework shipped the regression. Cause is almost always that the AD name did not survive the ToString/SymbolName normalisation, or that ADParams carries a name that is not a runtime parameter at all. Offending name(s) and the type each got:\n`2`";
+
 (* ---- memo keys for the net builders ----------------------------------------------------------
    These caches are keyed on the builders' TRUE argument, which is not the argument tuple as written.
 
@@ -257,7 +329,29 @@ MakeNTKernel::cppleak = "`1`: the generated source still contains un-lowered Mat
 
 $ctCtx = 0;(* per-generation stamp of {env, mask, nc}; set in mkGenerateKernel *)
 
-ntCanonIds[e_, ids_, env_] := e /. Normal[KeyDrop[ids, Keys[env]]];
+(* The rule list is a pure function of (ids, env), and `ids` is CONSTANT for a whole diagram while
+   `env` is fixed for the generation — but this used to rebuild it, from an Association, on every
+   single call. That matters because the callers are `compileTInv` (RECURSIVE, and this sits inside
+   its memo KEY, so it runs at every tree node on hits as well as misses) and `diracSlotStr`. The
+   per-diagram loop caches it below; here we only decide whether the cache applies.
+
+   The `===` guard is what makes this safe rather than merely convenient. A bare global would be
+   SILENTLY WRONG the moment any call site passed a different diagram's `ids`: the canonicalisation
+   would use the wrong labels, the key would collide with a genuinely different structure, and the
+   memo would hand back that other structure's emitted string — a wrong DiracNet/NetVal in the kernel
+   with no diagnostic anywhere. With the guard, a mismatch simply takes the original slow path and
+   stays correct. For the hot path the comparison is pointer-identical and so costs nothing.
+
+   Dispatch, not a plain rule list: ReplaceAll over a bare list is a linear scan per subexpression,
+   and `ids` runs to tens of entries. *)
+
+$ntCanonIdsSrc = None;
+$ntCanonRules = None;
+
+ntCanonIds[e_, ids_, env_] :=
+  e /. If[ids === $ntCanonIdsSrc,
+         $ntCanonRules,
+         Normal[KeyDrop[ids, Keys[env]]]];
 
 (* MEMOIZED: the projector/Lorentz net builder is called with mostly repeated inputs — the same
    transverse-projector structures recur across every diagram/branch, so a dense flow makes orders of
@@ -539,9 +633,19 @@ $ntCompileJobs := ntCompileJobs[];
 ntNoTableDedup[] := ntEnvFlag["NT_GEN_NO_TABLE_DEDUP"];
 
 ntChunkDef[name_String, ret_String, elems_List] :=
-  Module[{u, pos, idxCost, dedup},
+  Module[{u, pos, idxCost, dedup, intElems},
     dedup = !ntNoTableDedup[];
     u = If[dedup, DeleteDuplicates[elems], elems];
+(* Is this a flat table of integer literals? If so the generic path below emits `static const int
+   a[] = {...}` + one insert instead of one `o.push_back(...); ` per element — the SAME dense form
+   the index run further down already uses. The boilerplate it drops is ~14 characters per element,
+   which on a dressed flow is not a rounding error: ZAAqbq2's `sdchR0` alone was 7.6 MB of the 20 MB
+   of net-builder units. Values, order and the resulting vector are unchanged; measured on a 200k
+   table, 4.18 MB -> 1.38 MB of source and a -O0 compile of 14.2 s -> 0.44 s.
+   Tested on the DISTINCT elements (`u`), not on `elems`: these tables have millions of entries drawn
+   from a few hundred distinct indices, so the check is free where it matters and still exact. The
+   `ret` gate keeps it off every non-int table (DiracNet/NetVal/DSlotOpt/...). *)
+    intElems = ret === "std::vector<int>" && AllTrue[u, StringMatchQ[#, ("-" | "") ~~ DigitCharacter ..]&];
     pos = If[dedup, Lookup[AssociationThread[u -> Range[Length[u]] - 1], elems], {}];
     (* one index entry costs its digits plus a comma *)
     idxCost = (StringLength[ToString[Length[u]]] + 1) * Length[elems];
@@ -563,7 +667,7 @@ ntChunkDef[name_String, ret_String, elems_List] :=
           (* the distinct table is reached from the assembler below, which the bin-packer may put in
              another unit, so it needs its own forward declaration (ntChunkDef only declares the
              _c helpers it generates, never its own entry point). *)
-          xs = ToString /@ pos;
+          xs = ntIntStrs[pos];
           xchunks = SplitBy[Transpose[{xs, Ceiling[Accumulate[(StringLength /@ xs) + 1] / $ntDefChunk]}], Last][[All, All, 1]];
           xnc = Length[xchunks];
           xdefs = MapIndexed["void " <> name <> "_x" <> ToString[#2[[1]] - 1] <> "(std::vector<int>& o){ static const int a[] = {" <> StringRiffle[#1, ","] <> "}; o.insert(o.end(), a, a + " <> ToString[Length[#1]] <> "); }"&, xchunks];
@@ -582,7 +686,10 @@ ntChunkDef[name_String, ret_String, elems_List] :=
           cs = Ceiling[Accumulate[(StringLength /@ elems) + 2] / $ntDefChunk];
           chunks = SplitBy[Transpose[{elems, cs}], Last][[All, All, 1]];
           nc = Length[chunks];
-          defs = MapIndexed["void " <> name <> "_c" <> ToString[#2[[1]] - 1] <> "(" <> ret <> "& o){ " <> StringJoin[("o.push_back(" <> # <> "); ")& /@ #1] <> "}"&, chunks];
+          defs =
+            If[intElems,
+              MapIndexed["void " <> name <> "_c" <> ToString[#2[[1]] - 1] <> "(" <> ret <> "& o){ static const int a[] = {" <> StringRiffle[#1, ","] <> "}; o.insert(o.end(), a, a + " <> ToString[Length[#1]] <> "); }"&, chunks],
+              MapIndexed["void " <> name <> "_c" <> ToString[#2[[1]] - 1] <> "(" <> ret <> "& o){ " <> StringJoin[("o.push_back(" <> # <> "); ")& /@ #1] <> "}"&, chunks]];
           {Append[defs, ret <> " " <> name <> "(){ " <> ret <> " o; o.reserve(" <> ToString[Length[elems]] <> "); " <> StringJoin[Table[name <> "_c" <> ToString[k - 1] <> "(o); ", {k, nc}]] <> "return o; }"], StringJoin[Table["void " <> name <> "_c" <> ToString[k - 1] <> "(" <> ret <> "&);\n", {k, nc}]]}
         ]
     ]];
@@ -1897,7 +2004,7 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
    flow / unknown". When it is >= 0 the generator proves Matsubara evenness while it contracts (see
    the ntMEven thread below) and emits the verdict as a constant in the traces header. *)
 emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kns_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False, mIdx_:-1] :=
-  Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], str, tmpl, pre, unitPre, unitInc, nUnits, units, decl, diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeys, netTerms, refCount, distinctSubs, subIdxOf, nSub, nReused, sdnDefs, slnDefs, sdchDefs, sdslDefs, sdnCDecl, slnCDecl, sdchCDecl, sdslCDecl, tableDefs = "",
+  Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], str, tmpl, pre, unitPre, unitInc, nUnits, units, decl, diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeysLen, netTerms, dsInt, dsGet, lsInt, lsGet, dcInt, dcGet, dlInt, dlGet, drInt, drGet, scCache, slotCombo, dPoolCse, lPoolCse, refCount, distinctSubs, subIdxOf, nSub, nReused, sdnDefs, slnDefs, sdchDefs, sdslDefs, sdnCDecl, slnCDecl, sdchCDecl, sdslCDecl, tableDefs = "",
     chpDefs, chpCDecl, optpDefs, optpCDecl, sdchrDefs, sdchrCDecl, sdslrDefs, sdslrCDecl, dressAtomIds, colMainDecls, colChunkDefs},
     str[x_] := ToString[x];
 (* DRESSED nets (symbolic dressing collection): a core may be ntDressedCore[chainStr, slotsStr]
@@ -1924,36 +2031,92 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    but differ only in dressing collapse to ONE plain-MPoly trace (the 6.2× dedup), and the trace table
    loses its dressing dimension entirely. A slot's option list is nv[[2]][[k]]; Tuples over them gives every
    combination. The non-dressed branches carry an empty dress key, so non-dressed flows stay byte-identical. *)
+(* Timed: this is where the dressed slot options are expanded into their Cartesian product, so it is
+   the first place in the emitter that touches every SUB-TERM individually (millions of them on a
+   dressed flow) rather than every net. Separate from the dedup join below because the work is
+   different in kind — construction, not hashing. *)
+(* INTEGER KEY COLUMNS. The five key columns (dirac net, lorentz net, chain, structural option tuple,
+   dress multiset) used to be carried as STRINGS and lists-of-strings all the way to the dedup join,
+   which then hashed each of them twice more (DeleteDuplicates + Lookup, per column). On ZAAqbq2 that
+   is 12.7 M elements x 5 columns x 3 passes. Intern them HERE instead, once per distinct value, and
+   carry ids: the join's `internCol` disappears and its arithmetic is over packed integers.
+   Byte-identity: `ntMkIntern` assigns ids in first-appearance order, and the walk order here
+   (nets -> cores -> combinations, `Tuples` last-slot-fastest) is exactly the order the flattened
+   column had, so the id -> value map is the same permutation `DeleteDuplicates` produced. Each
+   interner is called ONCE per core-instance (or once per distinct slot-option set, via slotCombo)
+   rather than once per sub-term, which is the 33x. *)
+    {dsInt, dsGet} = ntMkIntern[];
+    {lsInt, lsGet} = ntMkIntern[];
+    {dcInt, dcGet} = ntMkIntern[];
+    {dlInt, dlGet} = ntMkIntern[];
+    {drInt, drGet} = ntMkIntern[];
+(* The Cartesian expansion of one core's slot options depends on `slotOpts` ALONE — not on the chain,
+   the Lorentz rest or the branch scalar. So compute it once per distinct option set and reuse: on
+   ZAAqbq2 that is ~36 k evaluations instead of ~1.27 M. Returns {dlIds, drIds, nums, n}, all four
+   from one call so the columns can never desync — `Tuples` and `Flatten[Outer[...]]` both vary the
+   last slot fastest, and that alignment between a structure tuple and its numeric coefficient is
+   load-bearing. *)
+    scCache = <||>;
+    slotCombo[slotOpts_] :=
+      Lookup[scCache, Key[slotOpts],
+        scCache[slotOpts] =
+          Module[{structs, nums, dress, cs, n},
+            structs = #[[All, 1]]& /@ slotOpts;
+            nums    = #[[All, 2]]& /@ slotOpts;
+            dress   = #[[All, 3]]& /@ slotOpts;
+            cs = Tuples[structs];
+            n  = Length[cs];
+            {dlInt /@ cs,
+(* by far the common case: no slot option on this core carries a dressing atom, so every
+   combination's union is empty. Checked once per distinct option set. *)
+             If[AllTrue[dress, AllTrue[#, # === {}&]&],
+               ConstantArray[drInt[{}], n],
+               drInt /@ (Sort[Catenate[#]]& /@ Tuples[dress])],
+             Flatten[Outer[Times, Sequence @@ nums]],
+             n}]];
+    ntLog["[prof] sub-term expansion: ", First @ AbsoluteTiming[
     {diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, dressAtomIds} =
       Transpose @
         MapThread[
           Function[{cores, rss},
             If[cores === {},
               {{}, {}, {}, {}, {}, {}},
-              Transpose[
-                Join @@
+(* COLUMN-ORIENTED, not row-oriented. The obvious spelling builds one six-element ROW per sub-term
+   and Transposes at the end — but a dressed flow has millions of sub-terms (12.7 M on ZAAqbq2), and
+   materialising a row for each, with three separate `#[[k]]& /@ combo` passes inside it, measured
+   63 s. Every column is either a constant repeated n times, a single `Tuples`, or a single `Outer`
+   product, so build the six columns directly and concatenate them per net; nothing is evaluated per
+   sub-term at Mathematica level. `Join @@@ Transpose[...]` regroups the per-core column tuples into
+   six whole-net columns.
+   ORDER is what makes this exact: `Tuples` varies the LAST slot fastest and `Flatten[Outer[...]]`
+   does the same, so the numeric product lines up element-for-element with the structure tuple it
+   belongs to. Verified byte-identical on the dressed fixtures. *)
+              Join @@@ Transpose @
                   MapThread[
                     Function[{nv, rv, scal},
                       Module[{lsStr = If[rv === "", "NetVal{}", rv]},
                         Which[
                           MatchQ[nv, _ntDressedCore],(* dressed numerator: expand slot options → structural sub-terms *)
                             With[{chain = nv[[1]], slotOpts = nv[[2]]},
-                              (* dl (5th) = this combination's STRUCTURAL option-string LIST (one dressing-free
-                                                structStr per chain slot), kept STRUCTURED so the table emitter pools the distinct
-                                                structures; the numeric Cx folds into scal and the dress ids become dr (6th). *)
-                              Function[combo,
-                                {"DiracNet{}", lsStr,
-                                scal * (Times @@ (#[[2]]& /@ combo)),   (* fold ∏ numeric Cx into the scalar *)
-                                chain,
-                                #[[1]]& /@ combo,                        (* structural options (dressing-free) *)
-                                Sort[Catenate[#[[3]]& /@ combo]]}        (* ⋃ dress atom ids, sorted (Catenate[{}]={}) *)
-                              ] /@ If[slotOpts === {}, {{}}, Tuples[slotOpts]]],
+                              If[slotOpts === {},
+                                {{dsInt["DiracNet{}"]}, {lsInt[lsStr]}, {scal}, {dcInt[chain]}, {dlInt[{}]}, {drInt[{}]}},
+(* dl = this combination's STRUCTURAL option-string LIST (one dressing-free structStr per chain
+   slot), interned so the table emitter still pools the distinct structures; the numeric Cx folds
+   into the sub-term scalar and the dress ids become the DPoly key. *)
+                                Module[{tb = slotCombo[slotOpts], n},
+                                  n = tb[[4]];
+                                  {ConstantArray[dsInt["DiracNet{}"], n],
+                                   ConstantArray[lsInt[lsStr], n],
+                                   scal * tb[[3]],
+                                   ConstantArray[dcInt[chain], n],
+                                   tb[[1]],
+                                   tb[[2]]}]]],
                           StringMatchQ[nv, "DiracNet" ~~ ___],(* gamma branch: DiracNet + projector rest *)
-                            {{nv, lsStr, scal, "std::vector<DChainTok>{}", {}, {}}},
+                            {{dsInt[nv]}, {lsInt[lsStr]}, {scal}, {dcInt["std::vector<DChainTok>{}"]}, {dlInt[{}]}, {drInt[{}]}},
                           True,(* gamma-free branch: whole net is the rest *)
-                            {{"DiracNet{}", nv, scal, "std::vector<DChainTok>{}", {}, {}}}]]],
-                    {cores, rss[[All, 1]], rss[[All, 2]]}]]]],
-          {invNets, invRest}];
+                            {{dsInt["DiracNet{}"]}, {lsInt[nv]}, {scal}, {dcInt["std::vector<DChainTok>{}"]}, {dlInt[{}]}, {drInt[{}]}}]]],
+                    {cores, rss[[All, 1]], rss[[All, 2]]}]]],
+          {invNets, invRest}];], " s"];
 (* ---- colour-net table: chunk DEFINITIONS on the parallel -O0 units, assembler in the main TU ----
    The distinct colour nets are one `SUNNet{sun3.T(..), ..}` constructor-call literal each, and on a
    flow with a large colour graph the table dwarfs everything else in the main TU (measured: 6.28 MB
@@ -2048,32 +2211,30 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    only change the GENERATOR's internal sharing — each use copies the shared NetVal/DiracNet, so the
    contracted result (hence the committed kernel) is byte-identical. Previously skipped when dressed,
    which left the dressed generator C++ bloated and its -O0 compile ~2x slower. *)
-    Module[{lTerms = Flatten[lorentzNetStrs], dTerms = Flatten[diracNetStrs], lCount, dCount, lMap = <||>, dMap = <||>, li = 0, di = 0, lRef, dRef},
+    Module[{dPool = dsGet[], lPool = lsGet[], lCnt, dCnt, lMap = <||>, dMap = <||>, li = 0, di = 0},
+(* Counted by ID, not by string: the key columns are already interned, so this is a Counts over a
+   packed integer vector and a Lookup into id order. `Range[0, n-1]` recovers the counts in id order,
+   which IS the first-appearance order the old `KeyValueMap` over `Counts[strings]` walked — that is
+   what keeps the lc<k>/dc<k> numbering identical. *)
       With[{
         ntT =
           First @
             AbsoluteTiming[
-              lCount = Counts[lTerms];
-              dCount = Counts[dTerms];]},
-        ntLog["[prof] CSE Counts (", Length[lTerms], "+", Length[dTerms], " terms): ", ntT, " s"]];
-      KeyValueMap[
-        Function[{t, c},
-          If[c >= 2 && t =!= "NetVal{}" && t =!= "",
+              lCnt = Lookup[Counts[Flatten[lorentzNetStrs]], Range[0, Length[lPool] - 1], 0];
+              dCnt = Lookup[Counts[Flatten[diracNetStrs]], Range[0, Length[dPool] - 1], 0];]},
+        ntLog["[prof] CSE Counts (", Total[lCnt], "+", Total[dCnt], " terms): ", ntT, " s"]];
+      Do[
+        With[{t = lPool[[k]]},
+          If[lCnt[[k]] >= 2 && t =!= "NetVal{}" && t =!= "",
             lMap[t] = "lc" <> str[li];
             li++]],
-        lCount];
-      KeyValueMap[
-        Function[{t, c},
-          If[c >= 2 && t =!= "DiracNet{}" && t =!= "",
+        {k, Length[lPool]}];
+      Do[
+        With[{t = dPool[[k]]},
+          If[dCnt[[k]] >= 2 && t =!= "DiracNet{}" && t =!= "",
             dMap[t] = "dc" <> str[di];
             di++]],
-        dCount];
-      lRef[t_] := If[KeyExistsQ[lMap, t],
-          lMap[t] <> "()",
-          t];
-      dRef[t_] := If[KeyExistsQ[dMap, t],
-          dMap[t] <> "()",
-          t];
+        {k, Length[dPool]}];
       cseDefs =
         Join[
           KeyValueMap[
@@ -2097,14 +2258,20 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                   "const NetVal& " <> nm <> "();"],
                 lMap]],
             "\n"]];
+(* The rewrite is now a POOL substitution. Every occurrence of a net term shares one pool entry, so
+   replacing that entry replaces every occurrence — O(#distinct) instead of O(#sub-terms). The
+   previous spelling was already vectorised (13.5 s -> 1.1 s by hoisting the substitution onto the
+   distinct keys); this removes the remaining 12.7 M-element Lookup entirely. Injective, because an
+   `lc<k>()` / `dc<k>()` accessor can never collide with a net literal, so the pool's first-appearance
+   order — and hence every downstream id — is untouched. *)
       With[{
         ntT =
           First @
             AbsoluteTiming[
-              diracNetStrs = Map[dRef, diracNetStrs, {2}];
-              lorentzNetStrs = Map[lRef, lorentzNetStrs, {2}];]},
+              dPoolCse = If[KeyExistsQ[dMap, #], dMap[#] <> "()", #]& /@ dPool;
+              lPoolCse = If[KeyExistsQ[lMap, #], lMap[#] <> "()", #]& /@ lPool;]},
         ntLog["[prof] CSE ref-rewrite: ", ntT, " s"]];
-      ntLog["[cse] net terms: lnet ", Length[lTerms], "->", Length[lMap], " distinct, dnet ", Length[dTerms], "->", Length[dMap], " distinct shared builders"]
+      ntLog["[cse] net terms: lnet ", Total[lCnt], "->", Length[lMap], " distinct, dnet ", Total[dCnt], "->", Length[dMap], " distinct shared builders"]
     ];
 (* ---- GLOBAL SUB-TERM DEDUP ------------------------------------------------------------------
    A net is Σ_b scal_b · contract(dn_b, ln_b, dch_b, dsl_b). The generator's cost is one trace
@@ -2132,88 +2299,115 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    (generate twice, compare the kernels' VALUES; a byte-diff is meaningless because dedup changes
    GlobalEnv interning order and so renumbers every sN). *)
     ntNoDedup = ntEnvFlag["NT_GEN_NO_DEDUP"];
-(* LEVER (b): each sub-term carries a {traceKey, dressKey} PAIR. The traceKey is dressing-free
-   {ds, ls, chain, structural-options} — so combinations that share a concrete structure but differ only
-   in dressing collapse to ONE trace. The dressKey is the sorted dress-atom multiset; it becomes the
-   DPoly channel a net's fold routes this sub-term's (scaled) trace into. Sub-terms MERGE only when they
-   share BOTH the trace AND the dress channel (a merge across channels would corrupt the DPoly). For a
-   non-dressed flow every dressKey is {}, so the grouping reduces to the old traceKey grouping and the
-   emitted kernel is byte-identical. *)
-    subKeys =
-      MapThread[
-        Function[{ds, ls, dc, dl, dr, ni},
-          Table[
-            {
-              Join[
-                {
-                  ds[[j]],
-                  ls[[j]],
-                  If[hasDressed,
-                    dc[[j]],
-                    ""],
-                  If[hasDressed,
-                    dl[[j]],
-                    ""]},
-                If[ntNoDedup,
-                  {ni, j},
-                  {}]],
-              (* dressKey: the dress-atom multiset ({} for a non-dressed sub-term) *)
-              dr[[j]]},
-            (* unique per occurrence => nothing ever merges *)
-            {j, Length[ds]}]],
-        {
-          diracNetStrs,
-          lorentzNetStrs,
-          If[hasDressed,
-            dressChains,
-            diracNetStrs],
-          If[hasDressed,
-            dressSlotOpts,
-            diracNetStrs],
-          dressAtomIds,
-          Range[Length[diracNetStrs]]}];
+(* The dedup JOIN. A hash-join over EVERY sub-term — 1.6 M on ZAAqbq1, 12.7 M on ZAAqbq2 — and
+   profiling (2026-08-18) put the emitter containing it at 45-54% of the whole Wolfram phase, ahead
+   of the per-diagram net build and ~30x ahead of all of FunKit's COEN lowering.
+
+   The cost was never the join; it was the KEY. Written literally, each sub-term's key is a fresh
+   4-element list of net-builder STRINGS, and that list is then hashed three separate times (GatherBy
+   per net, Counts over the merged terms, and the final AssociationThread lookup). So: INTERN each
+   key column ONCE into integers, pack the four ids into a single integer by mixed radix, and let
+   GatherBy/Counts/Lookup work on packed machine integers. Every distinct string is hashed once
+   instead of millions of times, and the per-sub-term work becomes listable arithmetic.
+
+   BYTE-IDENTITY. The emitted trace numbering must not move, and it does not: interning assigns ids
+   in FIRST-APPEARANCE order, so the key SEQUENCE fed to Counts is the same permutation as before;
+   `ReverseSort` on an Association is stable (verified), so equal reference counts keep that order;
+   and PositionIndex groups in first-appearance order exactly as GatherBy did (verified). Confirmed
+   end-to-end by regenerating the dressed fixtures before and after and diffing the kernels.
+
+   NT_GEN_NO_DEDUP keeps its meaning: the grouping id becomes the sub-term's global occurrence index,
+   so nothing ever merges. The PACKED key is kept alongside, because the emitted tables still need
+   each distinct entry's four string columns; on the normal path the two are the same number.
+
+   LEVER (b): the traceKey is dressing-free {ds, ls, chain, structural-options} — combinations that
+   share a concrete structure but differ only in dressing collapse to ONE trace. The dressKey is the
+   sorted dress-atom multiset; it becomes the DPoly channel a net's fold routes this sub-term's
+   (scaled) trace into. Sub-terms MERGE only when they share BOTH the trace AND the dress channel (a
+   merge across channels would corrupt the DPoly). For a non-dressed flow every dressKey is {}, so
+   the grouping reduces to the old traceKey grouping. *)
+    ntLog["[prof] sub-term dedup join: ", First @ AbsoluteTiming[
+    Module[{lens, constCol, dsI, uDs, lsI, uLs, dcI, uDc, dlI, uDl, drI, uDr,
+            nLs, nDc, nDl, nDr, tkPack, ckId, flatPack, packOfDistinct},
+(* The five key columns arrived already interned (see the expansion above), so the join opens with
+   the ids and the pools in hand: no DeleteDuplicates, no Lookup, nothing hashed here at all. This is
+   what the stage used to spend most of its time on — 5 columns x 12.7 M elements x 2 passes. *)
+      lens = Length /@ diracNetStrs;
+      constCol = ConstantArray[0, #]& /@ lens;
+
+      {dsI, uDs} = {diracNetStrs, dPoolCse};
+      {lsI, uLs} = {lorentzNetStrs, lPoolCse};
+      {dcI, uDc} = If[hasDressed, {dressChains, dcGet[]},   {constCol, {""}}];
+      {dlI, uDl} = If[hasDressed, {dressSlotOpts, dlGet[]}, {constCol, {""}}];
+      {drI, uDr} = {dressAtomIds, drGet[]};
+(* Max[1, ...]: a flow with NO sub-terms at all leaves a column empty, and a zero radix would make
+   the pack (and its Mod/Quotient decode) degenerate. Nothing is packed or decoded in that case, so
+   the floor only keeps the arithmetic well-defined. *)
+      {nLs, nDc, nDl, nDr} = Max[1, Length[#]]& /@ {uLs, uDc, uDl, uDr};
+
+(* mixed-radix pack of the traceKey, then of the (traceKey, dressChannel) pair the per-net merge
+   groups on. Listable arithmetic over the ragged integer columns — no Map. *)
+      tkPack = ((dsI * nLs + lsI) * nDc + dcI) * nDl + dlI;
+      ckId   = tkPack * nDr + drI;
+      subKeysLen = lens;
+      If[ntNoDedup,
+        Module[{tot = Total[lens]},
+          flatPack = Flatten[tkPack, 1];
+          tkPack = TakeList[Range[0, tot - 1], lens];
+          ckId   = tkPack],
+        flatPack = None];
+
 (* Per net: merge the sub-terms that share a trace AND a dress channel, summing scalars; drop the zero
    sums. Do this BEFORE counting references — a (trace, channel) occurring twice inside ONE net collapses
    to a single reference here, so its raw occurrence count would overstate its reuse, and a channel whose
-   scalars cancel is not referenced at all and must not be contracted. *)
-    netTerms =
-      MapThread[
-        Function[{keys, scs},
-          (* GatherBy element = {{traceKey, dressKey}, sc}; g[[1,1]] is the {tk,dk} PAIR, so tk = g[[1,1,1]],
-                  dk = g[[1,1,2]]. The trace table keys on tk ALONE (refCount below), so dressing variants of one
-                  structure share the trace slot; only the fold entry carries dk. *)
-          Select[(Function[g, {g[[1, 1, 1]], g[[1, 1, 2]], Total[g[[All, 2]]]}]) /@ GatherBy[Transpose[{keys, scs}], First],
-            #[[3]] =!= 0&]],
-        {subKeys, subScalars}];
+   scalars cancel is not referenced at all and must not be contracted.
+   PositionIndex, not GatherBy: same grouping in the same order, in one call, and the per-group Map
+   then runs over GROUPS rather than over sub-terms. *)
+      netTerms =
+        MapThread[
+          Function[{ck, tks, drs, scs},
+            Select[
+              Function[g, {tks[[First[g]]], drs[[First[g]]], Total[scs[[g]]]}] /@ Values[PositionIndex[ck]],
+              #[[3]] =!= 0&]],
+          {ckId, tkPack, drI, subScalars}];
 (* Order the distinct traces by DESCENDING reference count, so a memory-capped run still caches the
    traces that repay caching most, and the singletons (refCount 1 — computing one costs the same
    whether or not it is cached, so caching it is pure RAM for no saving) land at the end where the
    default cap excludes them. *)
-    (* First /@ #, not #[[All,1]] — the latter errors on a net whose terms all cancelled to {} *)
-    refCount = Counts[Flatten[Map[First /@ #&, netTerms], 1]];
-    distinctSubs = Keys[ReverseSort[refCount]];
-    subIdxOf = AssociationThread[distinctSubs -> Range[0, Length[distinctSubs] - 1]];
-    nSub = Length[distinctSubs];
+      (* First /@ #, not #[[All,1]] — the latter errors on a net whose terms all cancelled to {} *)
+      refCount = Counts[Flatten[Map[First /@ #&, netTerms], 1]];
+      distinctSubs = Keys[ReverseSort[refCount]];
+      subIdxOf = AssociationThread[distinctSubs -> Range[0, Length[distinctSubs] - 1]];
+      nSub = Length[distinctSubs];
 (* Published for the COMPILE step (mainOpt), which runs later, in another function, and needs the
    flow's distinct-trace count to pick the main-TU optimisation level — the generator RUN scales
    with it. A global rather than a threaded argument because the two are already strictly
    sequential within one generation; reset per generation right here, where it is computed, so a
    stale value from a previous flow can never leak into the next one's decision. *)
-    $ntGenNSub = nSub;
-    nReused = Count[Values[refCount], c_ /; c >= 2];(* == the length of the sorted prefix worth caching *)
-    netTerms =
-      Map[
-        Function[nt,
-            {subIdxOf[nt[[1]]], nt[[2]], nt[[3]]}
-          ] /@ #&,
-        netTerms];
+      $ntGenNSub = nSub;
+      nReused = Count[Values[refCount], c_ /; c >= 2];(* == the length of the sorted prefix worth caching *)
+(* Decode the surviving packed keys back into their four string columns — only nSub of them, so this
+   is the one place the strings are touched again and it costs nothing next to the join. Under
+   NT_GEN_NO_DEDUP the grouping id is an occurrence index, so the pack is read off the flat column. *)
+      packOfDistinct = If[flatPack === None, distinctSubs, flatPack[[distinctSubs + 1]]];
+      distinctSubs =
+        Function[k,
+          Module[{a = k, i1, i2, i3, i4},
+            i4 = Mod[a, nDl]; a = Quotient[a, nDl];
+            i3 = Mod[a, nDc]; a = Quotient[a, nDc];
+            i2 = Mod[a, nLs]; i1 = Quotient[a, nLs];
+            {uDs[[i1 + 1]], uLs[[i2 + 1]], uDc[[i3 + 1]], uDl[[i4 + 1]]}]] /@ packOfDistinct;
+(* the fold entries keep the dress-atom multiset itself (downstream builds the DMono table from it),
+   so decode that column here too — again only over the surviving terms. *)
+      netTerms = Map[Function[nt, {subIdxOf[nt[[1]]], uDr[[nt[[2]] + 1]], nt[[3]]}] /@ #&, netTerms];
+    ];], " s"];
     ntLog[
       "[cse] sub-terms: ",
-      Total[Length /@ subKeys],
+      Total[subKeysLen],
       " contractions -> ",
       nSub,
       " distinct traces (",
-      ToString @ NumberForm[N[Total[Length /@ subKeys] / Max[1, nSub]], {5, 2}],
+      ToString @ NumberForm[N[Total[subKeysLen] / Max[1, nSub]], {5, 2}],
       "x), ",
       nReused,
       " reused (cached), ",
@@ -2229,6 +2423,10 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
 (* The distinct traces are emitted as ONE flat table each (still chunked by ntChunkDef, whose helpers
    the bin-packer scatters across the -O0 units); the nets reference them by index. Guard nSub == 0:
    {}[[All,1]] is an error, not an empty list. *)
+(* Chunk/intern/bin-pack the net-builder tables into the -O0 unit TUs. Separated from the main()
+   data tables below because the two have different levers: this half is dominated by ntChunkDef's
+   dedup scans, that half by integer-to-text. *)
+    ntLog["[prof] unit tables + bin-pack: ", First @ AbsoluteTiming[
     {sdnDefs, sdnCDecl} =
       ntChunkDefs[
         "sdn",
@@ -2265,10 +2463,10 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
           uOpts = DeleteDuplicates[Flatten[combos]];
           optPos = AssociationThread[uOpts -> Range[Length[uOpts]] - 1];
           {chainDefs, chainDecl} = ntChunkDefs["chp", "std::vector<std::vector<DChainTok>>", {uChains}];
-          {chainRefDefs, chainRefDecl} = ntChunkDefs["sdchR", "std::vector<int>", {ToString /@ (chainPos /@ chainStrs)}];
+          {chainRefDefs, chainRefDecl} = ntChunkDefs["sdchR", "std::vector<int>", {ntIntStrs[chainPos /@ chainStrs]}];
           {optDefs, optDecl} = ntChunkDefs["optp", "std::vector<DSlotOpt>", {uOpts}];
           {slotRefDefs, slotRefDecl} = ntChunkDefs["sdslR", "std::vector<std::vector<int>>",
-            {("{" <> StringRiffle[ToString /@ (optPos /@ #), ","] <> "}")& /@ combos}];
+            {ntIntRow[optPos /@ #]& /@ combos}];
           {chainDefs, chainDecl, chainRefDefs, chainRefDecl, optDefs, optDecl, slotRefDefs, slotRefDecl}],
         {{}, "", {}, "", {}, "", {}, ""}];
     chunkDecls = sdnCDecl <> slnCDecl <> chpCDecl <> sdchrCDecl <> optpCDecl <> sdslrCDecl;
@@ -2318,6 +2516,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
 (* chunk helpers of the oversized builders — the bin-packer may put a builder's helpers in a
    different unit than its assembler, so these must be declared here, not per-unit. *)
         chunkDecls;
+], " s"];
     (* component-table init: comp[base][mu] = <MPoly builder>, skipping structural zeros. *)
     compInit =
       StringJoin @
@@ -2331,6 +2530,9 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                     "  comp[" <> str[base] <> "][" <> str[mu[[1]] - 1] <> "] = " <> s <> ";\n"]],
                 comps]],
           compCpp];
+(* The main TU: on a dense flow this is ~100% flat integer tables (ZAAqbq2: 99.9% of 25.7 MB), so
+   this timer measures integer-to-text throughput and nothing else. *)
+    ntLog["[prof] main() data tables: ", First @ AbsoluteTiming[
     main =
       StringJoin[
         Flatten[
@@ -2341,7 +2543,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
             "  const int nsym = " <> str[nsym] <> ";\n",
 (* units is emitted BEFORE the LorentzEnv because the env binds both nsym and the unit groups;
    comp/atomDen and the trace entry points are then built through `env`. *)
-            "  std::vector<std::vector<int>> units = {" <> StringRiffle[("{" <> StringRiffle[str /@ #, ","] <> "}")& /@ unitG, ","] <> "};\n",
+            "  std::vector<std::vector<int>> units = {" <> StringRiffle[ntIntRow /@ unitG, ","] <> "};\n",
             "  LorentzEnv env(nsym, units);\n",
             "  std::vector<std::array<MPoly,4>> comp(" <> str[maxBase + 1] <> ", {env.zero(),env.zero(),env.zero(),env.zero()});\n",
             compInit,
@@ -2397,10 +2599,10 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                           "  const size_t NNET = " <> str[Length[netTerms]] <> ";\n",
 (* the four big index/scalar tables move to top-level chunk functions (see ntBigTableFns): together
    with colnets they are what makes main() large enough to break the compiler. *)
-                          With[{t = ntBigTableFns["ntSidxU", "std::vector<std::vector<int>>", ("{" <> StringRiffle[str /@ #, ","] <> "}")& /@ distinctIdxRows]},
+                          With[{t = ntBigTableFns["ntSidxU", "std::vector<std::vector<int>>", ntIntRow /@ distinctIdxRows]},
                             tableDefs = tableDefs <> t[[1]];
                             "  std::vector<std::vector<int>> sidxU = " <> t[[2]] <> ";\n"],
-                          With[{t = ntBigTableFns["ntSidxR", "std::vector<int>", str /@ (idxPos /@ idxRows)]},
+                          With[{t = ntBigTableFns["ntSidxR", "std::vector<int>", ntIntStrs[idxPos /@ idxRows]]},
                             tableDefs = tableDefs <> t[[1]];
                             "  std::vector<int> sidxR = " <> t[[2]] <> ";\n"],
                           "  std::vector<std::vector<int>> sidx(NNET);\n",
@@ -2412,10 +2614,10 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                                 ] /@ distinctScalars,
                               ","
                             ] <> "};\n",
-                          With[{t = ntBigTableFns["ntDscU", "std::vector<std::vector<int>>", ("{" <> StringRiffle[str /@ #, ","] <> "}")& /@ distinctScalarRows]},
+                          With[{t = ntBigTableFns["ntDscU", "std::vector<std::vector<int>>", ntIntRow /@ distinctScalarRows]},
                             tableDefs = tableDefs <> t[[1]];
                             "  std::vector<std::vector<int>> dscU = " <> t[[2]] <> ";\n"],
-                          With[{t = ntBigTableFns["ntDscR", "std::vector<int>", str /@ (scaPos /@ scaIdxRows)]},
+                          With[{t = ntBigTableFns["ntDscR", "std::vector<int>", ntIntStrs[scaPos /@ scaIdxRows]]},
                             tableDefs = tableDefs <> t[[1]];
                             "  std::vector<int> dscR = " <> t[[2]] <> ";\n"],
                           "  std::vector<std::vector<Cx>> dsc(NNET);\n",
@@ -2428,10 +2630,10 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    MPoly trace into its DPoly channel sdr[i][j] (empty monomial = undressed). Emitted only for dressed flows. *)
                           If[hasDressed,
                             "  std::vector<DMono> sdrV = {" <>
-                              StringRiffle[("{" <> StringRiffle[str /@ #, ","] <> "}")& /@ distinctDressMonos, ","] <> "};\n" <>
+                              StringRiffle[ntIntRow /@ distinctDressMonos, ","] <> "};\n" <>
                             "  std::vector<std::vector<int>> sdrU = {" <>
-                              StringRiffle[("{" <> StringRiffle[str /@ #, ","] <> "}")& /@ distinctDressRows, ","] <> "};\n" <>
-                            With[{t = ntBigTableFns["ntSdrR", "std::vector<int>", str /@ (drRowPos /@ drIdxRows)]},
+                              StringRiffle[ntIntRow /@ distinctDressRows, ","] <> "};\n" <>
+                            With[{t = ntBigTableFns["ntSdrR", "std::vector<int>", ntIntStrs[drRowPos /@ drIdxRows]]},
                               tableDefs = tableDefs <> t[[1]];
                               "  std::vector<int> sdrR = " <> t[[2]] <> ";\n"] <>
                             "  std::vector<std::vector<DMono>> sdr(NNET);\n" <>
@@ -2556,11 +2758,11 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
             With[{uCol = DeleteDuplicates[colourNets]},
               With[{colPos = AssociationThread[uCol -> Range[Length[uCol]] - 1]},
                 StringJoin["  std::vector<SUNNet> colnetsU = ntColNets();\n",
-                  With[{t = ntBigTableFns["ntColR", "std::vector<int>", str /@ (colPos /@ colourNets)]},
+                  With[{t = ntBigTableFns["ntColR", "std::vector<int>", ntIntStrs[colPos /@ colourNets]]},
                     tableDefs = tableDefs <> t[[1]];
                     "  std::vector<int> colR = " <> t[[2]] <> ";\n"], "  std::vector<numtracer::Cx> colvU(colnetsU.size());\n", "  for(size_t i=0;i<colnetsU.size();++i) colvU[i]=sun_value_cx(colnetsU[i]);\n", "  std::vector<numtracer::Cx> colv(" <> str[nNet] <> ");\n", "  for(int i=0;i<" <> str[nNet] <> ";++i) colv[i]=colvU[colR[i]];\n"]
               ]],
-            With[{t = ntBigTableFns["ntGroups", "std::vector<std::vector<int>>", ("{" <> StringRiffle[str /@ #, ","] <> "}")& /@ groups]},
+            With[{t = ntBigTableFns["ntGroups", "std::vector<std::vector<int>>", ntIntRow /@ groups]},
               tableDefs = tableDefs <> t[[1]];
               "  std::vector<std::vector<int>> groups = " <> t[[2]] <> ";\n"],
             "  GlobalEnv g;\n",
@@ -2697,7 +2899,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
 (* The table builders are collected DURING the StringJoin above (each With writes into tableDefs as
    its argument is evaluated), so they can only be prepended here — putting `tableDefs` inside that
    StringJoin would splice in an empty string, since Mathematica evaluates the arguments in order. *)
-    main = tableDefs <> main;
+    main = tableDefs <> main;], " s"];
     {pre, units, decl, main}];
 
 (* ---- whole kernel (boilerplate delegated to FunKit) ------------------------- *)
@@ -3418,6 +3620,57 @@ mkGenerateKernel::emptynets = "Flow `1` produced no generator nets (nets=`2`, gr
 
 mkGenerateKernel::scalarleak = "Diagram `1`: a non-numeric factor `2` reached the generator scalar coefficient (a Lorentz tensor that was not resolved by the net builder, e.g. an un-anchored metric contraction). It would be emitted as undeclared C++. Aborting; fix the net build (compileTInv) so the contraction folds numerically.";
 
+(* ---- runtime-parameter typing ----------------------------------------------------------------
+   A parameter name is spelled as a Symbol by a hand-written flow file and as a String by
+   DiFfRG_compat (which reads it out of a DiFfRG parameter Association). Every list that gets
+   MemberQ'd against another must therefore be normalised the same way first; ntParamName is that
+   one normalisation, so the three call sites cannot drift apart. *)
+ntParamName[nm_String] := nm;
+ntParamName[nm_Symbol] := SymbolName[nm];
+ntParamName[nm_] := ToString[nm];
+
+(* The C++ type of ONE runtime parameter (scalar or dressing), as a string for mkParam.
+
+   Everything it needs is an explicit argument. That is the point: this decision used to be an
+   inline If[] inside the runtimeParams Map, reading a `scalarParamNames` that a With[] two lines
+   up had already closed over. MemberQ against an unbound symbol is False rather than an error, so
+   the AD branch was simply dead and every AD scalar came out `double` — see MakeNTKernel::adtype
+   for what that costs. A top-level function with named arguments cannot fail that way, and it is
+   directly unit-testable (tests/test_ad_param_typing.wls) without running a generation.
+
+   The AD test comes FIRST, before the scalarNames gate. Today adNames is a subset of scalarNames,
+   but only as an accident of DiFfRG_compat building both from Type === "double" (:381 and :395);
+   a caller passing ADParams without ScalarParams would otherwise silently get `double` back.
+
+   An AD-flagged scalar's own entry says "Type" -> "double" — the AD flag lives in the separate
+   "AD" key, which is why reading the type off the entry is not sufficient and never was. *)
+ntRuntimeParamType[entry_, adNames_List, scalarNames_List, dressTy_] :=
+  With[{nm = ntParamName[If[AssociationQ[entry], entry["Name"], entry]]},
+    Which[
+(* `auto` is not cosmetic: it makes the emitted function an abbreviated template, which is the only
+   reason kernel()/constant() can bind autodiff::real from DiFfRG's integrator_AD twin. *)
+      MemberQ[adNames, nm], "auto",
+      MemberQ[scalarNames, nm], "double",
+      AssociationQ[entry], entry["Type"],
+      True, dressTy[nm]]];
+
+(* POST-CONDITION on a finished mkParam list: every ADParams name that made it into the signature
+   was actually typed auto. Split out from its call site so it is unit-testable, and because
+   kernel(), constant() and ntHoisted all draw their scalars from the same runtimeParams list — one
+   assertion covers all three signatures.
+
+   This exists because every other stage of the pipeline is blind to the failure it catches:
+   generation succeeds, net counts are unchanged, the emitted kernels are numerically identical and
+   the ordinary get() compiles and runs. Only the consumer's AD twin fails, a full project build
+   away. Returns the (unmodified) list so it can be used inline. *)
+ntAssertADTyped[params_List, adNames_List] :=
+  With[{missed = Select[params, MemberQ[adNames, #["Name"]] && #["Type"] =!= "auto" &]},
+    If[missed =!= {},
+      Message[MakeNTKernel::adtype, Length[missed],
+        StringRiffle[(#["Name"] <> " got " <> ToString[#["Type"]])& /@ missed, ", "]];
+      Abort[]];
+    params];
+
 (* Locate the NumTracer C++ headers for the generator compile. In-tree the package sits in
    <repo>/numtracer/mathematica/ with the headers in ../include; installed (e.g. under
    $UserBaseDirectory/Applications/NumTracer) the header location is recorded at configure time
@@ -3572,9 +3825,13 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
             {},
             {OptionValue["TraceArrayDecl"]}]],
         "\n"];
+(* THREE more full COEN lowerings of the (stubbed) integrand, on top of the one-to-three the kernel
+   itself takes. Timed separately from the kernel's own [prof] body lines because it is pure
+   verdict-machinery overhead for a flow whose verdict never changes. *)
+    ntLog["[prof] ntProbeSource: 3 body lowerings: ", First @ AbsoluteTiming[
     fnFull = FunKit`MakeCppFunction[probeFull, "Name" -> "probe_full", "Prefix" -> "static inline", "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> probeParams, "Body" -> probePre];
     fnProj = FunKit`MakeCppFunction[probeProj, "Name" -> "probe_proj", "Prefix" -> "static inline", "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> probeParams, "Body" -> probePre];
-    fnRePart = FunKit`MakeCppFunction[probeRePart, "Name" -> "probe_repart", "Prefix" -> "static inline", "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> probeParams, "Body" -> probePre];
+    fnRePart = FunKit`MakeCppFunction[probeRePart, "Name" -> "probe_repart", "Prefix" -> "static inline", "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> probeParams, "Body" -> probePre];], " s"];
     distOf[a_] := Which[
         StringContainsQ[SymbolName[a], "cos"],
           "Uc",
@@ -3810,7 +4067,7 @@ diagColPolys[colnetStrs_, includeDir_] :=
         the fundamental symbols and calls the generated trN(f). *)
 
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
-  Module[{name, ns, dress, scalarParams, adParams, parameterOrder, adNames, scalarTy, args, sigArgs, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, runtimeParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, mkKernelFn, timedBody, realOut, endProject, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, mVarIdx = -1, mEvenBody = False, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
+  Module[{name, ns, dress, scalarParams, adParams, parameterOrder, adNames, scalarParamNames, args, sigArgs, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, runtimeParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, mkKernelFn, timedBody, realOut, endProject, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, mVarIdx = -1, mEvenBody = False, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
 (* diagData lives HERE, in the outer Module, not in the net-build Module below that assigns it.
    It used to be declared local to that inner Module (which spans the net-build loop and closes
    right after the `integrand` Sum), while `pruneG` reads it AFTER that close. Out of scope there,
@@ -3837,20 +4094,12 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
 (* AD-flagged scalars (d1V, d2V for FE-potential flows) must be `const auto&` so the kernel also
    accepts autodiff::real from the integrator_AD twin; everything else stays `const double&`. *)
     adParams = OptionValue["ADParams"];
-    adNames =
-      If[StringQ[#],
-          #,
-          SymbolName[#]
-        ]& /@ adParams;
-    scalarTy =
-      Function[nm,
-        If[MemberQ[
-          adNames,
-          If[StringQ[nm],
-            nm,
-            SymbolName[nm]]],
-          "auto",
-          "double"]];
+(* Both name lists are normalised ONCE, here, and both are Module locals. They used to be rebuilt
+   at each use site inside a With[]; one of those With[]s closed before the use that needed it, and
+   that is the whole of the AD-typing regression (MakeNTKernel::adtype). Nothing below rebinds
+   either name. *)
+    adNames = ntParamName /@ adParams;
+    scalarParamNames = ntParamName /@ scalarParams;
     angleDefs = OptionValue["AngleDefs"];
     crossCSE = OptionValue["CrossTraceCSE"];
     (* normalise raw CUDA qualifiers to the Kokkos macros — see ntKokkosDecor. *)
@@ -3897,6 +4146,11 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    unit-loop spec (loop = magnitude × unit-direction symbols + unit constraint) so the contraction is
    as compact as the sp basis for BOTH Lorentz and Dirac nets. User "Components" are taken verbatim
    (polynomialised for any Sqrt/trig). *)
+(* FRAME-SPEC PROBING + component table. unitLoopOkQ / unitLoopMixedOkQ / polyFrameSpec each run a
+   PowerExpand + per-component Simplify sweep over the whole frame, and a general frame pays all
+   three before numericComponents even starts. Timed as one block because that is the unit a flow
+   either takes or skips. *)
+    ntLog["[prof] numericComponents + frame spec: ", First @ AbsoluteTiming[
     ncomp =
       Module[{uc = OptionValue["Components"], ud = OptionValue["SymbolDefs"], pf, ad, ug},
         {pf, ad, ug} =
@@ -3911,7 +4165,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
               Append[polyFrameSpec[frame], {}]
           ];(* finite-T / general frame *)
         symDefs = Join[ad, ud];
-        numericComponents[env, pf, symDefs, ug]];
+        numericComponents[env, pf, symDefs, ug]];], " s"];
 (* MPoly var index of the Matsubara frequency, matched by name against the FRAME's symbols (-1 =
    option unset, i.e. not a finite-T flow). Everything downstream keys off this one number: >= 0
    turns on the generator's evenness proof and the trait emission. *)
@@ -4018,6 +4272,10 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
             MapIndexed[
               Function[{diag, di},
                 Module[{coeff, colBr, constAcc = {}, colTok = "", entries = {}, d = di[[1]] - 1, pureLorAcc = {}, nNonConst = 0, nNCDirCol = 0, diracComps = {}},
+(* cache this diagram's canonicalisation rules for ntCanonIds (see there) — one Dispatch per
+   diagram instead of one Normal[KeyDrop[...]] per compileTInv/diracSlotStr call. *)
+                  $ntCanonIdsSrc = diag["Ids"];
+                  $ntCanonRules = Dispatch[Normal[KeyDrop[diag["Ids"], Keys[env]]]];
                   coeff = diag["Coeff"] /. {ntSP[x_, y_] :> resolveComponents[x, frame] . resolveComponents[y, frame], ntSPS[x_, y_] :> Rest[resolveComponents[x, frame]] . Rest[resolveComponents[y, frame]], ntVec[q_, i_Integer] :> resolveComponents[q, frame][[i + 1]]};
                   MapIndexed[
                     Function[{comp, ci},
@@ -4447,8 +4705,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    Backend-agnostic generation retains the historical scalar-then-dressing order. A backend with a
    positional ABI can supply ParameterOrder; MakeNTKernelDiFfRG passes DiFfRG's original Parameters
    order so interleaved scalar/interpolator packs match the integrator's forwarded tuple exactly. *)
-    With[{scalarParamNames = ToString /@ scalarParams},
-      sigArgs = DeleteCases[args, a_ /; MemberQ[scalarParamNames, ToString[a]]]];
+      sigArgs = DeleteCases[args, a_ /; MemberQ[scalarParamNames, ntParamName[a]]];
       runtimeParams =
         With[{runtimeNames = Join[scalarParams, dress]},
           With[{orderedEntries =
@@ -4473,20 +4730,16 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
               ]},
             Map[
               Function[entry,
-                With[{nm = If[AssociationQ[entry], entry["Name"], entry]},
-                  If[MemberQ[scalarParamNames, ToString[nm]],
-                    mkParam[nm, scalarTy[nm]],
-                    mkParam[
-                      nm,
-                      If[AssociationQ[entry], entry["Type"], dressTy[nm]]
-                    ]
-                  ]
+                mkParam[
+                  If[AssociationQ[entry], entry["Name"], entry],
+                  ntRuntimeParamType[entry, adNames, scalarParamNames, dressTy]
                 ]
               ],
               orderedEntries
             ]
           ]
         ];
+      ntAssertADTyped[runtimeParams, adNames];
       kernelParams = Join[mkParam[#, "double"]& /@ sigArgs, runtimeParams, mkParam[#, "double"]& /@ hoistSyms];
 (* The loop-independent `constant` is called by DiFfRG as constant(pos..., k, scalars..., dressings...),
    where pos is the FULL coordinate tuple of the flow's grid (quadrature_integrator.hh builds

@@ -2,6 +2,9 @@
 
 #include "shim.hpp"
 #include "numtracer/sun/sun_data.hpp"
+#ifndef NT_TRACE_COMPLEX
+#define NT_TRACE_COMPLEX DiFfRG::complex<double>
+#endif
 #include "ZAAqbq1Small_num_kernels.hh"
 #include "numtrace_verdict.hh"
 
@@ -24,8 +27,11 @@ namespace DiFfRG
       const double cosl1p4 = -0.3333333333333333 * sqrt(1. - powr<2>(cos1)) * (cos2 + sqrt(2. - 2. * powr<2>(cos2)) * (cos(phi) + 1.732050807568877 * sin(phi)));
       double fenv[(DiFfRG::zaaqbq1_small_num::nenv) > 0 ? (DiFfRG::zaaqbq1_small_num::nenv) : 1];
       const double dr_0 = Mq(l1);
-      const double dr_1 = -powr<-1>(l1) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1);
-      DiFfRG::zaaqbq1_small_num::fill(fenv, l1, cos1, cos2, phi, p, dr_0, dr_1);
+      const double dr_1 = powr<-1>(l1);
+      const double dr_2 = RF(powr<2>(k), powr<2>(l1));
+      const double dr_3 = Zq(k);
+      const double dr_4 = Zq(l1);
+      DiFfRG::zaaqbq1_small_num::fill(fenv, l1, cos1, cos2, phi, p, dr_0, dr_1, dr_2, dr_3, dr_4);
       const auto _interp1 = ntRe(DiFfRG::zaaqbq1_small_num::tr1(fenv));
       const auto _interp2 = RBdot(powr<2>(k), powr<2>(l1));
       const auto _interp3 = ZA(pow(1. + powr<6>(k),0.16666666666666666667));
@@ -76,8 +82,11 @@ namespace DiFfRG
       const double cosl1p4 = -0.3333333333333333 * sqrt(1. - powr<2>(cos1)) * (cos2 + sqrt(2. - 2. * powr<2>(cos2)) * (cos(phi) + 1.732050807568877 * sin(phi)));
       double fenv[(DiFfRG::zaaqbq1_small_num::nenv) > 0 ? (DiFfRG::zaaqbq1_small_num::nenv) : 1];
       const double dr_0 = Mq(l1);
-      const double dr_1 = -powr<-1>(l1) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1);
-      DiFfRG::zaaqbq1_small_num::fill(fenv, l1, cos1, cos2, phi, p, dr_0, dr_1);
+      const double dr_1 = powr<-1>(l1);
+      const double dr_2 = RF(powr<2>(k), powr<2>(l1));
+      const double dr_3 = Zq(k);
+      const double dr_4 = Zq(l1);
+      DiFfRG::zaaqbq1_small_num::fill(fenv, l1, cos1, cos2, phi, p, dr_0, dr_1, dr_2, dr_3, dr_4);
       const auto _interp1 = ntRe(DiFfRG::zaaqbq1_small_num::tr1(fenv));
       const auto _interp2 = RBdot(powr<2>(k), powr<2>(l1));
       const auto _interp3 = ZA(pow(1. + powr<6>(k),0.16666666666666666667));
@@ -147,8 +156,11 @@ namespace DiFfRG
       const double cosl1p4 = -0.3333333333333333 * sqrt(1. - powr<2>(cos1)) * (cos2 + sqrt(2. - 2. * powr<2>(cos2)) * (cos(phi) + 1.732050807568877 * sin(phi)));
       double fenv[(DiFfRG::zaaqbq1_small_num::nenv) > 0 ? (DiFfRG::zaaqbq1_small_num::nenv) : 1];
       const double dr_0 = Mq(l1);
-      const double dr_1 = -powr<-1>(l1) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1);
-      DiFfRG::zaaqbq1_small_num::fill(fenv, l1, cos1, cos2, phi, p, dr_0, dr_1);
+      const double dr_1 = powr<-1>(l1);
+      const double dr_2 = RF(powr<2>(k), powr<2>(l1));
+      const double dr_3 = Zq(k);
+      const double dr_4 = Zq(l1);
+      DiFfRG::zaaqbq1_small_num::fill(fenv, l1, cos1, cos2, phi, p, dr_0, dr_1, dr_2, dr_3, dr_4);
       const auto _interp1 = RBdot(powr<2>(k), powr<2>(l1));
       const auto _interp2 = ZA(pow(1. + powr<6>(k),0.16666666666666666667));
       const auto _interp3 = RB(powr<2>(k), powr<2>(l1));

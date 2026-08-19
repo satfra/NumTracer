@@ -267,9 +267,35 @@ diracNumeratorSumQ[p_Plus] := Module[{terms = List @@ p, opens},
    and stays ON unconditionally. Enable the vertex path with NT_VERTEX_COLLECT=1 (or set
    $ntVertexCollect=True) on the small-P flows where it wins (e.g. za3_147: 8.9 s vs 13.3 s). *)
 $ntVertexCollect = ntEnvFlag["NT_VERTEX_COLLECT"];
-collectibleDiracSumQ[p_Plus] := ! sectorBridgeQ[p] && dressedStructureSumQ[p] &&
-  ((diracNumeratorSumQ[p] && dressedNumDecompose[p] =!= $Failed) ||
-   (TrueQ[$ntVertexCollect] && diracSlotSumQ[p] && diracSlotDecompose[p] =!= $Failed));
+(* ALL-NUMERIC Dirac sums as slots (opt-in). `dressedStructureSumQ` demands at least one NON-numeric
+   summand coefficient, because it was written to decide whether a DRESSING sum must be distributed.
+   A multi-term PROJECTOR is collateral damage: its coefficients are pure numbers, so it fails that
+   test, is therefore never collectible, and survives as a raw Plus all the way to
+   splitColourGroupsInv — where `Expand[Times @@ needExpand]` materialises its Cartesian product with
+   the rest of the diagram, once per diagram, per generation.
+   That is measurably the dominant cost of a projector-heavy flow: transAAqbqMinimal's element 2
+   (~10 Dirac terms, 30 gammas) against element 1 (3 terms, 4 gammas) is 1056 vs 14 distinct emitted
+   DiracNets and 328 s vs 62 s of generation, from two otherwise identical flow definitions.
+   Such a sum satisfies every OTHER condition of the slot path — shared open spinor pair, shared open
+   Lorentz set, colour factoring out (it sits outside the Plus) — so relaxing the gate for the SLOT
+   disjunct alone turns it into one chain with an N-option slot.
+   Scoped deliberately: the k=0 propagator-numerator disjunct keeps `dressedStructureSumQ`, so an
+   all-numeric propagator numerator still distributes exactly as today. And `distributeQ` below is
+   untouched by construction — it tests `dressedStructureSumQ` first, which is False for these sums,
+   so its verdict (do not distribute) is the same either way. *)
+(* DEFAULT ON, and deliberately NOT gated behind $ntVertexCollect. The two are different risks that
+   happen to share a mechanism. $ntVertexCollect is opt-in because a DRESSED vertex sum multiplies the
+   structure count by the dressing count — the ~10^6 structure x dressing combinations per net that
+   OOMed the kernel. An all-numeric projector sum has no dressing dimension at all (its options carry
+   no dress atoms), so its combination count is bounded by the projector's own term count: measured on
+   ZAAqbq2 the sub-term count is IDENTICAL either way (12,721,032) — the work moves, it does not grow.
+   Hatch names the legacy path, per the convention NT_DIRAC_FLAT set. *)
+$ntSlotCollectNumeric = ! ntEnvFlag["NT_NO_SLOT_COLLECT_NUMERIC"];
+collectibleDiracSumQ[p_Plus] := ! sectorBridgeQ[p] &&
+  ((dressedStructureSumQ[p] && diracNumeratorSumQ[p] && dressedNumDecompose[p] =!= $Failed) ||
+   ((TrueQ[$ntVertexCollect] && dressedStructureSumQ[p]) ||
+      (TrueQ[$ntSlotCollectNumeric] && ! dressedStructureSumQ[p])) &&
+     diracSlotSumQ[p] && diracSlotDecompose[p] =!= $Failed);
 collectibleDiracSumQ[_] := False;
 distributeQ[p_] := sectorBridgeQ[p] ||
   (dressedStructureSumQ[p] && ! (TrueQ[$ntDressCollect] && collectibleDiracSumQ[p]));
@@ -817,7 +843,13 @@ frameMask[components_List] := FromDigits[Reverse[Boole[# =!= 0 && # =!= 0.] & /@
 Options[NumTrace] = {"Frame" -> <||>, "Args" -> {}, "Dressings" -> {}, "DressingCollection" -> True};
 
 NumTrace[net_, OptionsPattern[]] := Module[
-  {frame, args, dress, badRanks, net2, diagrams, allMom, invMom, invSMom, env, nenv, diags},
+  {frame, args, dress, badRanks, net2, diagrams, allMom, invMom, invSMom, env, nenv, diags, ntT0},
+(* WHOLE-NumTrace wall clock. The stage timers below ([prof] expandBridges / checkLabels /
+   analyseDiagram) do not add up to the call: canonicalizeMomentumSigns, expandFundEps,
+   expandSpatialVecs, expandFixedComponents, the odd-trace prune and buildEnv are all untimed.
+   Without the total there is no way to tell "the untimed remainder is noise" from "the untimed
+   remainder IS the flow's cost", which is exactly the question a profiling run is asked. *)
+  ntT0   = AbsoluteTime[];
   frame  = OptionValue["Frame"];
   args   = OptionValue["Args"];
   dress  = OptionValue["Dressings"];
@@ -911,6 +943,21 @@ NumTrace[net_, OptionsPattern[]] := Module[
   ntLog["[prof] NumTrace analyseDiagram (", Length[diagrams], " diagrams): ",
     First@AbsoluteTiming[diags = analyseDiagram /@ diagrams], " s"];
 
+  (* ---- NO FLAVOUR DELTA MAY LEAVE HERE -------------------------------------------------------
+     This is the first point at which the fundamental-flavour residue is final: both contractFlavour
+     passes have run and promoteFlavResidue has had its chance. A flavDelta that is still standing is
+     neither contracted nor in the engine, and it fails SILENTLY downstream — scalarQ is a FreeQ over
+     the nt* heads, so it is classified as a scalar COEFFICIENT, its indices become invisible to
+     labelsOf/freeIdx/checkLabels, and CForm prints it into the kernel as
+     `NumTracer_Private_flavDelta(F1, F2)`: a bare identifier both GCC and Clang accept as an
+     undeclared call. Refuse it here, where the diagram is still nameable, rather than three layers
+     away in a compiler error. (The textual $ntCppLeakPatterns entry in Codegen.m is the backstop for
+     the same class; this one gives the better message.) *)
+  With[{leak = DeleteDuplicates @ Cases[diags, _flavDelta, {0, Infinity}]},
+    If[leak =!= {}, Message[NumTrace::flavleak, Short[leak, 8]]; Abort[]]];
+
+  ntLog["[prof] NumTrace TOTAL (", Length[diags], " diagrams): ", AbsoluteTime[] - ntT0, " s"];
+
   NTKernel[<|
     "Diagrams"  -> diags,
     "Env"       -> env,
@@ -926,6 +973,13 @@ NumTrace[net_, OptionsPattern[]] := Module[
    et compiler in Codegen turns Plus -> et::add, Times -> contract_all. *)
 analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
   factors = rewriteDressedNums @ splitSelfTraces[If[Head[diagram] === Times, List @@ diagram, {diagram}]];
+  (* LAST CHANCE to close the fundamental-flavour deltas, and the last point at which promoting the
+     residue into the SU(N) engine still works. rewriteDressedNums (just above) is what lifts a
+     flavour delta out of an eager dressed numerator's Plus, so this is the first point at which a
+     straddling chain is a flat product — and the partition below is the last point at which a
+     promoted head can still be handed an axis id. A no-op unless the blind rules left something
+     genuinely unclosable, so flows whose flavour lines close stay byte-identical. *)
+  factors = promoteFlavResidue[factors];
   tensorF = Select[factors, ! scalarQ[#] &];
   (* Partition labels by sector: spinor (Dirac) axes get a disjoint high id range (>=100)
      so the et engine — which contracts axes by matching id — never fuses a spinor axis
@@ -985,6 +1039,15 @@ analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
    is counted ONCE, via the free set its summands must agree on — that agreement is itself
    the et::add alignment precondition freeIdx[_Plus] assumes without checking. A summand's
    internal dummies are private and must not appear anywhere else. *)
+
+NumTrace::flavleak = "a fundamental-flavour Kronecker delta survived BOTH contractFlavour passes \
+and the promotion into the SU(N) engine. It is now neither contracted nor a tensor: scalarQ is a \
+FreeQ over the nt* heads, so it counts as a scalar COEFFICIENT, its indices are invisible to \
+labelsOf/freeIdx/checkLabels, and CForm would print it into the kernel as \
+NumTracer_Private_flavDelta(F1, F2) — an undeclared identifier that GCC and Clang both parse, so \
+the failure would surface as a link/compile error far from here, or compile silently wrong. Most \
+likely cause: a flavour delta buried inside an eager (un-distributed) Plus that rewriteDressedNums \
+did not lift out, so promoteFlavResidue saw it as already closed. Offending delta(s):\n`1`";
 
 NumTrace::badlabel = "Diagram `1`: index label `2` occurs `3` times (expected 1 = free, \
 2 = contracted). The et engine contracts axes by matching id, so `3` axes sharing this label \

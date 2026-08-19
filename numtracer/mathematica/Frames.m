@@ -12,8 +12,23 @@
 
 (* Four components of a (possibly composite) momentum in the frame. *)
 
+resolveComponents::zeroMomentum = "A momentum in the frame resolved to `1` instead of a list of four \
+components. This means a tensor leaf carries the ZERO four-vector -- almost always because a \
+kinematic substitution (p -> 0 for a p^2-coefficient extraction, a soft-meson slice, ...) was \
+applied to an expression that still contained a momentum-dependent PROJECTOR. transProj[0,mu,nu] is \
+0/0, so there is nothing sensible to resolve. Keep the projector out of the substitution (subtract \
+inside the diagram only) or pick a frame in which the leg is nonzero.";
+
 resolveComponents[q_, frame_] :=
-  Simplify[q /. Normal[frame]];
+  Module[{c = Simplify[q /. Normal[frame]]},
+(* Guard rather than let a bare 0 travel on: downstream this becomes `mpcpp /@ 0`, which returns the
+   INTEGER 0 where a C++ string was expected, and the whole generator source degenerates into one
+   unevaluated StringJoin. The symptom is then a StringTake::strse plus a several-hundred-line dump
+   of the half-built source -- true, but useless. Fail here, where the cause is still visible. *)
+    If[! (ListQ[c] && Length[c] === 4),
+      Message[resolveComponents::zeroMomentum, c];
+      Abort[]];
+    c];
 
 (* Euclidean q^2 of a momentum in the frame (drives the 1/q^2 env slot). *)
 

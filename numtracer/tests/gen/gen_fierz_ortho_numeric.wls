@@ -77,12 +77,21 @@ net = FromFunKit @ Sum[
    {i, n}, {j, n}];
 Print["[gen] weighted net LeafCount = ", LeafCount[net]];
 
-(* The basis must actually USE the feature under test, or this gate silently stops covering it. *)
-fixed = DeleteDuplicates @ Cases[net, ntGamma[i_Integer, _, _] :> i, {0, Infinity}];
+(* The basis must actually USE the feature under test, or this gate silently stops covering it.
+   Checked on the POST-expansion marker, not on `ntGamma[i_Integer, ...]`: `net` here is the output of
+   FromFunKit, which runs expandFixedComponents, and that rewrite is exactly what turns a fixed
+   component into a slash against a unit basis vector —
+       gamma^i -> ntGamma[mu,d1,d2] ntVec[ntUnitVec[i],mu],  g^{i nu} -> ntVec[ntUnitVec[i],nu]
+   (DSL.m). So an integer-indexed ntGamma cannot survive to this line by construction, and looking
+   for one made the gate fail whatever the basis contained. ntUnitVec is the stronger assertion
+   anyway: it proves the rewrite RAN, where the old spelling only proved the input had a fixed index.
+   (This was masked for a long time behind an earlier failure in this script and surfaced only once
+   that was fixed; the basis itself was never at fault.) *)
+fixed = DeleteDuplicates @ Cases[net, NumTracer`ntUnitVec[i_] :> i, {0, Infinity}];
 If[fixed === {},
   Print["FAIL: no fixed-component gamma in the net — this basis is supposed to be written in a ",
         "3+1 split; the gate is no longer covering the fixed-component path."]; Exit[1]];
-Print["[gen] ok: fixed gamma components present: ", fixed];
+Print["[gen] ok: fixed gamma components present (as unit-vector slashes): ", fixed];
 
 frame = NumTracer`sp4Frame[Global`p, Global`l1, Global`cos1, Global`cos2, Global`phi,
                            Global`p1, Global`p2, Global`p3, Global`p4, Global`ql];

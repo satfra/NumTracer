@@ -1,14 +1,17 @@
 {
 	"name":"gen",
-	"class":"Gluon_condensate_plain_kernel",
-	"namespace":"gluon_condensate_plain",
+	"class":"EtaPiL_num_kernel",
+	"namespace":"etapil_num",
 	"gen_dir":".",
-	"generator":"gen_gluon_condensate_plain.cpp",
+	"generator":"gen_qcd_etapil_num.cpp",
 	"units":[
-		"gen_gluon_condensate_plain_u0.cpp",
-		"gen_gluon_condensate_plain_u1.cpp",
-		"gen_gluon_condensate_plain_u2.cpp",
-		"gen_gluon_condensate_plain_u3.cpp"
+		"gen_qcd_etapil_num_u0.cpp",
+		"gen_qcd_etapil_num_u1.cpp",
+		"gen_qcd_etapil_num_u2.cpp",
+		"gen_qcd_etapil_num_u3.cpp",
+		"gen_qcd_etapil_num_u4.cpp",
+		"gen_qcd_etapil_num_u5.cpp",
+		"gen_qcd_etapil_num_u6.cpp"
 	],
 	"decorator":"static inline",
 	"main_opt":"-O1",
@@ -16,7 +19,10 @@
 	"maxw":0,
 	"maxw_b":0,
 	"device":false,
-	"complex":false,
-	"kernels":"Gluon_condensate_plain_kernels.hh",
+	"complex":true,
+	"kernels":"EtaPiL_num_kernels.hh",
+	"probe":"probe_etapil_num.cpp",
+	"verdict_macro":"NT_ETAPIL_NUM_VERDICT",
+	"verdict":"numtrace_verdict.hh",
 	"generated":1
 }

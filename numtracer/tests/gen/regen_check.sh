@@ -149,6 +149,14 @@ DEFAULT_FLOWS=(
   gen_cplxrt_numeric
   gen_discdirac_numeric gen_flavour_ingroup gen_flavour_split gen_ftproj_numeric
   gen_glu_quark gen_gluon_condensate gen_pion_quark gen_proj_numeric gen_sigl_dirac
+  # A FUNDAMENTAL flavour index with NO flavour generators — the third case none of the flavour
+  # flows above covers: gen_pion_quark carries generators, gen_flavour_ingroup spells the engine
+  # head itself, gen_flavour_split is flavour-blind, and gen_glu_quark's flavour line CLOSES to Nf.
+  # Here the tadpole's quartic makes the deltas a WEB that no rewrite rule can close, so this is the
+  # only flow exercising promoteFlavResidue. Emits TWO kernels (the plain deltaFundFlav spelling and
+  # the Sqrt[2 Nf] TFlav[0,..] spelling of the same object); compare_kaon_tadpole grades one against
+  # the other. Cheap (scalar-only theory, no Dirac, no colour).
+  gen_kaon_tadpole
   # The finite-T ELECTRIC/MAGNETIC VERTEX SPLIT gate (ctest emvertex_num). Three projectors on three
   # DIFFERENT external momenta through a shared three-index core — the structure arXiv:1708.03482
   # App. B puts under the gluonic vertices, and the front-end path SP_EM depends on. gen_ftproj_numeric

@@ -166,6 +166,14 @@ epsFundCol/epsFundFlav went undetected. Add a $ffMap/sunMap entry, or refuse the
    include the temporal component. So the blocker is a missing head, not cost: the fix is a spatial
    delta, not more epsilon machinery. It falls through to FromFunKit::untranslated. *)
 
+FromFunKit::flavcount = "the fundamental-flavour sector would be closed against TWO different \
+flavour counts in the same expression: the SU(N) engine uses rank `1` (the \"FlavourGroup\" option, \
+defaulting to Global`Nf when that is a bound integer and to 2 otherwise), while the blind \
+contractFlavour folds a closed flavour loop to Global`Nf = `2`. A single diagram can use both — a \
+chain that closes cheaply beside a delta web the engine has to finish — so the coefficient would \
+silently mix the two conventions rather than fail. Call SetNf[n] so Global`Nf is the integer you \
+mean, or pass \"FlavourGroup\" -> Global`Nf explicitly.";
+
 FromFunKit::epsadj = "Adjoint Levi-Civita at SU(`1`) with `2` indices. NumTracer supports the \
 adjoint epsilon ONLY at rank 2, where eps^abc coincides exactly with the structure constant f^abc \
 (T^a = sigma^a/2, f = -2i tr([T^a,T^b]T^c); see sun_net.hpp:225) and is rewritten to ntSUNf[2,...]. \
@@ -194,12 +202,66 @@ expandSlashShorthand[e_] := e //. (g_Symbol)[a___, (v_Symbol)[p_], b___] /;
 (* Contract the flavour Kronecker deltas: their indices are disjoint from every tensor
    sector, so a chain collapses (delta[x,y] delta[y,z] -> delta[x,z]) and a closed loop
    delta[x,x] -> Nf. The result is a scalar power of Nf that the per-diagram coefficient
-   carries (cancelling the projector's 1/Nf for a flavour-trivial flow like Zq). *)
+   carries (cancelling the projector's 1/Nf for a flavour-trivial flow like Zq).
+
+   A Kronecker delta is SYMMETRIC, so all four index orientations have to be matched. The
+   head-to-tail rule alone leaves delta[x,y] delta[x,z] and delta[y,x] delta[z,x] untouched,
+   so a chain that FunKit happened to emit in the other order silently failed to close.
+   SetAttributes[flavDelta, Orderless] would say this in one rule, but it makes the //.
+   matcher try argument permutations at every attempt on a diagram-sized Times — the blowup
+   DSL.m:466 warns about — so the transposes are spelled out instead: cheap and deterministic.
+
+   These rules are SOUND but INCOMPLETE, and that is by design. Each rewrite is an exact
+   Kronecker identity, so stopping early is never wrong, only unfinished; whatever is left
+   over is handed to the SU(N) engine by promoteFlavResidue below. A delta WEB (the boson
+   tadpole's delta_ac delta_bd + delta_ad delta_bc against a loop delta) is not a chain and
+   no local rewrite can close it — that is the residue's reason to exist. *)
 contractFlavour[e_] := e //. {
   flavDelta[x_, y_] flavDelta[y_, z_] :> flavDelta[x, z],
+  flavDelta[y_, x_] flavDelta[y_, z_] :> flavDelta[x, z],
+  flavDelta[x_, y_] flavDelta[z_, y_] :> flavDelta[x, z],
   flavDelta[x_, x_] :> Global`Nf,
-  Power[flavDelta[x_, y_], 2] :> Global`Nf
+  (* delta_{xy}^n = delta_{xy} for EVERY n >= 1, so summed over both indices it is Nf. The rule
+     used to match n === 2 only, so a cube survived and then read as a 3x-repeated label. *)
+  Power[flavDelta[x_, y_], n_Integer /; n >= 2] :> Global`Nf
 };
+
+(* The SU(nf) rank FromFunKit routed the fundamental-flavour sector against, published for
+   promoteFlavResidue (which runs later, from DSL.m's analyseDiagram). Automatic = no FunKit
+   input in this session, i.e. a hand-built DSL net, which cannot contain flavDelta at all. *)
+$ntFlavRank = Automatic;
+
+NumTrace::flavrank = "a fundamental-flavour Kronecker delta survived the blind contraction and \
+must be handed to the SU(N) engine, but no flavour rank is available (FromFunKit was never run, \
+so $ntFlavRank is unset). This should be unreachable: flavDelta is produced by exactly one \
+$ffMap entry. Offending delta(s):\n`1`";
+
+(* Hand the SU(N) engine whatever contractFlavour could not close.
+   WHY HERE AND NOT IN FromFunKit: contractFlavour runs TWICE. A flavour chain that straddles an
+   eager dressed numerator's Plus is invisible to the first pass (FromFunKit), and only becomes a
+   flat product once rewriteDressedNums has lifted the common delta out — which is why DSL.m runs
+   it a second time. Measured on a qbq-shaped diagram: 3 deltas survive FromFunKit, and all 3 close
+   after rewriteDressedNums. Promoting at the end of FromFunKit would therefore convert a scalar
+   Nf power into an SU(N) net on every dressed quark flow (Zq/ZAqbq*/aqbq147/lambda3d/...), which
+   is exactly the churn this design exists to avoid.
+
+   The no-residue path returns `factors` UNTOUCHED rather than the contracted product: analyseDiagram
+   numbers its axis ids from the ORDER of the tensor factors, so re-splicing the list would renumber
+   them and change the emitted code for flows that are otherwise unaffected. So this is a strict
+   no-op unless there is something the blind rules genuinely could not close. *)
+promoteFlavResidue[factors_List] := Module[{flav, rest, closed, resid},
+  If[FreeQ[factors, flavDelta], Return[factors]];
+  flav   = Select[factors, ! FreeQ[#, flavDelta] &];
+  closed = contractFlavour[Times @@ flav];
+  resid  = DeleteDuplicates @ Cases[closed, flavDelta[__], {0, Infinity}];
+  If[resid === {}, Return[factors]];
+  If[! (IntegerQ[$ntFlavRank] && $ntFlavRank >= 1),
+    Message[NumTrace::flavrank, Short[resid, 6]]; Abort[]];
+  (* A residue nested inside an eager Plus is promoted in place; the enclosing factor then fails
+     scalarQ and correctly joins the tensor factors as an SU(N) Plus-vertex (compileColGSum). *)
+  closed = closed /. flavDelta[i_, j_] :> ntSUNDeltaFund[$ntFlavRank, i, j];
+  rest   = Select[factors, FreeQ[#, flavDelta] &];
+  Join[rest, If[Head[closed] === Times, List @@ closed, {closed}]]];
 
 (* "FlavourGroup" -> Automatic resolves the isospin SU(N) rank to Global`Nf when that is a defined
    integer, else defaults to 2; an explicit integer overrides it. The colour rank is Global`Nc. *)
@@ -225,6 +287,17 @@ FromFunKit[expr_, OptionsPattern[]] := Module[{nf, map, hasIso, isoRewritten, re
      deltas from the blind `flavDelta` (which only collapses a genuinely CLOSED line to Nf) to the
      in-engine ntSUNDeltaFund so the generator trace tr(T^a ... T^a) actually contracts. Gated on the
      presence of TFlav, so flavour-blind flows (Zq/ZA/ZAqbq1/4/7, ...) are byte-identical. *)
+  (* ---- ONE FLAVOUR COUNT, NOT TWO -----------------------------------------------------------
+     The two routes close a flavour loop against DIFFERENT numbers: the blind contractFlavour
+     folds it to Global`Nf, the engine folds it to `nf` (the "FlavourGroup" option, which falls
+     back to 2 when Global`Nf is not a bound integer). Both routes can contribute to ONE diagram
+     — a chain that closes cheaply next to a web that the engine has to finish — so if the two
+     disagree the coefficient silently mixes conventions. That is a wrong number, not a crash,
+     and it is most likely exactly where it hurts: an Nf = 2+1 setup whose light group is SU(2).
+     Refuse instead of guessing. Only checked when a fundamental-flavour delta is actually
+     present; dispatch on the head NAME, as everywhere else in this file. *)
+  If[! FreeQ[expr, (h_Symbol)[___] /; SymbolName[h] === "deltaFundFlav"] && nf =!= Global`Nf,
+    Message[FromFunKit::flavcount, nf, Global`Nf]; Abort[]];
   hasIso = ! FreeQ[expr, Global`TFlav];
   If[hasIso, map["deltaFundFlav"] = (ntSUNDeltaFund[nf, ##] &)];
   isoRewritten = expandSlashShorthand @ If[hasIso,
@@ -245,6 +318,7 @@ FromFunKit[expr_, OptionsPattern[]] := Module[{nf, map, hasIso, isoRewritten, re
     With[{leftover = Complement[Intersection[present, $funKitHeads], Keys[map], $ffHandledElsewhere]},
       If[leftover =!= {}, Message[FromFunKit::untranslated, leftover]; Abort[]]]];
   $ntDressCollect = TrueQ[OptionValue["DressingCollection"]];
+  $ntFlavRank     = nf;   (* consumed by promoteFlavResidue, from DSL.m's analyseDiagram *)
   ntLog["[prof] FromFunKit (head rewrite + expandBridges): ",
    (* Normalize fixed Lorentz components before expandBridges tests whether a
       finite-T spatial slash is a collectible dressed Dirac numerator. *)

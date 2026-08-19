@@ -24,6 +24,6 @@ template<class L> NetVal sc(NetVal x){ return scale(litco<L>::v, std::move(x)); 
 }
 using namespace numtracer::network;
 using namespace numtracer::numeric;
-const NetVal& lc3(){ static const NetVal v = contract(tproj<37, 1, 20, 7, 44>(), tproj<42, 37, 16, 7, 45>(), tproj<42, 2, 16, 7, 45>(), tproj<38, 3, 20, 7, 44>(), tproj<38, 39, 20, 7, 44>(), tproj<39, 40, 20, 7, 44>(), tproj<41, 40, 16, 7, 45>(), tproj<41, 0, 16, 7, 45>()); return v; }
 const NetVal& lc2(){ static const NetVal v = contract(tproj<37, 3, 20, 7, 44>(), tproj<37, 38, 20, 7, 44>(), tproj<38, 39, 20, 7, 44>(), tproj<40, 39, 16, 7, 45>(), tproj<40, 0, 16, 7, 45>(), tproj<41, 2, 32, 7, 46>(), tproj<42, 41, 36, 7, 47>(), tproj<42, 1, 36, 7, 47>()); return v; }
 const NetVal& lc0(){ static const NetVal v = contract(tproj<40, 1, 0, 7, 40>(), tproj<40, 41, 0, 7, 40>(), tproj<41, 2, 4, 7, 41>(), tproj<42, 4, 8, 7, 42>(), tproj<43, 42, 12, 7, 43>(), tproj<43, 3, 12, 7, 43>()); return v; }
+const NetVal& lc4(){ static const NetVal v = contract(tproj<40, 2, 0, 7, 40>(), tproj<43, 40, 4, 7, 41>(), tproj<43, 1, 4, 7, 41>(), tproj<41, 4, 0, 7, 40>(), tproj<41, 42, 0, 7, 40>(), tproj<42, 3, 4, 7, 41>()); return v; }

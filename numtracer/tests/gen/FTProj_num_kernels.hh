@@ -4,45 +4,68 @@
 namespace numtracer_kernels { namespace ftproj_num {
 template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
 // fundamental-symbol env layout (fill f[i] per call):
-//   f[0] = var(5)
-//   f[1] = var(4)
+//   f[0] = var(4)
+//   f[1] = var(2)
 //   f[2] = var(1)
-//   f[3] = var(2)
+//   f[3] = var(5)
 //   f[4] = inv(8)
 //   f[5] = var(0)
 static inline constexpr int nenv = 6;
 static inline void fill(double *f, [[maybe_unused]] double p0, [[maybe_unused]] double p, [[maybe_unused]] double l0, [[maybe_unused]] double l1, [[maybe_unused]] double cos1) {
-  f[0] = p0;
-  f[1] = p;
+  f[0] = p;
+  f[1] = cos1;
   f[2] = l1;
-  f[3] = cos1;
+  f[3] = p0;
   f[4] = 1.0/((1.00000000000000000e+00)*(l1)*(l1) + (1.00000000000000000e+00)*(l0)*(l0));
   f[5] = l0;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
   const double s1 = f[3];
   const double s2 = (-2)*s1;
-  const double s3 = f[2];
-  const double s4 = s2*s3;
-  [[maybe_unused]] const double s5 = -1;
-  const double s6 = f[5];
-  const double s7 = -s6;
-  const double s8 = f[0];
-  const double s10 = f[1];
-  const double s11 = s4*s10;
-  const double s12 = fma(s7, s8, s11);
-  const double s13 = s6*s12;
-  const double s15 = f[4];
-  const double s17 = fma(s13, s15, s8);
-  const double s18 = -s15;
-  const double s19 = s1*s1;
-  const double s20 = s18*s19;
-  const double s21 = s3*s3;
-  const double s23 = fma(s20, s21, (1));
-  const double s24 = s10*s10;
-  const double s26 = s8*s17;
-  const double s27 = fma(s23, s24, s26);
-  return s27;
+  [[maybe_unused]] const double s3 = 1;
+  const double s4 = f[5];
+  const double s5 = f[1];
+  const double s6 = s4*s5;
+  const double s7 = f[0];
+  const double s9 = f[2];
+  const double s10 = s2*s9;
+  const double s11 = fma(s6, s7, s10);
+  const double s12 = s4*s11;
+  [[maybe_unused]] const double s13 = -1;
+  const double s14 = -s5;
+  const double s16 = f[4];
+  const double s17 = s12*s16;
+  const double s18 = fma(s7, s14, s17);
+  const double s20 = fma(s5, s18, s7);
+  const double s21 = s1*s1;
+  const double s22 = s16*s21;
+  const double s23 = s9*s9;
+  const double s25 = s7*s20;
+  const double s26 = fma(s22, s23, s25);
+  return s26;
 }
-static inline double tr1(const double *f) { return tr0(f); }
+static inline double tr1([[maybe_unused]] const double *f) {
+  const double s1 = f[5];
+  const double s2 = (-2)*s1;
+  [[maybe_unused]] const double s3 = -1;
+  const double s4 = f[2];
+  const double s5 = -s4;
+  const double s6 = f[1];
+  const double s7 = s5*s6;
+  const double s8 = f[0];
+  const double s10 = f[3];
+  const double s11 = s2*s10;
+  const double s12 = fma(s7, s8, s11);
+  const double s13 = f[4];
+  const double s14 = s12*s13;
+  const double s15 = s4*s14;
+  const double s18 = fma(s6, s15, s8);
+  const double s19 = s1*s1;
+  const double s20 = -s19;
+  const double s22 = fma(s13, s20, (1));
+  const double s23 = s10*s10;
+  const double s25 = s8*s18;
+  const double s26 = fma(s22, s23, s25);
+  return s26;
+}
 }} // namespace numtracer_kernels::ftproj_num

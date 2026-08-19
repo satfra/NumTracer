@@ -81,10 +81,19 @@ ntSUNDiagFund::usage = "ntSUNDiagFund[N, i, j, spec] — a fundamental Kronecker
 ntSUNDiagAdj::usage = "ntSUNDiagAdj[N, a, b, spec] — an adjoint Kronecker delta^{ab} (rank N) carrying a PER-COMPONENT adjoint dressing. `spec` is a rules list {c1 -> expr1, ..., Default -> defExpr} over the N^2-1 adjoint components, each `expri` a COMPLETE scalar dressing expression. This is how a gluon condensed along the Cartan is written (ntSUNDiagAdj[3, a, b, {3 -> A03[scale], 8 -> A08[scale]}]), the other 6 colours dropping out with no dead terms. Pinning a FIXED adjoint index uses the same head with `c -> 1`, since SUNFac has no pinned-index kind of its own.";
 
 
+(* ANONYMOUS blanks, not named patterns. These two definitions live in the PUBLIC context (above
+   Begin["`Private`"]), so every pattern NAME they use is created as an exported symbol — `n`, `i`,
+   `j`, `a`, `b`, `spec`, `scale` — which `Protect["NumTracer`*"]` at the foot of this file then
+   makes read-only. Any consumer that legitimately assigns to `Global`b` or `Global`n` after loading
+   NumTracer then hits `Set::wrsym: Symbol b is Protected` and is SILENTLY refused, because the
+   exported symbol shadows theirs on $ContextPath. That is not hypothetical: it is what stopped
+   tests/gen/gen_fierz_ortho_numeric.wls from loading its basis fixture, and because that gate
+   correctly refuses to pass vacuously it failed the run — and took regen_check.sh's whole test phase
+   with it. The bodies below reference none of these names, so blanks are a pure deletion. *)
 (* The 5-argument (N, i, j, spec, scale) spelling is gone. Reject it AT CONSTRUCTION rather than
    letting it reach the emitter: colFacG only runs at kernel-generation time, so a stale call would
    otherwise survive NumTrace and fail much later, far from the line that wrote it. *)
-ntSUNDiagFund[n_, i_, j_, spec_, scale_] := (
+ntSUNDiagFund[_, _, _, _, _] := (
     Print["[NumTracer] ERROR: ntSUNDiagFund no longer takes a separate `scale`. Apply each dressing ",
       "to its own kinematics in the spec:\n",
       "    old:  ntSUNDiagFund[N, i, j, {1 -> Zu, 2 -> Zd}, scale]\n",
@@ -92,7 +101,7 @@ ntSUNDiagFund[n_, i_, j_, spec_, scale_] := (
       "  (a pure projector component is now `c -> 1`, not `c -> ntUnitDressing`.)"];
     Abort[]);
 
-ntSUNDiagAdj[n_, a_, b_, spec_, scale_] := (
+ntSUNDiagAdj[_, _, _, _, _] := (
     Print["[NumTracer] ERROR: ntSUNDiagAdj no longer takes a separate `scale`. Apply each dressing ",
       "to its own kinematics in the spec:\n",
       "    old:  ntSUNDiagAdj[N, a, b, {3 -> A03, 8 -> A08}, scale]\n",

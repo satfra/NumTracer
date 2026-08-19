@@ -2,6 +2,9 @@
 
 #include "shim.hpp"
 #include "numtracer/sun/sun_data.hpp"
+#ifndef NT_TRACE_COMPLEX
+#define NT_TRACE_COMPLEX DiFfRG::complex<double>
+#endif
 #include "ZA3_147_num_kernels.hh"
 #include "numtrace_verdict.hh"
 
@@ -26,18 +29,25 @@ namespace DiFfRG
       const double dr_1 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p + powr<2>(p)));
       const double dr_2 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p + powr<2>(p)));
       const double dr_3 = Mq(l1);
-      const double dr_4 = -powr<-1>(l1) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1);
-      const double dr_5 = ZAqbq1(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_6 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_7 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_8 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_9 = -sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p))) * RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)) * Zq(k) - Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_10 = ZAqbq1(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
-      const double dr_11 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
-      const double dr_12 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
-      const double dr_13 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
-      const double dr_14 = -sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p))) * RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)) * Zq(k) - Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
-      DiFfRG::za3_147_num::fill(fenv, l1, cos1, cos2, p, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10, dr_11, dr_12, dr_13, dr_14);
+      const double dr_4 = powr<-1>(l1);
+      const double dr_5 = RF(powr<2>(k), powr<2>(l1));
+      const double dr_6 = Zq(k);
+      const double dr_7 = Zq(l1);
+      const double dr_8 = ZAqbq1(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_9 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_10 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_11 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_12 = sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_13 = RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p));
+      const double dr_14 = Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_15 = ZAqbq1(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
+      const double dr_16 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
+      const double dr_17 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
+      const double dr_18 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
+      const double dr_19 = sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
+      const double dr_20 = RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p));
+      const double dr_21 = Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
+      DiFfRG::za3_147_num::fill(fenv, l1, cos1, cos2, p, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10, dr_11, dr_12, dr_13, dr_14, dr_15, dr_16, dr_17, dr_18, dr_19, dr_20, dr_21);
       const auto _interp1 = ntRe(DiFfRG::za3_147_num::tr0(fenv));
       const auto _interp2 = RBdot(powr<2>(k), powr<2>(l1));
       const auto _interp3 = ZA(pow(1. + powr<6>(k),0.16666666666666666667));
@@ -115,18 +125,25 @@ namespace DiFfRG
       const double dr_1 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p + powr<2>(p)));
       const double dr_2 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p + powr<2>(p)));
       const double dr_3 = Mq(l1);
-      const double dr_4 = -powr<-1>(l1) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1);
-      const double dr_5 = ZAqbq1(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_6 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_7 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_8 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_9 = -sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p))) * RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)) * Zq(k) - Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_10 = ZAqbq1(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
-      const double dr_11 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
-      const double dr_12 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
-      const double dr_13 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
-      const double dr_14 = -sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p))) * RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)) * Zq(k) - Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
-      DiFfRG::za3_147_num::fill(fenv, l1, cos1, cos2, p, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10, dr_11, dr_12, dr_13, dr_14);
+      const double dr_4 = powr<-1>(l1);
+      const double dr_5 = RF(powr<2>(k), powr<2>(l1));
+      const double dr_6 = Zq(k);
+      const double dr_7 = Zq(l1);
+      const double dr_8 = ZAqbq1(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_9 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_10 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_11 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_12 = sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_13 = RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p));
+      const double dr_14 = Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_15 = ZAqbq1(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
+      const double dr_16 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
+      const double dr_17 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
+      const double dr_18 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
+      const double dr_19 = sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
+      const double dr_20 = RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p));
+      const double dr_21 = Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
+      DiFfRG::za3_147_num::fill(fenv, l1, cos1, cos2, p, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10, dr_11, dr_12, dr_13, dr_14, dr_15, dr_16, dr_17, dr_18, dr_19, dr_20, dr_21);
       const auto _interp1 = ntRe(DiFfRG::za3_147_num::tr0(fenv));
       const auto _interp2 = RBdot(powr<2>(k), powr<2>(l1));
       const auto _interp3 = ZA(pow(1. + powr<6>(k),0.16666666666666666667));
@@ -204,18 +221,25 @@ namespace DiFfRG
       const double dr_1 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p + powr<2>(p)));
       const double dr_2 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p + powr<2>(p)));
       const double dr_3 = Mq(l1);
-      const double dr_4 = -powr<-1>(l1) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1);
-      const double dr_5 = ZAqbq1(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_6 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_7 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_8 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_9 = -sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p))) * RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)) * Zq(k) - Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
-      const double dr_10 = ZAqbq1(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
-      const double dr_11 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
-      const double dr_12 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
-      const double dr_13 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
-      const double dr_14 = -sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p))) * RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)) * Zq(k) - Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
-      DiFfRG::za3_147_num::fill(fenv, l1, cos1, cos2, p, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10, dr_11, dr_12, dr_13, dr_14);
+      const double dr_4 = powr<-1>(l1);
+      const double dr_5 = RF(powr<2>(k), powr<2>(l1));
+      const double dr_6 = Zq(k);
+      const double dr_7 = Zq(l1);
+      const double dr_8 = ZAqbq1(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_9 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_10 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - cosl1p1 * l1 * p - cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_11 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_12 = sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_13 = RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p));
+      const double dr_14 = Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
+      const double dr_15 = ZAqbq1(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
+      const double dr_16 = ZAqbq4(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
+      const double dr_17 = ZAqbq7(0.816496580927726 * sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - cosl1p2 * l1 * p + 1.5 * powr<2>(p)));
+      const double dr_18 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
+      const double dr_19 = sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
+      const double dr_20 = RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p));
+      const double dr_21 = Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
+      DiFfRG::za3_147_num::fill(fenv, l1, cos1, cos2, p, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10, dr_11, dr_12, dr_13, dr_14, dr_15, dr_16, dr_17, dr_18, dr_19, dr_20, dr_21);
       const auto _interp1 = RBdot(powr<2>(k), powr<2>(l1));
       const auto _interp2 = ZA(pow(1. + powr<6>(k),0.16666666666666666667));
       const auto _interp3 = RB(powr<2>(k), powr<2>(l1));

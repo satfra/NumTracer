@@ -30,6 +30,7 @@ gen_ftproj_numeric	3
 gen_emvertex_numeric	10,3,9
 gen_glu_quark	2
 gen_gluon_condensate	2,2,2
+gen_kaon_tadpole	1,1
 gen_pion_quark	2
 gen_proj_numeric	2
 gen_sigl_dirac	1

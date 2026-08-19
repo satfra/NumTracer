@@ -19,6 +19,7 @@
 	"full_parallel":false,
 	"maxw":8,
 	"maxw_b":4,
+	"device":false,
 	"complex":true,
 	"kernels":"Lambda3DSmall_num_kernels.hh",
 	"probe":"probe_lambda3d_small_num.cpp",
