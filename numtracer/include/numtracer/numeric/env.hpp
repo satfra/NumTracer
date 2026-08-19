@@ -17,7 +17,7 @@
 #pragma once
 
 #include "numtracer/numeric/numeric_contract.hpp" // MPoly/DPoly/Mat4, NNet, numeric_value* entry points
-#include "numtracer/numeric/numeric_driver.hpp"   // NumericNet / run_numeric
+#include "numtracer/numeric/numeric_driver.hpp"   // mpoly_to_cpp
 
 #include <array>
 #include <utility>
@@ -65,7 +65,6 @@ namespace numtracer::numeric
     }
 
     int nsym() const { return nsym_; }
-    const std::vector<std::vector<int>> &units() const { return units_; }
 
     // ── polynomial construction (forwards to the private MPoly/DPoly factories; friend access) ────────
     MPoly zero() const { return MPoly(nsym_); }
@@ -73,17 +72,11 @@ namespace numtracer::numeric
     MPoly var(int i) const { return MPoly::var(nsym_, i); }
     MPoly mono(const std::vector<int> &e, Cx c) const { return MPoly::mono(nsym_, e, c); }
     MPoly atom(int aid) const { return MPoly::atom(nsym_, aid); }
-    MPoly from_scratch(MPolyScratch s) const { return MPoly::from_scratch(nsym_, std::move(s)); }
     DPoly dzero() const { return DPoly(nsym_); }
-    DPoly fromMPoly(const MPoly &p) const { return DPoly::fromMPoly(p); }
 
     // ── spinor-matrix layer (`spinor_mat.hpp`) ───────────────────────────────────────────────────────
-    // Fully qualified because these member names shadow the free functions of the same name.
-    Mat4 mat4() const { return Mat4(nsym_); }
-    Mat4 gammaC(int mu) const { return ::numtracer::numeric::gammaC(nsym_, mu); }
+    // Fully qualified because this member name shadows the free function of the same name.
     Mat4 slashC(const std::array<MPoly, 4> &comp) const { return ::numtracer::numeric::slashC(nsym_, comp); }
-    static Mat4 matmul(const Mat4 &A, const Mat4 &B) { return ::numtracer::numeric::matmul(A, B); }
-    static MPoly mtrace(const Mat4 &A) { return ::numtracer::numeric::mtrace(A); }
 
     // ── public entry points (env supplies nsym_, and units_ to the *_netval forms) ───────────────────
     MPoly numeric_value(const network::DiracNet &dirac, const NNet &lorentz,
@@ -119,12 +112,6 @@ namespace numtracer::numeric
                                            const std::vector<std::array<MPoly, 4>> &comp) const
     {
       return ::numtracer::numeric::collect_atom_denoms(nsym_, lors, comp);
-    }
-    std::vector<network::GenProg> run_numeric(const std::vector<NumericNet> &nets,
-                                              const std::vector<std::array<MPoly, 4>> &comp,
-                                              const std::vector<MPoly> &atomDen, network::GlobalEnv &g) const
-    {
-      return ::numtracer::numeric::run_numeric(nsym_, nets, comp, atomDen, g);
     }
 
     // ── trace-fold phases (member templates; free templates forward-declared above) ──────────────────

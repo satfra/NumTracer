@@ -7,7 +7,7 @@
 # original header**: it is backed up before the first rewrite and restored by an EXIT trap, and the
 # restore is verified with cmp.
 #
-# Why re-run this at all, given A100_NOTES.md 5 called the gate dead: that verdict was taken when
+# Why re-run this at all, given docs/sessions/A100_NOTES.md §5 called the gate dead: that verdict was taken when
 # every kernel also carried a ~4 KB by-value interpolator copy, which dominated local traffic and
 # would have hidden a spill change. With that frame gone (docs/NUMTRACER_PER_THREAD_FRAME.md),
 # spill is the only local traffic left -- and on the meson codes it is 3-25x larger than on the nf2

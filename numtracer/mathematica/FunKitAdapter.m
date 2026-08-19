@@ -30,7 +30,7 @@ $ffMap = <|
      (momentum, mu, nu) and the conventions: P_E = P_T - P_M = delta_{mu 0} delta_{nu 0}
      + qs_mu qs_nu/|q_vec|^2 - q_mu q_nu/q^2, P_M = delta_{ij} - q_i q_j/|q_vec|^2 with vanishing
      temporal rows. The engine side (labelsOf/momentumOf/needsInvQ/needsInvSQ in DSL.m,
-     builderInv -> eproj/mproj in Codegen.m) has been complete and gated by compare_ftproj_num all
+     lorentzNetStr -> eproj/mproj in Codegen.m) has been complete and gated by compare_ftproj_num all
      along; only this table was missing, so every FunKit flow with an E/M-split gluon propagator
      hit the untranslated-head trap the ROOT-CLASS GUARD below describes. *)
   "transProjElectric" -> ntElectricProj, "transProjMagnetic" -> ntMagneticProj,
@@ -160,7 +160,7 @@ accepts it (open legs are legal), and the raw head is CForm'd into the generated
 epsFundCol/epsFundFlav went undetected. Add a $ffMap/sunMap entry, or refuse the input explicitly.";
 (* epsLorentz is REFUSED on purpose, not mapped: it is the 3D SPATIAL epsilon (O(3) after the
    heat-bath split), whereas ntEpsilon is 4D and hard-wired to four labels (DSL.m labelsOf,
-   Codegen.m builderInv and the Length[lst] == 4 reconstruction). Mapping one onto the other is a
+   Codegen.m lorentzNetStr and the Length[lst] == 4 reconstruction). Mapping one onto the other is a
    silent dimension error. The pair route is cheap (2 terms at D=3) but produces SPATIAL deltas, and
    NumTracer has no spatial-delta head — ntMetric is the 4D Euclidean metric and would wrongly
    include the temporal component. So the blocker is a missing head, not cost: the fix is a spatial
@@ -258,7 +258,7 @@ promoteFlavResidue[factors_List] := Module[{flav, rest, closed, resid},
   If[! (IntegerQ[$ntFlavRank] && $ntFlavRank >= 1),
     Message[NumTrace::flavrank, Short[resid, 6]]; Abort[]];
   (* A residue nested inside an eager Plus is promoted in place; the enclosing factor then fails
-     scalarQ and correctly joins the tensor factors as an SU(N) Plus-vertex (compileColGSum). *)
+     scalarQ and correctly joins the tensor factors as an SU(N) Plus-vertex (compileColourSum). *)
   closed = closed /. flavDelta[i_, j_] :> ntSUNDeltaFund[$ntFlavRank, i, j];
   rest   = Select[factors, FreeQ[#, flavDelta] &];
   Join[rest, If[Head[closed] === Times, List @@ closed, {closed}]]];
@@ -319,9 +319,11 @@ FromFunKit[expr_, OptionsPattern[]] := Module[{nf, map, hasIso, isoRewritten, re
       If[leftover =!= {}, Message[FromFunKit::untranslated, leftover]; Abort[]]]];
   $ntDressCollect = TrueQ[OptionValue["DressingCollection"]];
   $ntFlavRank     = nf;   (* consumed by promoteFlavResidue, from DSL.m's analyseDiagram *)
-  ntLog["[prof] FromFunKit (head rewrite + expandBridges): ",
-   (* Normalize fixed Lorentz components before expandBridges tests whether a
-      finite-T spatial slash is a collectible dressed Dirac numerator. *)
-   First@AbsoluteTiming[res = contractFlavour @ expandBridges @ expandFixedComponents[
-      isoRewritten //. (h_Symbol)[a___] /; KeyExistsQ[map, SymbolName[h]] :> map[SymbolName[h]][a]]], " s"];
+  (* Normalize fixed Lorentz components before expandBridges tests whether a
+     finite-T spatial slash is a collectible dressed Dirac numerator. This is the whole rewrite, so
+     it is bound here and only its timing is logged — see ntExportCpp on why work stays out of
+     ntLog's arguments. *)
+  With[{ntT = First@AbsoluteTiming[res = contractFlavour @ expandBridges @ expandFixedComponents[
+      isoRewritten //. (h_Symbol)[a___] /; KeyExistsQ[map, SymbolName[h]] :> map[SymbolName[h]][a]]]},
+    ntLog["[prof] FromFunKit (head rewrite + expandBridges): ", ntT, " s"]];
   res];

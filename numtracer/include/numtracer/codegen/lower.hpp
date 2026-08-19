@@ -80,7 +80,7 @@ partition_pivot(std::vector<LMono> terms, int pivot, int pivotExp) {
 
 /// @brief Greedy multivariate Horner of a monomial set, emitted through the real value-numbering
 ///        builder (so shared powers / products / factors are CSE'd). Returns the result slot.
-constexpr int horner(rdetail::RBuilder &w, std::vector<LMono> terms) {
+constexpr int horner(rdetail::RBuilder &builder, std::vector<LMono> terms) {
   using namespace rdetail;
   // ---- base case: all monomials are constant → emit their sum -----------------------------
   bool allconst = true;
@@ -89,18 +89,18 @@ constexpr int horner(rdetail::RBuilder &w, std::vector<LMono> terms) {
   if (allconst) {
     double s = 0;
     for (const LMono &m : terms) s += m.c;
-    return rconst(w, s);
+    return rconst(builder, s);
   }
   const auto [pivot, pivotExp] = choose_pivot(terms);
   auto [with, without] = partition_pivot(std::move(terms), pivot, pivotExp);
   // ---- recurse on both parts, then combine: pivot^pivotExp * horner(with) + horner(without) -----
-  const int withSlot = horner(w, std::move(with));
-  const int withoutSlot = without.empty() ? -1 : horner(w, std::move(without));
-  const int pivotVar = rvar(w, pivot);
+  const int withSlot = horner(builder, std::move(with));
+  const int withoutSlot = without.empty() ? -1 : horner(builder, std::move(without));
+  const int pivotVar = rvar(builder, pivot);
   int pivotPow = pivotVar;
-  for (int e = 1; e < pivotExp; ++e) pivotPow = rmul(w, pivotPow, pivotVar);
-  const int factored = rmul(w, pivotPow, withSlot);
-  return radd(w, factored, withoutSlot);
+  for (int e = 1; e < pivotExp; ++e) pivotPow = rmul(builder, pivotPow, pivotVar);
+  const int factored = rmul(builder, pivotPow, withSlot);
+  return radd(builder, factored, withoutSlot);
 }
 
 } // namespace numtracer::network

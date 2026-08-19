@@ -170,7 +170,7 @@ scalarQ[e_] := FreeQ[e, _ntMetric | ntVec[_, Except[_Integer]] | _ntTransProj | 
 freeIdx[e_] := Which[
   tensorQ[e],        labelsOf[e],
   Head[e] === Plus,  freeIdx[First[List @@ e]],
-  (* A tensor^n is n copies sharing the SAME labels — a closed self-contraction (see compileTInv),
+  (* A tensor^n is n copies sharing the SAME labels — a closed self-contraction (see compileLorentz),
      so it exposes NO free index. Spelled out rather than left to the True branch below, which
      would return {} for the wrong reason and hide a malformed Power. *)
   Head[e] === Power && IntegerQ[e[[2]]] && e[[2]] >= 2 && ! scalarQ[e], {},
@@ -266,12 +266,12 @@ diracNumeratorSumQ[p_Plus] := Module[{terms = List @@ p, opens},
    pre-plan behaviour). The pre-existing PROPAGATOR collection (k=0) is bounded (2 options/propagator)
    and stays ON unconditionally. Enable the vertex path with NT_VERTEX_COLLECT=1 (or set
    $ntVertexCollect=True) on the small-P flows where it wins (e.g. za3_147: 8.9 s vs 13.3 s). *)
-$ntVertexCollect = ntEnvFlag["NT_VERTEX_COLLECT"];
+$ntVertexCollect := ntEnvFlag["NT_VERTEX_COLLECT"];
 (* ALL-NUMERIC Dirac sums as slots (opt-in). `dressedStructureSumQ` demands at least one NON-numeric
    summand coefficient, because it was written to decide whether a DRESSING sum must be distributed.
    A multi-term PROJECTOR is collateral damage: its coefficients are pure numbers, so it fails that
    test, is therefore never collectible, and survives as a raw Plus all the way to
-   splitColourGroupsInv — where `Expand[Times @@ needExpand]` materialises its Cartesian product with
+   splitColourGroups — where `Expand[Times @@ needExpand]` materialises its Cartesian product with
    the rest of the diagram, once per diagram, per generation.
    That is measurably the dominant cost of a projector-heavy flow: transAAqbqMinimal's element 2
    (~10 Dirac terms, 30 gammas) against element 1 (3 terms, 4 gammas) is 1056 vs 14 distinct emitted
@@ -282,19 +282,19 @@ $ntVertexCollect = ntEnvFlag["NT_VERTEX_COLLECT"];
    Scoped deliberately: the k=0 propagator-numerator disjunct keeps `dressedStructureSumQ`, so an
    all-numeric propagator numerator still distributes exactly as today. And `distributeQ` below is
    untouched by construction — it tests `dressedStructureSumQ` first, which is False for these sums,
-   so its verdict (do not distribute) is the same either way. *)
-(* DEFAULT ON, and deliberately NOT gated behind $ntVertexCollect. The two are different risks that
-   happen to share a mechanism. $ntVertexCollect is opt-in because a DRESSED vertex sum multiplies the
-   structure count by the dressing count — the ~10^6 structure x dressing combinations per net that
-   OOMed the kernel. An all-numeric projector sum has no dressing dimension at all (its options carry
-   no dress atoms), so its combination count is bounded by the projector's own term count: measured on
-   ZAAqbq2 the sub-term count is IDENTICAL either way (12,721,032) — the work moves, it does not grow.
-   Hatch names the legacy path, per the convention NT_DIRAC_FLAT set. *)
-$ntSlotCollectNumeric = ! ntEnvFlag["NT_NO_SLOT_COLLECT_NUMERIC"];
+   so its verdict (do not distribute) is the same either way.
+
+   UNCONDITIONAL, and deliberately NOT gated behind $ntVertexCollect. The two are different risks
+   that happen to share a mechanism. $ntVertexCollect is opt-in because a DRESSED vertex sum
+   multiplies the structure count by the dressing count — the ~10^6 structure x dressing combinations
+   per net that OOMed the kernel. An all-numeric projector sum has no dressing dimension at all (its
+   options carry no dress atoms), so its combination count is bounded by the projector's own term
+   count: measured on ZAAqbq2 the sub-term count is IDENTICAL either way (12,721,032) — the work
+   moves, it does not grow. There is therefore no case in which the legacy distribute path is wanted,
+   and the NT_NO_SLOT_COLLECT_NUMERIC hatch that used to select it (referenced nowhere) is gone. *)
 collectibleDiracSumQ[p_Plus] := ! sectorBridgeQ[p] &&
   ((dressedStructureSumQ[p] && diracNumeratorSumQ[p] && dressedNumDecompose[p] =!= $Failed) ||
-   ((TrueQ[$ntVertexCollect] && dressedStructureSumQ[p]) ||
-      (TrueQ[$ntSlotCollectNumeric] && ! dressedStructureSumQ[p])) &&
+   ((TrueQ[$ntVertexCollect] && dressedStructureSumQ[p]) || ! dressedStructureSumQ[p]) &&
      diracSlotSumQ[p] && diracSlotDecompose[p] =!= $Failed);
 collectibleDiracSumQ[_] := False;
 distributeQ[p_] := sectorBridgeQ[p] ||
@@ -397,16 +397,6 @@ rewriteDressedNums[factors_List] := If[! TrueQ[$ntDressCollect], factors,
      With[{r = With[{r0 = dressedNumDecompose[f]}, If[r0 =!= $Failed, r0, diracSlotDecompose[f]]]},
        If[r === $Failed, {f}, If[Head[r] === Times, List @@ r, {r}]]], {f}]] /@ factors]];
 
-(* Inverse of the ntDressedNum rewrite: expand a collected numerator back into its distributed Dirac
-   structure sum (Σ coeff_i · {ntDeltaDirac | ntGamma·Σc·ntVec}). Used when re-distributing a
-   collected diagram (the small-D gate in NumTrace). Each slash gets a fresh Lorentz label for its
-   contracted leg. *)
-expandDressedNum[ntDressedNum[opts_, din_, dout_]] := Plus @@ (Function[opt,
-  opt[[1]] * Switch[opt[[2, 1]],
-    "ident", ntDeltaDirac[din, dout],
-    "slash", With[{mu = Unique["dexp"]},
-       ntGamma[mu, din, dout] * (Plus @@ ((#[[1]] * ntVec[#[[2]], mu]) & /@ opt[[2, 2]]))]]] /@ opts);
-
 (* ---- general collected Dirac slot (Stage 4, ANY open-leg count) --------------------------------
    A collected Dirac slot is a coefficient-weighted sum of Dirac structures that all share the spinor
    in/out pair AND the SAME SET of open Lorentz legs `{μ...}` (k>=0). k=0 is the propagator numerator
@@ -470,21 +460,13 @@ diracSlotDecompose[p_Plus] := Module[
   (Times @@ common) * (Times @@ commonScal) * ntDiracSlot[opts, din, dout, legs]];
 diracSlotDecompose[_] := $Failed;
 
-(* Inverse: expand a collected slot back into its distributed Dirac structure sum (for redistDiagram's
-   small-D cross-check). Each option is coeff × its whole structure product, so this is exact. *)
-expandDiracSlot[ntDiracSlot[opts_, _, _, _]] := Plus @@ ((#[[1]] * #[[2]]) & /@ opts);
-
-(* Re-distribute ONE analysed (collected) diagram back to the non-collected path: rebuild its net,
-   expand every ntDressedNum into the Dirac structure sum, distribute, drop odd-gamma traces, and
-   re-analyse (with collection OFF so no ntDressedNum is recreated). Used by the small-D gate in
-   NumTrace. *)
-redistDiagram[diag_] := Block[{$ntDressCollect = False},
-  Module[{net = diag["Coeff"] * Times @@ Flatten[(#["Factors"] &) /@ diag["Components"]]},
-    net = net /. nd_ntDressedNum :> expandDressedNum[nd];
-    net = net /. ds_ntDiracSlot :> expandDiracSlot[ds];
-    With[{ex = expandBridges[net]},
-      analyseDiagram /@ Select[If[Head[ex] === Plus, List @@ ex, {ex}],
-        ! vanishingOddTraceQ[#] &]]]];
+(* `redistDiagram` used to live here, with its private helpers `expandDiracSlot` and
+   `expandDressedNum` (the latter defined further up): it re-distributed one COLLECTED diagram back to the non-collected form so the
+   two paths could be compared. Its docstring said it was "used by the small-D gate in NumTrace" —
+   that gate is gone, and with it the only caller of the whole cluster. The collected and distributed
+   paths are still compared, but by regenerating a flow under a hatch and grading the two kernels
+   (tests/gen/gen_lambda3d_small_numeric.wls), which exercises the real emission rather than a
+   Mathematica-side re-expansion. `diracSlotDecompose` above is separate and live. *)
 
 (* Distribute every colour<->Lorentz-bridging sum into its surrounding product (only that
    sum; single-sector sums are left intact for et::add). Turns a bridging diagram into a
@@ -500,7 +482,7 @@ expandBridges[e_Times] := Module[{factors = List @@ e, bridge},
    become Power[sum, 2] BEFORE we ever see them. The selector above matches p_Plus only, so such a
    Power is never chosen as a bridge and would fall through the catch-all below UN-DISTRIBUTED —
    fusing the colour and Lorentz axes into one giant ETensor (the exact blow-up expandBridges
-   exists to prevent), or worse being read by compileTInv as a closed self-contraction. It cannot
+   exists to prevent), or worse being read by compileLorentz as a closed self-contraction. It cannot
    simply be re-expanded here: Times would immediately re-collapse the copies unless their labels
    were freshened first, and two vertices that legitimately share every label are themselves a bug.
    No known flow produces this; fail loudly if one ever does. *)
@@ -630,13 +612,13 @@ spatialVecFrame[net_, frame_] := Association[
 
    which is exactly ntSUNDeltaFund. So there is NO C++ change: SUNFac's fixed 3-slot layout never
    has to represent an N-index object. The result is a Plus of delta products with numeric
-   coefficients, which lands on the constant-colour branch-list path (compileColGSum in Codegen.m).
+   coefficients, which lands on the constant-colour branch-list path (compileColourSum in Codegen.m).
 
    Applied BEFORE expandBridges/checkLabels so the object those validate is the one that compiles.
 
-   WHY THE HEAD IS DELIBERATELY NOT REGISTERED IN Codegen's colour tables (ctHeadsInv / colFacG /
+   WHY THE HEAD IS DELIBERATELY NOT REGISTERED IN Codegen's colour tables (ctHeads / colourFacStr /
    labelDimAssoc): an ntEpsFund that somehow survives this rewrite must FAIL, not be emitted. It then
-   trips colFacG's catch-all (MakeNTKernel::colleak) and, behind that, ntExportCpp's nt*-head regex. *)
+   trips colourFacStr's catch-all (MakeNTKernel::colleak) and, behind that, ntExportCpp's nt*-head regex. *)
 
 (* The dimension of the index space an epsilon head lives in. One line today; the single point a
    hypothetical adjoint epsilon (dimension N^2-1) would extend. *)
@@ -646,6 +628,15 @@ epsDimOf[ntEpsFund[n_, __]] := n;
    things that were N-specific). That makes it unit-testable at dim = 2..5 against LeviCivitaTensor
    without any head existing at those dimensions — see the gate's brute-force oracle. *)
 $ntEpsMaxPairTerms = 720;   (* 6!; 7! = 5040 would breach $ntColSumMaxBranches (4096) on its own *)
+
+NumTrace::spinorbase = "A diagram carries `1` Lorentz/colour axis labels, which reaches the spinor axis id base `2`. Axis ids are how the engine decides what contracts with what, so the two ranges meeting means a Lorentz axis and a spinor axis share an id and get fused into one contraction — a silently WRONG number, not an error. Raise NumTracer`Private`$ntSpinorIdBase above the label count (the ids are dictionary keys, so a larger base costs nothing). Aborting instead.";
+
+(* First axis id handed to a SPINOR (Dirac) label. Lorentz/colour labels are numbered from 0 upward,
+   so this is the ceiling on how many of those one diagram may carry; see analyseDiagram, which
+   aborts rather than let the two ranges meet. 100 is far above any real diagram (the dense 4-point
+   quark flows peak in the low tens) and costs nothing — the ids are dictionary keys, not array
+   indices, so a sparse range is free. *)
+$ntSpinorIdBase = 100;
 NumTrace::epsbig = "expandFundEps: an epsilon pair in dimension `1` sharing `2` index/indices \
 expands to `3`! = `4` Kronecker-delta terms (limit `5`). Emitting these would hand the colour \
 branch-list lowering a list it would either reject far downstream with an opaque branch count, or \
@@ -894,8 +885,9 @@ NumTrace[net_, OptionsPattern[]] := Module[
   (* the top-level sum is the (linear) sum of DIAGRAMS; keep single-sector vertex sums eager
      via et::add, but distribute colour<->Lorentz-bridging sums so the two sectors never fuse
      into one giant ETensor. *)
-  ntLog["[prof] NumTrace expandBridges: ", First@AbsoluteTiming[
-  diagrams = With[{ex = expandBridges[net2]}, If[Head[ex] === Plus, List @@ ex, {ex}]];], " s"];
+  With[{ntT = First@AbsoluteTiming[
+  diagrams = With[{ex = expandBridges[net2]}, If[Head[ex] === Plus, List @@ ex, {ex}]];]},
+    ntLog["[prof] NumTrace expandBridges: ", ntT, " s"]];
   (* odd-trace vanishing: a closed Dirac trace of an ODD number of gammas is identically zero
      (and would otherwise carry a spurious imaginary I^odd coefficient from the vertex/basis
      normalizations). Drop such diagrams. (gamma5-bearing traces are exempt from the rule.)
@@ -911,7 +903,7 @@ NumTrace[net_, OptionsPattern[]] := Module[
          coefficient). It was exempted by neither, so the oblique-metric dual projector for e.g.
          AqbqDirect8 structure 7 traced to an identically-zero kernel with no error raised.
      Only an ALL-odd-branch diagram is dropped; a mixed-parity one is KEPT, and the per-branch
-     matrix-product trace zeroes its odd-gamma branches on its own (splitColourGroupsInv expands any
+     matrix-product trace zeroes its odd-gamma branches on its own (splitColourGroups expands any
      γ-bearing Plus and compiles each branch separately, so this filter is purely a pruning
      optimisation sitting upstream of already-correct code). *)
   diagrams = Select[diagrams, ! vanishingOddTraceQ[#] &];
@@ -921,7 +913,7 @@ NumTrace[net_, OptionsPattern[]] := Module[
      the et engine mis-pairs them into a silently wrong number. Checked per diagram (not on the
      raw net): only after expandBridges is each diagram a flat Times in which "1 = free,
      2 = contracted" is the actual invariant. *)
-  ntLog["[prof] NumTrace checkLabels: ", First@AbsoluteTiming[
+  With[{ntT = First@AbsoluteTiming[
   With[{frees = If[TrueQ[$ntCheckLabels],
       (* the census (labelCensus) is pure; the abort/Message validation is kept separate so a
          failure reports the diagram index (see checkLabels) *)
@@ -929,7 +921,8 @@ NumTrace[net_, OptionsPattern[]] := Module[
         MapThread[checkLabels[#1, #2, #3] &, {diagrams, census, Range[Length[diagrams]]}]],
       ConstantArray[{}, Length[diagrams]]]},
     ntLog["[labels] ", Length[diagrams], " diagram(s) validated; free-index set(s) = ",
-      DeleteDuplicates[Sort /@ frees]]];], " s"];
+      DeleteDuplicates[Sort /@ frees]]];]},
+    ntLog["[prof] NumTrace checkLabels: ", ntT, " s"]];
 
   (* global env layout: every distinct momentum, and which ones need a 1/q^2 slot *)
   (* net2, not net: the unit basis vectors introduced by expandFixedComponents — and the spatial
@@ -940,8 +933,10 @@ NumTrace[net_, OptionsPattern[]] := Module[
   invSMom = DeleteDuplicates @ Cases[net2, f_?(needsInvSQ) :> momentumOf[f], Infinity];
   {env, nenv} = buildEnv[allMom, invMom, invSMom];
 
-  ntLog["[prof] NumTrace analyseDiagram (", Length[diagrams], " diagrams): ",
-    First@AbsoluteTiming[diags = analyseDiagram /@ diagrams], " s"];
+(* The text of this line is a CONTRACT: tests/gen/regen_check.sh's flow_counts() seds the diagram
+   count out of it. Same literal fragments, same order. *)
+  With[{ntT = First@AbsoluteTiming[diags = analyseDiagram /@ diagrams]},
+    ntLog["[prof] NumTrace analyseDiagram (", Length[diagrams], " diagrams): ", ntT, " s"]];
 
   (* ---- NO FLAVOUR DELTA MAY LEAVE HERE -------------------------------------------------------
      This is the first point at which the fundamental-flavour residue is final: both contractFlavour
@@ -981,14 +976,22 @@ analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
      genuinely unclosable, so flows whose flavour lines close stay byte-identical. *)
   factors = promoteFlavResidue[factors];
   tensorF = Select[factors, ! scalarQ[#] &];
-  (* Partition labels by sector: spinor (Dirac) axes get a disjoint high id range (>=100)
-     so the et engine — which contracts axes by matching id — never fuses a spinor axis
-     with a Lorentz/colour axis that happened to be numbered the same. *)
+  (* Partition labels by sector: spinor (Dirac) axes get a disjoint high id range (>= $ntSpinorIdBase)
+     so the engine — which contracts axes by MATCHING ID — never fuses a spinor axis with a
+     Lorentz/colour axis that happened to be numbered the same.
+
+     Disjointness is not structural, it is arithmetic: it holds only while the non-spinor labels stay
+     below the base. Exceed it and axis $ntSpinorIdBase is BOTH the first spinor axis and the
+     ($ntSpinorIdBase+1)-th Lorentz axis, so the engine contracts two unrelated legs and returns a
+     wrong number with no diagnostic — the failure class every other guard in this file exists to
+     make loud. So check it. *)
   ids     = With[{labs = DeleteDuplicates @ Flatten[allLabels /@ tensorF],
                   spn  = DeleteDuplicates @ Flatten[allSpinorLabels /@ tensorF]},
               With[{nonsp = DeleteCases[labs, Alternatives @@ spn]},
+                If[Length[nonsp] > $ntSpinorIdBase,
+                  Message[NumTrace::spinorbase, Length[nonsp], $ntSpinorIdBase]; Abort[]];
                 Join[AssociationThread[nonsp -> Range[0, Length[nonsp] - 1]],
-                     AssociationThread[spn -> Range[100, 99 + Length[spn]]]]]];
+                     AssociationThread[spn -> Range[$ntSpinorIdBase, $ntSpinorIdBase - 1 + Length[spn]]]]]];
   <|
     (* contractFlavour collapses any flavour-δ chain that the dressing collection factored out of an
        eager numerator into the coeff (it straddled the Plus before, so FromFunKit could not). A no-op
@@ -997,21 +1000,21 @@ analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
                        Times @@ Select[factors, scalarQ]],
     "Ids"        -> ids,
     (* "Constant" is consumed by Codegen's per-component dispatch, where it means not merely
-       "momentum-free" but "a constant SU(N) component": it is handed to compileColG, which only
+       "momentum-free" but "a constant SU(N) component": it is handed to compileColour, which only
        understands group heads. A momentum-free DIRAC structure (a bare closed spinor δ-loop, tr[1] = 4,
        with no ntVec/projector to carry momentum) is momentum-free yet carries no colour meaning, so
-       compileColG emitted it as raw Mathematica (`colFacG[ntDeltaDirac[d2,d3], <|a1 -> 0, ...|>]`)
+       compileColour emitted it as raw Mathematica (`colourFacStr[ntDeltaDirac[d2,d3], <|a1 -> 0, ...|>]`)
        into the generator .cpp — an instant clang failure. Reproduce with <P_2,T_2> of AqbqDirect8.
        Listing the Dirac heads here makes such a component NON-constant, routing it to
-       splitColourGroupsInv/compileDirac like any other Dirac structure. NOTE this is only correct
+       splitColourGroups/compileDirac like any other Dirac structure. NOTE this is only correct
        together with the collapsed-loop tr(1)=4 restoration in compileDirac (see nEmptyLoops there):
        orderDiracFacs drops δ connectors, so the loop arrives token-free and the runtime's split_loops
        would otherwise discard it, giving a kernel 4x too small.
        The SAME reasoning covers the pure-LORENTZ heads. A momentum-free closed metric loop
        (g_{μν} g^{μν} = D, the "ZAAqbq metric leak" shape) or a fully-contracted ntEpsilon pair from a
        γ5 trace is likewise momentum-free but not colour, and was emitted as
-       `colFacG[ntMetric[v1,v2], <|v1 -> 0, ...|>]` straight into the generator .cpp. Reproduced with
-       ntMetric[v1,v2] ntMetric[v2,v1] × ntVec[q1,a1] ntVec[ql,a1]. compileTInv/builderInv already
+       `colourFacStr[ntMetric[v1,v2], <|v1 -> 0, ...|>]` straight into the generator .cpp. Reproduced with
+       ntMetric[v1,v2] ntMetric[v2,v1] × ntVec[q1,a1] ntVec[ql,a1]. compileLorentz/lorentzNetStr already
        handle both heads, so making the component non-constant is all that is needed.
        In short: "Constant" must mean "a constant SU(N) component", so EVERY non-SU(N) tensor head
        belongs in this list — it is not merely a momentum test. *)
@@ -1066,7 +1069,7 @@ labelCensus[e_] := Which[
       {DeleteDuplicates[ls], Cases[Tally[ls], {l_, c_} /; c >= 2 :> l], {}}],
 
   Head[e] === Power && IntegerQ[e[[2]]] && e[[2]] >= 1 && ! scalarQ[e],
-    (* n copies sharing the SAME labels: a closed self-contraction (see compileTInv) *)
+    (* n copies sharing the SAME labels: a closed self-contraction (see compileLorentz) *)
     Module[{c = labelCensus[e[[1]]], n = e[[2]]},
       Which[
         n === 1, c,
@@ -1103,7 +1106,7 @@ labelCensus[e_] := Which[
 (* Escape hatch: NT_NO_LABEL_CHECK=1 disables (the census is O(net), not a hot path). Anything
    falsy — unset, "", "0", "false" — leaves the check ON, which is the safe direction: this guard
    catches a label occurring more than twice, which otherwise becomes a silently wrong contraction. *)
-$ntCheckLabels = !ntEnvFlag["NT_NO_LABEL_CHECK"];
+$ntCheckLabels := !ntEnvFlag["NT_NO_LABEL_CHECK"];
 
 (* Validate a PRECOMPUTED census and return the diagram's free-index set. Split from labelCensus so
    the pure counting stays free of side effects and this half owns the diagnostics; `diagram` is

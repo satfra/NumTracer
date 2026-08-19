@@ -19,6 +19,7 @@
 #pragma once
 
 #include "numtracer/core/export.hpp"   // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
+#include "numtracer/core/envvar.hpp" // env_flag / env_int — the single truth test for NT_* switches
 #include "numtracer/core/config.hpp"    // NT_THROW (exception-optional guard for -fno-exceptions builds)
 #include "numtracer/codegen/gen.hpp"   // network::GlobalEnv / GenProg / LMono / gdetail::best_into
 #include "numtracer/network/dirac.hpp" // network::DiracNet / DFac (reused chain representation)
@@ -56,14 +57,14 @@ namespace numtracer::numeric
   /// move-assignment and copy the vlc vector on every reallocation); the nXxx() builders are the only
   /// constructors, so the values are still effectively immutable in practice.
   struct NElem {
-    enum Kind { Metric, Vector, Epsilon, ProjT, ProjL, ProjE, ProjM,
-                // Rank-1 pieces of the MAGNETIC projector, produced only by expand_magnetic
-                // (never by the network front-end, so elem_to_nelem has no case for them):
-                //   TimeSq    = u_a u_b            (u = heat-bath direction, component 0)
-                //   SpatialSq = k_a k_b * INVS(k)  (spatial components only)
-                // together with a plain Metric they spell P_M = delta - u(x)u - k_s(x)k_s/|k|^2.
-                TimeSq, SpatialSq };
+    enum Kind { Metric, Vector, Epsilon, ProjT, ProjL, ProjE, ProjM };
     Kind kind = Metric;
+    /// Lorentz index ids, named by the variant that uses them (never by enum ordinal):
+    ///   Metric      δ_{a b}                 — a, b
+    ///   Vector      q_a                     — a
+    ///   ProjT/L/E/M P_{a b}(k)              — a, b
+    ///   Epsilon     ε_{a b c d}             — a, b, c, d (the only kind using c and d)
+    /// Two factors contract exactly when they share an id, so these are the network's edges.
     int a = 0, b = 0, c = 0, d = 0;
     std::vector<std::pair<double, int>> vlc; ///< momentum (Vector leg, or any projector's `k`)
     int atom = -1;                           ///< full inverse-atom id `1/k²` (ProjT / ProjL / ProjE)
@@ -137,7 +138,7 @@ namespace numtracer::numeric
     /// A dense Lorentz factor: a tensor over `ids` (each extent 4), row-major flat `v` of MPoly.
     struct Factor {
       std::vector<int> ids;
-      std::vector<MPoly> v; ///< size 4^ids.size()
+      std::vector<MPoly> entries; ///< the dense tensor, flattened: size 4^ids.size()
     };
 
   } // namespace ndetail
@@ -172,7 +173,7 @@ namespace numtracer::numeric
     std::vector<int> tokenFree(chain.size(), -1); // token index → free-leg slot, or -1
     std::vector<int> tokenFree2(chain.size(),
                                 -1); // kind 3 (commutator): leg-B free-leg slot (or -1 if leg-B is a slash)
-    std::vector<Mat4> slashMat;      // precomputed slash matrices, indexed by token (kind 1)
+    std::vector<Mat4> slashMat;      // precomputed Slash matrices, indexed by token
     slashMat.reserve(chain.size());
     // kind 3 commutator [A,B]: each leg is FREE (a looped component) or SLASH (a fixed momentum matrix).
     // For a slashed leg we stash its slash matrix here and turn it into 2×2 blocks below (next to sP/sQ).
@@ -210,15 +211,17 @@ namespace numtracer::numeric
     const int f = freeLegs.size();
     NT_STAT_ADD(nd_calls, 1);
     NT_STAT_ADD(nd_tokens, chain.size());
-    // trace parity is set by the BLOCK-ANTIDIAGONAL factors only (γ^μ kind 0, slash kind 1); γ5 (kind 2)
-    // and σ (kind 3) are block-DIAGONAL. An odd antidiagonal count → final product antidiagonal → tr=0.
-    std::size_t ng = 0;
+    // Trace parity is set by the BLOCK-ANTIDIAGONAL factors only — Gamma and Slash. Gamma5 and Comm
+    // (σ) are block-DIAGONAL, so they do not flip it: a Comm is two gammas and a LoopSep is none,
+    // both 0 mod 2. An odd antidiagonal count ⇒ the final product is antidiagonal ⇒ tr = 0.
+    // Keep this count in step with its sibling in network/dirac.hpp; the two engines must agree.
+    std::size_t nAntidiag = 0;
     for (const network::DFac &d : chain)
-      if (d.kind == network::DFac::Gamma || d.kind == network::DFac::Slash) ++ng;
+      if (d.kind == network::DFac::Gamma || d.kind == network::DFac::Slash) ++nAntidiag;
     ndetail::Factor F;
     F.ids = freeLegs;
     // The free-leg tensor has 4^f entries; `total` is a 32-bit int, so f >= 16 (4^16 = 2^32)
-    // would silently overflow and under-size F.v, corrupting the later index writes. Such a chain
+    // would silently overflow and under-size F.entries, corrupting the later index writes. Such a chain
     // is astronomically large anyway — refuse it loudly rather than miscompute.
     if (f > 15)
       NT_THROW(std::runtime_error, "numeric_dirac: Dirac chain has too many free Lorentz legs "
@@ -226,8 +229,8 @@ namespace numtracer::numeric
     int total = 1;
     for (int k = 0; k < f; ++k)
       total *= 4;
-    F.v.assign(total, MPolyFactory::zero(nsym));
-    if (ng % 2 == 1) {
+    F.entries.assign(total, MPolyFactory::zero(nsym));
+    if (nAntidiag % 2 == 1) {
       NT_STAT_ADD(nd_odd_skip, 1);
       return F; // odd → all zero
     }
@@ -239,8 +242,8 @@ namespace numtracer::numeric
     auto blocksOf = [&](const Mat4 &M, B2 &P, B2 &Q) {
       for (int rr = 0; rr < 2; ++rr)
         for (int cc = 0; cc < 2; ++cc) {
-          P[rr * 2 + cc] = M.a[rr][cc + 2];
-          Q[rr * 2 + cc] = M.a[rr + 2][cc];
+          P[rr * 2 + cc] = M.entries[rr][cc + 2];
+          Q[rr * 2 + cc] = M.entries[rr + 2][cc];
         }
     };
     auto mul2 = [&](const B2 &x, const B2 &y) {
@@ -278,107 +281,27 @@ namespace numtracer::numeric
       Su = subB2(mul2(Pa, Qb), mul2(Pb, Qa));
       Sl = subB2(mul2(Qa, Pb), mul2(Qb, Pa));
     };
-    // Fold the chain for ONE assignment of the free legs to concrete components (`legComp`). The running
-    // product is two Weyl blocks (m0,m1) with alternating roles (`antidiag`); ng is even, so the result is
-    // block-diagonal and its trace is tr(m0)+tr(m1).
-    auto foldChain = [&](const std::vector<int> &legComp) -> MPoly {
-      B2 m0, m1;
-      bool started = false, antidiag = true;
-      for (std::size_t i = 0; i < chain.size(); ++i) {
-        if (chain[i].kind == network::DFac::Gamma5) { // γ5: block-diagonal diag(+I,−I), parity unchanged
-          if (!started) {
-            m0 = id2;
-            m1 = neg2(id2);
-            started = true;
-            antidiag = false;
-            continue;
-          }
-          if (antidiag)
-            m0 = neg2(m0);
-          else
-            m1 = neg2(m1);
-          continue;
-        }
-        if (chain[i].kind == network::DFac::Comm) { // commutator [A,B]: block-diagonal diag(Su,Sl), parity unchanged
-          B2 Su, Sl;
-          // leg-A blocks: free ⇒ gP/gQ at this assignment's component; slash ⇒ precomputed cAP/cAQ.
-          const B2 &Pa = commAslash[i] ? cAP[i] : gP[legComp[tokenFree[i]]];
-          const B2 &Qa = commAslash[i] ? cAQ[i] : gQ[legComp[tokenFree[i]]];
-          const B2 &Pb = commBslash[i] ? cBP[i] : gP[legComp[tokenFree2[i]]];
-          const B2 &Qb = commBslash[i] ? cBQ[i] : gQ[legComp[tokenFree2[i]]];
-          commBlocks(Pa, Qa, Pb, Qb, Su, Sl);
-          if (!started) {
-            m0 = Su;
-            m1 = Sl;
-            started = true;
-            antidiag = false;
-            continue;
-          }
-          if (antidiag) {
-            m0 = mul2(m0, Sl);
-            m1 = mul2(m1, Su);
-          } // R·diag(Su,Sl), R antidiagonal
-          else {
-            m0 = mul2(m0, Su);
-            m1 = mul2(m1, Sl);
-          }
-          continue;
-        }
-        const std::size_t mu = (chain[i].kind == network::DFac::Gamma) ? legComp[tokenFree[i]] : 0;
-        const B2 &Pi = (chain[i].kind == network::DFac::Gamma) ? gP[mu] : sP[i];
-        const B2 &Qi = (chain[i].kind == network::DFac::Gamma) ? gQ[mu] : sQ[i];
-        if (!started) {
-          m0 = Pi;
-          m1 = Qi;
-          started = true;
-          antidiag = true;
-          continue;
-        }
-        if (antidiag) {
-          m0 = mul2(m0, Qi);
-          m1 = mul2(m1, Pi);
-        } // [[0,m0],[m1,0]]·[[0,Pi],[Qi,0]]
-        else {
-          m0 = mul2(m0, Pi);
-          m1 = mul2(m1, Qi);
-        }
-        antidiag = !antidiag;
-      }
-      // ng (γ-count, γ5 excluded) even → block-diagonal product → trace = tr(m0)+tr(m1).
-      // m0/m1 are dead after this — move so empty summands don't force copies of the survivors.
-      return std::move(m0[0]) + std::move(m0[3]) + std::move(m1[0]) + std::move(m1[3]);
-    };
-
-    // Escape hatch: NT_DIRAC_FLAT=1 restores the flat per-assignment re-fold below (the pre-DFS
-    // behaviour) for A/B and bisection. Kept while the DFS beds in; the two paths are bit-identical.
-    static const bool flatMode = [] {
-      const char *e = std::getenv("NT_DIRAC_FLAT");
-      return e && e[0] == '1';
-    }();
-    if (flatMode) {
-      std::vector<int> legComp(f, 0); // concrete index 0..3 assigned to each free leg
-      for (int flat = 0; flat < total; ++flat) {
-        int r = flat;
-        for (int k = f - 1; k >= 0; --k) {
-          legComp[k] = r % 4;
-          r /= 4;
-        }
-        F.v[flat] = foldChain(legComp);
-      }
-      return F;
-    }
-    // DFS over the free legs IN CHAIN ORDER, carrying the partial two-block product down the tree:
-    // assignments sharing a free-leg prefix share the identical prefix product, which the flat loop
-    // above recomputes 4^(remaining legs) times. The token→mul2 sequence per leaf is exactly
-    // foldChain's, so every tensor entry is bit-identical — only the redundant recomputation is
-    // gone (mul2 count drops from ~4^f·L toward the 4/3·4^f tree sum). Leaf visit order is
-    // ascending flat index: the first free leg in chain order is the most significant digit,
-    // matching both the flat decode above and the `idx = idx*4 + val` read convention. Live memory
-    // is one (m0,m1) pair per recursion level — chain-depth bounded, no cache, no eviction.
+    // DFS over the free legs IN CHAIN ORDER, carrying the partial two-block product down the tree.
+    // The running product is two Weyl blocks (m0,m1) with alternating roles (`antidiag`); the
+    // antidiagonal-factor count is even, so the product is block-diagonal and each leaf's trace is
+    // tr(m0)+tr(m1).
+    //
+    // Assignments sharing a free-leg prefix share the identical prefix product. The obvious
+    // alternative — decode each of the 4^f assignments and re-fold the whole chain from scratch —
+    // recomputes every such prefix 4^(remaining legs) times; it lived here behind an NT_DIRAC_FLAT=1
+    // hatch as a bit-identical A/B control, measured at 3.64 B mul2 calls against the DFS's 522 M on
+    // a production flow. Nothing ever referenced the hatch, so it and the flat fold are gone.
+    //
+    // The token→mul2 sequence per leaf is unchanged by the sharing, so every tensor entry is
+    // bit-identical to the flat fold — only the redundant recomputation is gone (mul2 count drops
+    // from ~4^f·L toward the 4/3·4^f tree sum). Leaf visit order is ascending flat index: the first
+    // free leg in chain order is the most significant digit, matching the `idx = idx*4 + val` read
+    // convention. Live memory is one (m0,m1) pair per recursion level — chain-depth bounded, no
+    // cache, no eviction.
     auto walk = [&](auto &&self, std::size_t i, int flat, const B2 &m0, const B2 &m1, bool started,
                     bool antidiag) -> void {
       if (i == chain.size()) {
-        F.v[static_cast<std::size_t>(flat)] = m0[0] + m0[3] + m1[0] + m1[3];
+        F.entries[static_cast<std::size_t>(flat)] = m0[0] + m0[3] + m1[0] + m1[3];
         return;
       }
       const network::DFac &d = chain[i];
@@ -395,17 +318,17 @@ namespace numtracer::numeric
       }
       if (d.kind == network::DFac::Comm) { // block-diagonal diag(Su,Sl); free legs branch 4-way each
         const bool aFree = !commAslash[i], bFree = !commBslash[i];
-        for (int ma = 0; ma < (aFree ? 4 : 1); ++ma)
-          for (int mb = 0; mb < (bFree ? 4 : 1); ++mb) {
-            const B2 &Pa = aFree ? gP[ma] : cAP[i];
-            const B2 &Qa = aFree ? gQ[ma] : cAQ[i];
-            const B2 &Pb = bFree ? gP[mb] : cBP[i];
-            const B2 &Qb = bFree ? gQ[mb] : cBQ[i];
+        for (int muA = 0; muA < (aFree ? 4 : 1); ++muA)
+          for (int muB = 0; muB < (bFree ? 4 : 1); ++muB) {
+            const B2 &Pa = aFree ? gP[muA] : cAP[i];
+            const B2 &Qa = aFree ? gQ[muA] : cAQ[i];
+            const B2 &Pb = bFree ? gP[muB] : cBP[i];
+            const B2 &Qb = bFree ? gQ[muB] : cBQ[i];
             B2 Su, Sl;
             commBlocks(Pa, Qa, Pb, Qb, Su, Sl);
             int nf = flat;
-            if (aFree) nf = nf * 4 + ma;
-            if (bFree) nf = nf * 4 + mb;
+            if (aFree) nf = nf * 4 + muA;
+            if (bFree) nf = nf * 4 + muB;
             if (!started)
               self(self, i + 1, nf, Su, Sl, true, false);
             else if (antidiag)
@@ -437,7 +360,7 @@ namespace numtracer::numeric
       else
         self(self, i + 1, flat, mul2(m0, sP[i]), mul2(m1, sQ[i]), started, !antidiag);
     };
-    const B2 seed0{}, seed1{}; // pre-start state: empty blocks, exactly foldChain's uninitialised locals
+    const B2 seed0{}, seed1{}; // pre-start state: empty blocks (the fold's `started` flag seeds them)
     walk(walk, 0, 0, seed0, seed1, false, true);
     return F;
   }
@@ -453,52 +376,67 @@ namespace numtracer::numeric
   namespace ndetail
   {
 
-    /// Build the dense factor for one @ref NElem (metric / vector / projector / Levi-Civita).
+    /// @brief Build the dense `4^rank` tensor for one @ref NElem, entry by entry.
+    ///
+    /// One branch per variant; the formula each writes, with `k` = the element's momentum resolved
+    /// through the component table and `at`/`atS` the inverse atoms `1/k²` and `1/|k⃗|²`:
+    ///
+    ///   Metric    δ_{ab}                                     rank 2
+    ///   Vector    k_a                                        rank 1
+    ///   ProjT     δ_{ab} − k_a k_b · at                       rank 2  (transverse)
+    ///   ProjL     k_a k_b · at                                rank 2  (longitudinal)
+    ///   ProjM     δ_{ab}(spatial) − k_a k_b · atS             rank 2  (magnetic; row/col 0 vanish)
+    ///   ProjE     P_T − P_M, written out                      rank 2  (electric)
+    ///   Epsilon   ε_{abcd}                                    rank 4
+    ///
+    /// This is the DENSE form. Callers go through @ref push_elem_factors, which splits an electric
+    /// projector into two rank-1 factors where it can — that is what lets the elimination cut the
+    /// network there — and falls back to this builder for everything else.
     inline Factor elem_factor(int nsym, const NElem &el, const std::vector<std::array<MPoly, 4>> &comp)
     {
       Factor F;
       if (el.kind == NElem::Metric) { // metric δ_{a,b}
         F.ids = {el.a, el.b};
-        F.v.assign(16, MPolyFactory::zero(nsym));
+        F.entries.assign(16, MPolyFactory::zero(nsym));
         for (int i = 0; i < 4; ++i)
-          F.v[i * 4 + i] = MPolyFactory::constant(nsym, Cx{1, 0});
+          F.entries[i * 4 + i] = MPolyFactory::constant(nsym, Cx{1, 0});
       } else if (el.kind == NElem::Vector) { // vector on id a
         F.ids = {el.a};
         auto cc = mom_components(nsym, el.vlc, comp);
-        F.v = {cc[0], cc[1], cc[2], cc[3]};
+        F.entries = {cc[0], cc[1], cc[2], cc[3]};
       } else if (el.kind == NElem::ProjT) { // transverse projector P_T(k)_{a,b} = δ − k_a k_b INV(k)
         F.ids = {el.a, el.b};
-        F.v.assign(16, MPolyFactory::zero(nsym));
+        F.entries.assign(16, MPolyFactory::zero(nsym));
         auto k = mom_components(nsym, el.vlc, comp);
         const MPoly at = MPolyFactory::atom(nsym, el.atom);
         for (int i = 0; i < 4; ++i)
           for (int j = 0; j < 4; ++j) {
             MPoly e = (i == j) ? MPolyFactory::constant(nsym, Cx{1, 0}) : MPolyFactory::zero(nsym);
             e = e - (k[i] * k[j]) * at;
-            F.v[i * 4 + j] = std::move(e);
+            F.entries[i * 4 + j] = std::move(e);
           }
       } else if (el.kind == NElem::ProjL) { // longitudinal projector P_L(k)_{a,b} = k_a k_b INV(k)
         F.ids = {el.a, el.b};
-        F.v.assign(16, MPolyFactory::zero(nsym));
+        F.entries.assign(16, MPolyFactory::zero(nsym));
         auto k = mom_components(nsym, el.vlc, comp);
         const MPoly at = MPolyFactory::atom(nsym, el.atom);
         for (int i = 0; i < 4; ++i)
           for (int j = 0; j < 4; ++j)
-            F.v[i * 4 + j] = (k[i] * k[j]) * at;
+            F.entries[i * 4 + j] = (k[i] * k[j]) * at;
       } else if (el.kind == NElem::ProjM) { // magnetic projector P_M_{i,j}=δ_{ij}−k_i k_j INVS(k) (spatial)
         F.ids = {el.a, el.b};
-        F.v.assign(16, MPolyFactory::zero(nsym));
+        F.entries.assign(16, MPolyFactory::zero(nsym));
         auto k = mom_components(nsym, el.vlc, comp); // spatial part: zero the temporal (slot 0) component
         const MPoly atS = MPolyFactory::atom(nsym, el.atomS);
         for (int i = 0; i < 4; ++i)
           for (int j = 0; j < 4; ++j) {
             MPoly e = (i == j && i > 0) ? MPolyFactory::constant(nsym, Cx{1, 0}) : MPolyFactory::zero(nsym);
             if (i > 0 && j > 0) e = e - (k[i] * k[j]) * atS;
-            F.v[i * 4 + j] = std::move(e);
+            F.entries[i * 4 + j] = std::move(e);
           }
       } else if (el.kind == NElem::ProjE) { // electric projector P_E = P_T − P_M
         F.ids = {el.a, el.b};
-        F.v.assign(16, MPolyFactory::zero(nsym));
+        F.entries.assign(16, MPolyFactory::zero(nsym));
         auto k = mom_components(nsym, el.vlc, comp);
         const MPoly at = MPolyFactory::atom(nsym, el.atom);
         const MPoly atS = MPolyFactory::atom(nsym, el.atomS);
@@ -508,33 +446,17 @@ namespace numtracer::numeric
             full = full - (k[i] * k[j]) * at; // P_T entry
             MPoly mag = (i == j && i > 0) ? MPolyFactory::constant(nsym, Cx{1, 0}) : MPolyFactory::zero(nsym);
             if (i > 0 && j > 0) mag = mag - (k[i] * k[j]) * atS; // P_M entry
-            F.v[i * 4 + j] = full - mag;
+            F.entries[i * 4 + j] = full - mag;
           }
-      } else if (el.kind == NElem::TimeSq || el.kind == NElem::SpatialSq) {
-        // Dense fallback for the self-contracted (a == b) case; the split form lives in
-        // push_elem_factors. Spelled out rather than left to the Levi-Civita `else` below, which
-        // would silently return a rank-4 epsilon for a rank-2 element.
-        F.ids = {el.a, el.b};
-        F.v.assign(16, MPolyFactory::zero(nsym));
-        const auto k = mom_components(nsym, el.vlc, comp);
-        if (el.kind == NElem::TimeSq) {
-          F.v[0] = MPolyFactory::constant(nsym, Cx{1., 0});
-        } else {
-          const MPoly atS = MPolyFactory::atom(nsym, el.atomS);
-          for (int i = 1; i < 4; ++i)
-            for (int j = 1; j < 4; ++j)
-              F.v[static_cast<std::size_t>(i * 4 + j)] =
-                  k[static_cast<std::size_t>(i)] * k[static_cast<std::size_t>(j)] * atS;
-        }
       } else { // Levi-Civita ε_{a,b,c,d}
         F.ids = {el.a, el.b, el.c, el.d};
-        F.v.assign(256, MPolyFactory::zero(nsym));
+        F.entries.assign(256, MPolyFactory::zero(nsym));
         for (int i = 0; i < 4; ++i)
           for (int j = 0; j < 4; ++j)
             for (int p = 0; p < 4; ++p)
               for (int q = 0; q < 4; ++q) {
                 const double s = levi(i, j, p, q);
-                if (s != 0.0) F.v[((i * 4 + j) * 4 + p) * 4 + q] = MPolyFactory::constant(nsym, Cx{s, 0});
+                if (s != 0.0) F.entries[((i * 4 + j) * 4 + p) * 4 + q] = MPolyFactory::constant(nsym, Cx{s, 0});
               }
       }
       return F;
@@ -554,7 +476,7 @@ namespace numtracer::numeric
     /// which is `1 − k_0²/k²`; at (i,j) it gives `k_0² k_i k_j/(k²|k⃗|²)`, which is
     /// `k_i k_j (1/|k⃗|² − 1/k²)`. Exact, not an approximation.
     ///
-    /// WHY IT PAYS. `contract_factors` is greedy min-fill-in variable elimination: its cost is
+    /// WHY IT PAYS. `contract_factors` is greedy min-width variable elimination: its cost is
     /// exponential in the size of the id-union of each factor group. A dense `{a,b}` factor forces
     /// those two indices into a common group forever; two rank-1 factors `{a}` and `{b}` do not, so
     /// the elimination can cut the network there. That is the classic tensor-network separator win,
@@ -564,44 +486,18 @@ namespace numtracer::numeric
     /// `v_0` is `atomDen[el.atomS]`: the SPATIAL denominator |k⃗|², which the caller already holds, so
     /// no `k²` polynomial is needed anywhere (`k² − k_0² = |k⃗|²` is what makes that work).
     ///
-    /// NT_NO_RANK1_PROJE=1 restores the dense form — the A/B control, and the escape hatch if a flow
-    /// ever contracts faster dense.
+    /// The split is unconditional. It used to sit behind an NT_NO_RANK1_PROJE=1 A/B control that
+    /// nothing ever set — `test_rank1_proje` grades the two forms by calling both builders directly,
+    /// precisely so it does not depend on the hatch. The dense builder is still reached, by every
+    /// element the guard below rejects.
     inline void push_elem_factors(std::vector<Factor> &out, int nsym, const NElem &el,
                                   const std::vector<std::array<MPoly, 4>> &comp,
                                   const std::vector<MPoly> &atomDen)
     {
-      static const bool rank1E = [] {
-        const char *e = std::getenv("NT_NO_RANK1_PROJE");
-        return !(e != nullptr && *e != '\0' && std::strcmp(e, "0") != 0);
-      }();
       // atomS must be a real id with a filled denominator; a malformed net falls back to dense
-      // rather than silently building a wrong factor.
-      // The two magnetic pieces (expand_magnetic) are rank-1 by construction and always split; a
-      // self-contracted one (a == b) is a trace and falls through to the dense builder.
-      if ((el.kind == NElem::TimeSq || el.kind == NElem::SpatialSq) && el.a != el.b) {
-        const auto k = mom_components(nsym, el.vlc, comp);
-        Factor A, B;
-        A.ids = {el.a};
-        B.ids = {el.b};
-        A.v.reserve(4);
-        B.v.reserve(4);
-        const bool spatial = (el.kind == NElem::SpatialSq);
-        const MPoly atS = spatial ? MPolyFactory::atom(nsym, el.atomS) : MPolyFactory::zero(nsym);
-        for (int i = 0; i < 4; ++i) {
-          const std::size_t u = static_cast<std::size_t>(i);
-          // TimeSq: u = (1,0,0,0).  SpatialSq: (0, k1, k2, k3), with 1/|k⃗|² on one leg only.
-          MPoly a = spatial ? (i == 0 ? MPolyFactory::zero(nsym) : k[u] * atS)
-                            : (i == 0 ? MPolyFactory::constant(nsym, Cx{1., 0}) : MPolyFactory::zero(nsym));
-          MPoly b = spatial ? (i == 0 ? MPolyFactory::zero(nsym) : k[u])
-                            : (i == 0 ? MPolyFactory::constant(nsym, Cx{1., 0}) : MPolyFactory::zero(nsym));
-          A.v.push_back(std::move(a));
-          B.v.push_back(std::move(b));
-        }
-        out.push_back(std::move(A));
-        out.push_back(std::move(B));
-        return;
-      }
-      const bool canSplit = rank1E && el.kind == NElem::ProjE && el.a != el.b && el.atom >= 0 &&
+      // rather than silently building a wrong factor. A self-contracted P_E (a == b) is a trace,
+      // not a separable pair, so it goes dense too.
+      const bool canSplit = el.kind == NElem::ProjE && el.a != el.b && el.atom >= 0 &&
                             el.atomS >= 0 && static_cast<std::size_t>(el.atomS) < atomDen.size();
       if (!canSplit) {
         out.push_back(elem_factor(nsym, el, comp));
@@ -618,90 +514,14 @@ namespace numtracer::numeric
       Factor A, B;
       A.ids = {el.a};
       B.ids = {el.b};
-      A.v.reserve(4);
-      B.v.reserve(4);
+      A.entries.reserve(4);
+      B.entries.reserve(4);
       for (int i = 0; i < 4; ++i) {
-        A.v.push_back(v[static_cast<std::size_t>(i)] * at * atS);
-        B.v.push_back(v[static_cast<std::size_t>(i)]);
+        A.entries.push_back(v[static_cast<std::size_t>(i)] * at * atS);
+        B.entries.push_back(v[static_cast<std::size_t>(i)]);
       }
       out.push_back(std::move(A));
       out.push_back(std::move(B));
-    }
-
-    /// @brief Rewrite each MAGNETIC projector in one term as three rank-reduced pieces, expanding
-    ///        the term into 3^m terms (m = number of ProjM elements). Opt-in: `NT_RANK1_PROJM=1`.
-    ///
-    ///     P_M = delta - u (x) u - k_s (x) k_s * INVS(k)
-    ///
-    /// (check the corners: at (0,0) it is 1 - 1 - 0 = 0, and P_M has no temporal row; at (i,j) it is
-    /// delta_ij - k_i k_j/|k|^2, which is P_M.) Two of the three pieces are rank-1 and therefore cut
-    /// the network at that line, the same separator win @ref push_elem_factors gets for the electric
-    /// projector; the third is a bare metric, the cheapest two-index factor there is.
-    ///
-    /// NOT `P_M = P_T - P_E`, which is the obvious identity and is NOT AVAILABLE here: `nprojM`
-    /// carries `atom = -1`, i.e. a magnetic line has no `1/k^2` atom at all (only `1/|k|^2`), and
-    /// `P_T` needs one. Manufacturing it would mean allocating a new atom id and extending the
-    /// `atomDen` table, which is built upstream and shared across every trace.
-    ///
-    /// OFF BY DEFAULT: **MEASURED A LOSS** on SP_EM ZA4 (2026-08-11), and by a wide margin.
-    ///
-    ///   |                          | emitted SSA | generation |
-    ///   |--------------------------|------------:|-----------:|
-    ///   | rank-1 electric only     |      60,471 |      5.2 s |
-    ///   | + this (electric+magnet) |      98,295 |     43.8 s |
-    ///
-    /// 1.63x MORE emitted code and 8.5x slower to generate. The fan-out arithmetic predicts it: the
-    /// magnetic lines are distributed {0:102, 1:168, 2:219, 3:129, 4:33, 5:3} over the nets, so 3^m
-    /// turns 654 contractions into 9462 -- 14.5x -- and the per-term cut does not come close to
-    /// paying that back. Same binary, hatch flipped, so nothing else differed.
-    ///
-    /// Kept rather than deleted because the fan-out is per-net and this flow is a bad case: 3^m is
-    /// only 3x on the 168 nets carrying a single magnetic line, and a flow dominated by those could
-    /// still win. Re-measure before enabling anywhere; do not assume it transfers.
-    ///
-    /// Correctness is NOT the reason it is off. The identity is verified exactly in
-    /// `test_rank1_proje` (`tr P_M = 2` and the P_M.P_T chain both agree to 0.00e+00), and on the
-    /// full ZA4 kernel the two forms agree to ~1e-9 over 11000 sampled trace values -- the same
-    /// generator-side coefficient rounding that separates any two factorisations of this size.
-    ///
-    /// MUST run AFTER @ref fuse_projectors, which needs `P_M` intact for `P_E . P_M -> 0`,
-    /// `P_M . P_M -> P_M` and `tr P_M = 2`. Expanding first throws those cancellations away.
-    inline void expand_magnetic(const std::vector<NElem> &elems, Cx co,
-                                std::vector<std::pair<std::vector<NElem>, Cx>> &out)
-    {
-      static const bool on = [] {
-        const char *e = std::getenv("NT_RANK1_PROJM");
-        return e != nullptr && *e != '\0' && std::strcmp(e, "0") != 0;
-      }();
-      std::vector<std::size_t> mag;
-      if (on)
-        for (std::size_t i = 0; i < elems.size(); ++i)
-          if (elems[i].kind == NElem::ProjM && elems[i].a != elems[i].b) mag.push_back(i);
-      if (mag.empty()) { // hatch off, or no splittable magnetic line
-        out.emplace_back(elems, co);
-        return;
-      }
-      const std::size_t m = mag.size();
-      std::size_t n = 1;
-      for (std::size_t b = 0; b < m; ++b) n *= 3;
-      out.reserve(out.size() + n);
-      for (std::size_t code = 0; code < n; ++code) {
-        std::vector<NElem> e = elems;
-        Cx c = co;
-        std::size_t q = code;
-        for (std::size_t b = 0; b < m; ++b) {
-          NElem &el = e[mag[b]];
-          const std::size_t pick = q % 3;
-          q /= 3;
-          if (pick == 0) {
-            el = nmet(el.a, el.b); // +delta
-          } else {
-            el.kind = (pick == 1) ? NElem::TimeSq : NElem::SpatialSq; // -u(x)u , -k_s(x)k_s*INVS
-            c = Cx{-c.re, -c.im};
-          }
-        }
-        out.emplace_back(std::move(e), c);
-      }
     }
 
     /// First-seen-ordered union of all Lorentz ids carried by a factor group (duplicates dropped). The
@@ -756,7 +576,7 @@ namespace numtracer::numeric
       int outTotal = 1;
       for (int k = 0; k < outRank; ++k)
         outTotal *= 4;
-      out.v.assign(outTotal, MPolyFactory::zero(nsym));
+      out.entries.assign(outTotal, MPolyFactory::zero(nsym));
       // map output position -> union position (output is union with elimPos removed).
       std::vector<int> outToUnion;
       for (int p = 0; p < unionRank; ++p)
@@ -787,7 +607,7 @@ namespace numtracer::numeric
             int idx = 0;
             for (int p : slotPos[fIdx])
               idx = idx * 4 + idxVal[p];
-            const MPoly &e = group[fIdx].v[idx];
+            const MPoly &e = group[fIdx].entries[idx];
             if (e.empty()) {
               zero = true;
               break;
@@ -813,7 +633,7 @@ namespace numtracer::numeric
           // very assignment whose RHS moves from it, so nothing reads the moved-from value.
           acc = divThroughMonomialAtoms(reduce_units(std::move(acc), units), atomDen);
         }
-        out.v[outFlat] = std::move(acc);
+        out.entries[outFlat] = std::move(acc);
       }
       return out;
     }
@@ -859,9 +679,29 @@ namespace numtracer::numeric
         }
     }
 
+    /// @brief Size of the union of the Lorentz ids carried by every factor incident to @p cand.
+    ///
+    /// This is the min-width score: eliminating `cand` merges exactly those factors into one
+    /// intermediate, whose rank is this union's size. Linear scans (not a set) on purpose — a factor
+    /// carries a handful of ids and the union is bounded by the network's treewidth, so the constant
+    /// factor of a hash set costs more than it saves.
+    inline std::size_t incident_union_size(const std::vector<Factor> &facs, int cand)
+    {
+      std::vector<int> unionIds;
+      for (const Factor &F : facs) {
+        const bool incident = std::find(F.ids.begin(), F.ids.end(), cand) != F.ids.end();
+        if (!incident) continue;
+        for (int id : F.ids)
+          if (std::find(unionIds.begin(), unionIds.end(), id) == unionIds.end()) unionIds.push_back(id);
+      }
+      return unionIds.size();
+    }
+
     /// Contract a set of dense factors over their shared Lorentz ids into one scalar MPoly, by GREEDY
     /// VARIABLE ELIMINATION: repeatedly pick the id whose incident factors have the smallest combined
-    /// id-set (min-degree heuristic), merge those factors, and sum that id out. This keeps every
+    /// id-set (the MIN-WIDTH heuristic — the score is the size of the incident-id UNION, i.e. the rank
+    /// of the intermediate the elimination would create, NOT the number of incident factors, which is
+    /// what min-degree would count), merge those factors, and sum that id out. This keeps every
     /// intermediate tensor treewidth-bounded — a single global 4^G sum (G = all ids) is exponential and
     /// blows up for the quark triangle (G≈14); elimination stays at 4^(few) per step.
     ///
@@ -871,10 +711,10 @@ namespace numtracer::numeric
                                   const std::vector<std::vector<int>> &units = {})
     {
       assert_no_open_ids(facs);
-      // Algorithm (greedy min-fill-in elimination), repeated until no shared ids remain:
+      // Algorithm (greedy min-width elimination), repeated until no shared ids remain:
       //   1. collect the distinct live Lorentz ids;
-      //   2. score each id by the size of the combined id-set of its incident factors (its fill-in =
-      //      the rank of the intermediate that eliminating it would create) and pick the smallest;
+      //   2. score each id by the size of the combined id-set of its incident factors (the rank of
+      //      the intermediate that eliminating it would create) and pick the smallest;
       //   3. partition factors into those touching that id (`group`) and the rest, merge+sum the group
       //      over that id via `eliminate`, push the result back, repeat;
       //   4. once nothing is shared, the leftovers are scalars — multiply their single entries.
@@ -895,30 +735,12 @@ namespace numtracer::numeric
               if (!seen) ids.push_back(id);
             }
           if (ids.empty()) break;
-          // choose the id with the smallest incident-factor union (min fill-in).
+          // choose the id with the smallest incident-factor union (min width).
           std::size_t bestUnionSize = SIZE_MAX;
           for (int cand : ids) {
-            std::vector<int> unionIds;
-            for (const Factor &F : facs) {
-              bool incident = false;
-              for (int id : F.ids)
-                if (id == cand) {
-                  incident = true;
-                  break;
-                }
-              if (!incident) continue;
-              for (int id : F.ids) {
-                bool seen = false;
-                for (int u : unionIds)
-                  if (u == id) {
-                    seen = true;
-                    break;
-                  }
-                if (!seen) unionIds.push_back(id);
-              }
-            }
-            if (unionIds.size() < bestUnionSize) {
-              bestUnionSize = unionIds.size();
+            const std::size_t width = incident_union_size(facs, cand);
+            if (width < bestUnionSize) {
+              bestUnionSize = width;
               bestId = cand;
             }
           }
@@ -944,16 +766,16 @@ namespace numtracer::numeric
       MPoly prod = MPolyFactory::zero(nsym);
       bool seeded = false;
       for (const Factor &F : facs) {
-        if (F.v.empty()) {
+        if (F.entries.empty()) {
           prod = MPolyFactory::zero(nsym);
           seeded = true;
           break;
         }
         if (!seeded) {
-          prod = MPolyFactory::scaled(nsym, F.v[0], Cx{1, 0});
+          prod = MPolyFactory::scaled(nsym, F.entries[0], Cx{1, 0});
           seeded = true;
         } else
-          prod = prod * F.v[0];
+          prod = prod * F.entries[0];
       }
       if (!seeded) prod = MPolyFactory::constant(nsym, Cx{1, 0}); // empty product = 1, as before
       return prod;
@@ -961,7 +783,7 @@ namespace numtracer::numeric
 
     /// @brief Reduce a Dirac-trace @ref Factor to a scalar @ref MPoly when there is NO surrounding
     ///        Lorentz net. Three cases: (a) no free legs → the scalar entry; (b) the trace is
-    ///        structurally zero (an odd γ-count chain — `numeric_dirac` zeroed every entry) → 0; (c)
+    ///        structurally zero (odd antidiagonal count — `numeric_dirac` zeroed every entry) → 0; (c)
     ///        every free-leg id is PAIRED (a γ^μ…γ^μ self-contraction, e.g. a dressed numerator whose
     ///        IDENT/SLASH choice left two free legs on the same id) → sum those ids via
     ///        @ref contract_factors. An UNPAIRED free leg with no Lorentz partner is a genuinely
@@ -971,14 +793,14 @@ namespace numtracer::numeric
     inline MPoly close_free_legs(int nsym, const Factor &T, const std::vector<MPoly> &atomDen = {},
                                  const std::vector<std::vector<int>> &units = {})
     {
-      if (T.ids.empty()) return T.v.empty() ? MPolyFactory::constant(nsym, Cx{1, 0}) : T.v[0];
+      if (T.ids.empty()) return T.entries.empty() ? MPolyFactory::constant(nsym, Cx{1, 0}) : T.entries[0];
       bool allZero = true;
-      for (const MPoly &v : T.v)
+      for (const MPoly &v : T.entries)
         if (!v.empty()) {
           allZero = false;
           break;
         }
-      if (allZero) return MPolyFactory::zero(nsym); // odd γ-count: trace ≡ 0
+      if (allZero) return MPolyFactory::zero(nsym); // odd antidiagonal count: trace ≡ 0
       std::vector<int> s = T.ids;
       std::sort(s.begin(), s.end());
       bool paired = true;
@@ -1194,24 +1016,18 @@ namespace numtracer::numeric
       Cx co = nt.coeff;
       ndetail::fuse_projectors(elems, co);
       if (co.re == 0 && co.im == 0) continue;
-      // One entry unless NT_RANK1_PROJM expanded the magnetic lines; the loop body below is what
-      // the single-term path always was.
-      std::vector<std::pair<std::vector<NElem>, Cx>> pieces;
-      ndetail::expand_magnetic(elems, co, pieces);
-      for (auto &[pel, pco] : pieces) {
-        std::vector<ndetail::Factor> facs = loops;
-        facs.reserve(loops.size() + pel.size());
-        for (const NElem &el : pel)
-          ndetail::push_elem_factors(facs, nsym, el, comp, atomDen);
-        // contract_factors consumes its `facs` argument by value — move so the per-term
-        // factor list is built once, not copied again into the call.
-        MPoly term = ndetail::contract_factors(nsym, std::move(facs));
-        // `scaled`, not `* constant(co)`: same coefficient product (Cx multiply is commutative
-        // bit-for-bit), same monomials in the same order, but without the |term|-entry scratch and
-        // the `from_scratch` sort that multiplying by a one-term polynomial otherwise pays.
-        term = MPolyFactory::scaled(nsym, term, pco);
-        result = std::move(result) + std::move(term);
-      }
+      std::vector<ndetail::Factor> facs = loops;
+      facs.reserve(loops.size() + elems.size());
+      for (const NElem &el : elems)
+        ndetail::push_elem_factors(facs, nsym, el, comp, atomDen);
+      // contract_factors consumes its `facs` argument by value — move so the per-term
+      // factor list is built once, not copied again into the call.
+      MPoly term = ndetail::contract_factors(nsym, std::move(facs));
+      // `scaled`, not `* constant(co)`: same coefficient product (Cx multiply is commutative
+      // bit-for-bit), same monomials in the same order, but without the |term|-entry scratch and
+      // the `from_scratch` sort that multiplying by a one-term polynomial otherwise pays.
+      term = MPolyFactory::scaled(nsym, term, co);
+      result = std::move(result) + std::move(term);
     }
     if (lorentz.empty())
       result = ndetail::close_loops(nsym, loops, atomDen);
@@ -1272,10 +1088,7 @@ namespace numtracer::numeric
   /// disables it, which is how it was A/B'd. See that function for the measurement.
   inline bool polydiv_enabled()
   {
-    static const bool on = [] {
-      const char *e = std::getenv("NT_GEN_NO_POLYDIV");
-      return !(e && e[0] == '1');
-    }();
+    static const bool on = !env_flag("NT_GEN_NO_POLYDIV");
     return on;
   }
 
@@ -1321,9 +1134,7 @@ namespace numtracer::numeric
     for (const network::PTerm &pt : lor) {
       // build the numeric element list, then fold same-momentum projector chains before expansion.
       Cx co = pt.coeff;
-      // `pieces` holds one entry unless NT_RANK1_PROJM split the magnetic lines; with the hatch off
-      // this is the single-term path verbatim, one vector allocation heavier.
-      std::vector<std::pair<std::vector<NElem>, Cx>> pieces;
+      std::vector<ndetail::Factor> facs;
       {
         NT_STAT_TIMER(t_elem);
         std::vector<NElem> elems;
@@ -1332,29 +1143,22 @@ namespace numtracer::numeric
           elems.push_back(elem_to_nelem(el));
         ndetail::fuse_projectors(elems, co);
         if (co.re == 0 && co.im == 0) continue;
-        ndetail::expand_magnetic(elems, co, pieces);
+        facs = loops;
+        facs.reserve(loops.size() + elems.size());
+        for (const NElem &el : elems)
+          ndetail::push_elem_factors(facs, nsym, el, comp, aden);
       }
-      for (auto &[pel, pco] : pieces) {
-        std::vector<ndetail::Factor> facs;
-        {
-          NT_STAT_TIMER(t_elem);
-          facs = loops;
-          facs.reserve(loops.size() + pel.size());
-          for (const NElem &el : pel)
-            ndetail::push_elem_factors(facs, nsym, el, comp, aden);
-        }
-        // move the per-term factor list into contract_factors (consumed by value) — avoids
-        // a redundant deep copy of every Factor's MPoly entries.
-        MPoly term;
-        {
-          NT_STAT_TIMER(t_contract);
-          term = ndetail::contract_factors(nsym, std::move(facs), aden, units);
-        }
-        // `scaled` instead of `* constant(co)`: bit-identical (see MPolyFactory::scaled) without the
-        // scratch + sort. Once per Lorentz PTerm per trace, on the FULLY CONTRACTED term.
-        term = MPolyFactory::scaled(nsym, term, pco);
-        result = std::move(result) + std::move(term);
+      // move the per-term factor list into contract_factors (consumed by value) — avoids
+      // a redundant deep copy of every Factor's MPoly entries.
+      MPoly term;
+      {
+        NT_STAT_TIMER(t_contract);
+        term = ndetail::contract_factors(nsym, std::move(facs), aden, units);
       }
+      // `scaled` instead of `* constant(co)`: bit-identical (see MPolyFactory::scaled) without the
+      // scratch + sort. Once per Lorentz PTerm per trace, on the FULLY CONTRACTED term.
+      term = MPolyFactory::scaled(nsym, term, co);
+      result = std::move(result) + std::move(term);
     }
     if (lor.empty())
       result = ndetail::close_loops(nsym, loops, aden, units);
@@ -1645,10 +1449,10 @@ namespace numtracer::numeric
     // are built by the same deterministic Σ_μ comp[μ]² over the same component table, so equal
     // momenta give bit-equal polynomials and any difference means genuinely different momenta.
     const auto sameDen = [](const MPoly &x, const MPoly &y) {
-      if (x.t.size() != y.t.size()) return false;
-      for (std::size_t i = 0; i < x.t.size(); ++i)
-        if (!(x.t[i].first == y.t[i].first) || x.t[i].second.re != y.t[i].second.re ||
-            x.t[i].second.im != y.t[i].second.im)
+      if (x.terms.size() != y.terms.size()) return false;
+      for (std::size_t i = 0; i < x.terms.size(); ++i)
+        if (!(x.terms[i].first == y.terms[i].first) || x.terms[i].second.re != y.terms[i].second.re ||
+            x.terms[i].second.im != y.terms[i].second.im)
           return false;
       return true;
     };
@@ -1718,6 +1522,16 @@ namespace numtracer::numeric
   /// 14 captures essentially the whole speed win at no accuracy cost; 12 buys a further 2% for three
   /// orders of magnitude of accuracy, which is a bad trade. Override with NT_GEN_SNAP_DIGITS
   /// (0 = disable). Re-measure this table before changing the default.
+  /// @brief `NT_GEN_POLYSTATS` verbosity: 0 off, 1 the summary counts, 2 the per-monomial key dump.
+  ///
+  /// Level 2 is a DIFFERENT report, not a superset of level 1: the dump is meant to be piped through
+  /// `sort -u` to count distinct monomials across traces, and the summary lines would corrupt that.
+  inline int polystats_level()
+  {
+    static const int lvl = static_cast<int>(env_int("NT_GEN_POLYSTATS", 0));
+    return lvl;
+  }
+
   inline constexpr int kCoeffSnapDigits = 14;
 
   /// @brief Round @p v to @ref kCoeffSnapDigits significant decimal digits.
@@ -1738,11 +1552,11 @@ namespace numtracer::numeric
   inline double snap_coeff(double v)
   {
     static const int digits = [] {
-      if (const char *e = std::getenv("NT_GEN_SNAP_DIGITS")) {
-        const int d = std::atoi(e);
-        if (d >= 0 && d <= 17) return d;
-      }
-      return kCoeffSnapDigits;
+      // 0 is a meaningful value here (snapping off), so "unset" is the empty/absent case, not 0;
+      // a value outside [0,17] is a caller error and falls back to the default rather than
+      // silently truncating to nothing.
+      const long d = env_int("NT_GEN_SNAP_DIGITS", kCoeffSnapDigits);
+      return (d >= 0 && d <= 17) ? static_cast<int>(d) : kCoeffSnapDigits;
     }();
     if (!std::isfinite(v))
       NT_THROW(std::runtime_error,
@@ -1817,7 +1631,7 @@ namespace numtracer::numeric
   /// holds other traces (@ref to_genprog_fused / `CrossTraceCSE`). `to_genprog` is now this function
   /// plus a fresh builder, so single-trace output is byte-identical to before the split.
   NUMTRACER_FUNC std::pair<int, int> lower_into(const MPoly &p, network::GlobalEnv &g,
-                                                network::rdetail::RBuilder &w, bool realOnly)
+                                                network::rdetail::RBuilder &builder, bool realOnly)
   {
     // Prune numerically-zero monomials. A NUMERIC frame fixes the external momenta to concrete
     // components, so exact (analytic) cancellations in the trace surface as tiny residual coefficients
@@ -1826,13 +1640,13 @@ namespace numtracer::numeric
     // arithmetic; on the dense 1/4/7 trace ~half the monomials are such noise. Drop |c| below a RELATIVE
     // tolerance vs the largest coefficient (a clean ~10-order gap separates noise from real terms).
     double maxabs = 0.0;
-    for (const auto &[m, c] : p.t)
+    for (const auto &[m, c] : p.terms)
       maxabs = std::max(maxabs, std::max(std::fabs(c.re), std::fabs(c.im)));
     const double tol = kNoisePruneRelTol * maxabs;
     auto keep = [&](const Cx &c) { return std::max(std::fabs(c.re), std::fabs(c.im)) >= tol; };
     bool cplx = false;
     if (!realOnly)
-      for (const auto &[m, c] : p.t)
+      for (const auto &[m, c] : p.terms)
         if (keep(c) && (c.im > tol || c.im < -tol)) {
           cplx = true;
           break;
@@ -1845,9 +1659,9 @@ namespace numtracer::numeric
     // pass, so the emitted kernel is byte-identical.
     std::vector<network::LMono> monosRe, monosIm;
     {
-      monosRe.reserve(p.t.size());
-      if (cplx) monosIm.reserve(p.t.size());
-      for (const auto &[m, c] : p.t) {
+      monosRe.reserve(p.terms.size());
+      if (cplx) monosIm.reserve(p.terms.size());
+      for (const auto &[m, c] : p.terms) {
         if (!keep(c)) continue;
         std::vector<std::pair<int, int>> vp;
         for (int k = 0; k < p.nsym; ++k)
@@ -1878,17 +1692,17 @@ namespace numtracer::numeric
       // is canonical (independent of any factorisation strategy), so comparing it against the
       // emitted multiply count says whether a large op count comes from the ALGEBRA (many monomials)
       // or from weak LOWERING (few monomials, many ops).
-      if (const char *e = std::getenv("NT_GEN_POLYSTATS")) {
-        if (e[0] == '1')
-          std::fprintf(stderr, "[polystats] mpoly terms=%zu kept=%zu nsym=%d\n", p.t.size(),
-                       monos.size(), p.nsym);
+      if (polystats_level() == 1)
+        std::fprintf(stderr, "[polystats] mpoly terms=%zu kept=%zu nsym=%d\n", p.terms.size(),
+                     monos.size(), p.nsym);
+      {
         // NT_GEN_POLYSTATS=2: additionally dump each monomial's KEY (variable powers + inv/dressing
         // atoms). Piping through `sort -u` then answers: how many of the monomials summed over all
         // traces are actually DISTINCT? FormTracer sums every diagram into ONE polynomial before
         // expanding, so identical monomials from different diagrams collect; NumTracer keeps one
         // polynomial per trace, so they cannot. That is term COLLECTION, not CSE -- the compiler
         // can never do it (it would be a floating-point reassociation across function boundaries).
-        if (e[0] == '2')
+        if (polystats_level() == 2)
           for (const auto &lm : monos) {
             std::string key;
             for (const auto &[id, pw] : lm.vp)
@@ -1897,16 +1711,16 @@ namespace numtracer::numeric
           }
       }
     }
-    const int reRoot = network::gdetail::best_into(std::move(monosRe), w);
+    const int reRoot = network::gdetail::best_into(std::move(monosRe), builder);
     if (!cplx) return {reRoot, network::kRealProgram};
-    return {reRoot, network::gdetail::best_into(std::move(monosIm), w)};
+    return {reRoot, network::gdetail::best_into(std::move(monosIm), builder)};
   }
 
   NUMTRACER_FUNC network::GenProg to_genprog(const MPoly &p, network::GlobalEnv &g, bool realOnly)
   {
-    network::rdetail::RBuilder w;
-    const auto [reRoot, imRoot] = lower_into(p, g, w, realOnly);
-    network::GenProg gp{std::move(w.ins), reRoot};
+    network::rdetail::RBuilder builder;
+    const auto [reRoot, imRoot] = lower_into(p, g, builder, realOnly);
+    network::GenProg gp{std::move(builder.ins), reRoot};
     gp.rootIm = imRoot;
     return gp;
   }
@@ -1920,7 +1734,7 @@ namespace numtracer::numeric
   ///        empty dressing monomial reduces to exactly the @ref MPoly path (no `dress` leaves).
   /// @brief @ref DPoly counterpart of the @ref MPoly `lower_into` — lower into an existing builder.
   NUMTRACER_FUNC std::pair<int, int> lower_into(const DPoly &p, network::GlobalEnv &g,
-                                                network::rdetail::RBuilder &w, bool realOnly)
+                                                network::rdetail::RBuilder &builder, bool realOnly)
   {
     // PER-DRESSING-CHANNEL noise prune (not one global tolerance). A DPoly is Σ_d (dressing_d)·(kinematic_d);
     // each channel `d` is reweighted at runtime by its dressing product, which can swing by many orders across
@@ -1932,16 +1746,16 @@ namespace numtracer::numeric
     // when all channels share a scale.
     auto dmonoTol = [](const MPoly &mp) {
       double maxabs = 0.0;
-      for (const auto &[m, c] : mp.t)
+      for (const auto &[m, c] : mp.terms)
         maxabs = std::max(maxabs, std::max(std::fabs(c.re), std::fabs(c.im)));
       return kNoisePruneRelTol * maxabs;
     };
     auto keepAt = [](const Cx &c, double tol) { return std::max(std::fabs(c.re), std::fabs(c.im)) >= tol; };
     bool cplx = false;
     if (!realOnly)
-      for (const auto &[d, mp] : p.t) {
+      for (const auto &[d, mp] : p.terms) {
         const double tol = dmonoTol(mp);
-        for (const auto &[m, c] : mp.t)
+        for (const auto &[m, c] : mp.terms)
           if (keepAt(c, tol) && (c.im > tol || c.im < -tol)) {
             cplx = true;
             break;
@@ -1954,7 +1768,7 @@ namespace numtracer::numeric
     // the old two-pass shape exactly, so the emitted kernel is byte-identical.
     std::vector<network::LMono> monosRe, monosIm;
     {
-      for (const auto &[d, mp] : p.t) {
+      for (const auto &[d, mp] : p.terms) {
         const double tol = dmonoTol(mp);
         // the dressing monomial's atoms become kind-2 `dress` env leaves shared by every monomial of mp
         std::vector<std::pair<int, int>> drvp;
@@ -1965,7 +1779,7 @@ namespace numtracer::numeric
           drvp.push_back({g.dr_id(d[i]), j - i});
           i = j;
         }
-        for (const auto &[m, c] : mp.t) {
+        for (const auto &[m, c] : mp.terms) {
           if (!keepAt(c, tol)) continue;
           std::vector<std::pair<int, int>> vp = drvp;
           for (int k = 0; k < mp.nsym; ++k)
@@ -1992,9 +1806,9 @@ namespace numtracer::numeric
       }
       // see the MPoly overload: monomial count is the optimizer-independent baseline against which
       // the emitted instruction count is judged.
-      if (const char *e = std::getenv("NT_GEN_POLYSTATS")) {
-        if (e[0] == '1') std::fprintf(stderr, "[polystats] dpoly monos=%zu\n", monosRe.size());
-        if (e[0] == '2')
+      {
+        if (polystats_level() == 1) std::fprintf(stderr, "[polystats] dpoly monos=%zu\n", monosRe.size());
+        if (polystats_level() == 2)
           for (const auto &lm : monosRe) {
             std::string key;
             for (const auto &[id, pw] : lm.vp)
@@ -2003,23 +1817,21 @@ namespace numtracer::numeric
           }
       }
     }
-    const int reRoot = network::gdetail::best_into(std::move(monosRe), w);
+    const int reRoot = network::gdetail::best_into(std::move(monosRe), builder);
     if (!cplx) {
-      if (const char *e = std::getenv("NT_GEN_POLYSTATS"))
-        if (e[0] == '1') std::fprintf(stderr, "[polystats] ssa instrs=%zu\n", w.ins.size());
+      if (polystats_level() == 1) std::fprintf(stderr, "[polystats] ssa instrs=%zu\n", builder.ins.size());
       return {reRoot, network::kRealProgram};
     }
-    const int imRoot = network::gdetail::best_into(std::move(monosIm), w);
-    if (const char *e = std::getenv("NT_GEN_POLYSTATS"))
-      if (e[0] == '1') std::fprintf(stderr, "[polystats] ssa instrs=%zu (re+im)\n", w.ins.size());
+    const int imRoot = network::gdetail::best_into(std::move(monosIm), builder);
+    if (polystats_level() == 1) std::fprintf(stderr, "[polystats] ssa instrs=%zu (re+im)\n", builder.ins.size());
     return {reRoot, imRoot};
   }
 
   NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly)
   {
-    network::rdetail::RBuilder w;
-    const auto [reRoot, imRoot] = lower_into(p, g, w, realOnly);
-    network::GenProg gp{std::move(w.ins), reRoot};
+    network::rdetail::RBuilder builder;
+    const auto [reRoot, imRoot] = lower_into(p, g, builder, realOnly);
+    network::GenProg gp{std::move(builder.ins), reRoot};
     gp.rootIm = imRoot;
     return gp;
   }
@@ -2035,7 +1847,7 @@ namespace numtracer::numeric
   /// nowhere near attainable — do not quote it as the expected speedup.
   ///
   /// NOTE `network::gdetail::best_into` costs its candidate Horner orderings on scratch builders that
-  /// start EMPTY, so it cannot see CSE hits against the already-populated `w`: trace k's ordering is
+  /// start EMPTY, so it cannot see CSE hits against the already-populated `builder`: trace k's ordering is
   /// chosen as if traces 0..k-1 did not exist. That caps the achievable sharing (mostly moot — the
   /// sweep collapses to a single ordering above 2000 monomials).
   /// Traces per fused program. 0 (the default) = fuse everything into one. `NT_GEN_CC_CHUNK` overrides.
@@ -2048,11 +1860,8 @@ namespace numtracer::numeric
   inline int cc_chunk_size()
   {
     static const int n = [] {
-      if (const char *e = std::getenv("NT_GEN_CC_CHUNK")) {
-        const int v = std::atoi(e);
-        if (v > 0) return v;
-      }
-      return 0;
+      const long v = env_int("NT_GEN_CC_CHUNK", 0);
+      return v > 0 ? static_cast<int>(v) : 0; // 0 = fuse every trace into one program
     }();
     return n;
   }
@@ -2096,9 +1905,8 @@ namespace numtracer::numeric
   std::vector<network::FusedProg> FusedStream::finish()
   {
     if (!fp_.root.empty()) flush_();
-    if (const char *e = std::getenv("NT_GEN_POLYSTATS"))
-      if (e[0] == '1')
-        std::fprintf(stderr, "[polystats] FUSED ssa instrs=%zu over %zu traces in %zu chunk(s)\n", total_,
+    if (polystats_level() == 1)
+      std::fprintf(stderr, "[polystats] FUSED ssa instrs=%zu over %zu traces in %zu chunk(s)\n", total_,
                      n_, out_.size());
     return std::move(out_);
   }

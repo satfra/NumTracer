@@ -197,6 +197,18 @@ each distinct trace; phase B folds each net and lowers it to straight-line SSA).
 a few front-end steps, are steered by environment variables rather than options, because they are
 resource dials rather than semantics — set them around one flow, not globally.
 
+**How a boolean is read.** ONE rule, everywhere, on both sides of the pipeline: a flag is ON when
+the variable is **set, non-empty, and not the single character `0`**. `FOO=1`, `FOO=true`, `FOO=on`
+and `FOO=yes` all enable; `FOO=0`, `FOO=` and unset all disable. C++ reads it through
+`env_flag` (`core/envvar.hpp`), Wolfram through `ntEnvFlag` (`mathematica/DSL.m`). This is worth
+stating because three other spellings used to coexist, under two of which `FOO=0` turned the flag
+**on** — which is how `NT_NO_LABEL_CHECK=0` once disabled a correctness guard. Numeric knobs are
+different: for them `0` is a value, so *empty or absent* is what means "unset".
+
+**When to set them.** The Wolfram-side flags are read lazily, so `SetEnvironment[...]` works from a
+`.wls` that has already loaded the package. (They used to latch at load time, which made the
+recipe below silently ineffective.)
+
 | variable | affects | default | effect |
 |---|---|---|---|
 | `NT_GEN_MAXW` | phase A | hardware concurrency | Cap phase-A workers. Peak RSS is ~`W` × the per-contraction working set, so this is the hard RAM ceiling for the contraction. Only ever *lowers* the count. |
@@ -213,3 +225,42 @@ resource dials rather than semantics — set them around one flow, not globally.
 | `NT_GEN_NOINLINE_TRACES` | emission | off | Force out-of-line for every trace function, host and device — the nvcc compile-cost lever. |
 | `NT_GEN_PROFILE` | both | off | Per-phase timing/RSS diagnostics from the generator binary. `=2` adds the per-wave RSS trace. Note it must be run against the compiled `gen_<name>` binary directly — the output is lost through `wolframscript`'s `Run[]`. |
 | `NT_GEN_VERBOSE` | front end | off | Enable the `[prof]`/`[cse]`/`[time]` Wolfram-side diagnostics (`ntLog`). `tests/gen/regen_check.sh` sets it because its density guard greps the `[cse]` line. |
+| `NT_NO_SIGN_CANON` | front end | canon on | Stop ±q sharing one env base/inverse slot. A/B control; `gen_lambda3d_small_numeric.wls` builds its graded control kernel with it. |
+| `NT_NO_UNIT_GROUPS` | front end | on where the frame qualifies | Force the general `polyFrameSpec` path instead of the unit-loop rewrite (measured 70× on `lambda3d`). Same fixture, same purpose. |
+| `NT_NO_SIGMA_FOLD` | front end | fold on | Distribute a recognised γ-commutator into two Dirac traces instead of folding it to one `ntSigma` token. The baseline for measuring the sub-term reduction. |
+| `NT_NO_INTERP_SHARE` | emission | share on | Disable interpolator index sharing (`"ShareInterpolatorIndex"`). A/B control; results are bit-identical either way. |
+| `NT_GEN_NO_KHOIST` | emission | hoist on | Disable launch-constant dressing-lookup hoisting (`"HoistLoopConstLookups"`). A/B control — **not** bit-identical (host libm vs device libdevice, last ulp). |
+| `NT_GEN_HORNER_ORDERS` | lowering | 8, auto-reduced by size | Force N trial Horner orderings instead of the size-scaled default (3 above 500 monomials, 1 above 2000). |
+| `NT_GEN_SNAP_DIGITS` | lowering | 14 | Decimal digits emitted coefficients are snapped to. `0` disables snapping; outside `[0,17]` falls back to the default. |
+| `NT_GEN_POLYSTATS` | lowering | off | `=1` monomial/SSA counts to stderr; `=2` dumps every monomial key instead (pipe through `sort -u` to count distinct monomials across traces). |
+| `NT_GEN_DEVICE` | emission | sniffed from the decorator | Declare the emitted kernel DEVICE code, which is what enables the size-gated `__noinline__`. Set by `Codegen.m` online and by the manifest offline; the decorator sniff is a back-compat fallback that no production flow reaches. |
+
+### Deployment configuration
+
+Not resource dials — these say *where things are* and *how generation is driven*. They were
+undocumented for a long time, which is the only reason they are listed separately.
+
+| variable | default | effect |
+|---|---|---|
+| `NT_GEN_CXX` | a `CCompilerDriver`-known clang++, else g++ | Compiler for the generator TUs. The only override. |
+| `NT_GEN_LIB` | searched | Full path to a specific `libNumTracer.a`. |
+| `NT_ALLOW_STALE_LIB` | guard on | Proceed even when that archive is OLDER than the headers it will compile against. The guard exists because the mismatch is an ODR/ABI one that silently produces wrong traces while leaving `kernel.hh` byte-identical; overriding it is almost never right. |
+| `NUMTRACER_INCLUDE_DIR` | in-tree, then the installed record, then `~/.local/share/NumTracer/include` | Header root. The only name here without the `NT_` prefix. |
+| `NT_OFFLINE` | the `"Offline"` option | Tri-state override: set forces offline; `0`/`false`/`no`/`off` forces **online**, overriding `"Offline" -> True`. |
+| `NT_GEN_MAIN_OPT` | `-O1` | Optimisation level for the generator's main TU. `-O0` is a large win on small flows and a large loss on dense ones. |
+| `NT_GEN_JOBS` | `max(2, min(24, cores, freeGB/1.5))` | Pin the parallel-compile job count, bypassing both the core and the memory bound. |
+| `NT_FUNKIT_BACKEND` | FunKit's own choice | `Mathematica` or `Cpp`; pins FunKit's backend for bisecting against frozen oracles (`tests/backend_pin.m`). |
+| `NT_KEEP_TRACE_CACHE` | cache wiped | Reuse the FORM trace cache instead of deleting it (the `*_form.wls` oracles; a cold run is ~100 min). |
+| `NT_TEST_NDIAG` | per fixture | Cap the diagram count so a fixture stays affordable in ctest; `0` keeps all. |
+| `NT_DENSE_NP` | per bench | Point count for the dense benchmarks. |
+| `NT_RUN_CODEGEN` | unset ⇒ skip | Opt in to the `codegen_regen` ctest gate (it exits 77 = Skipped without it). |
+| `NT_BUILD_DIR` | `numtracer/build` | Build directory `regen_check.sh` rebuilds into; set by CTest. |
+
+### Removed
+
+These were escape hatches with no reference anywhere — no test, no fixture, no CMake, no doc — each
+selecting a path that was measured *bit-identical but slower*, or simply worse. They and the code
+they selected are gone; re-running such an A/B now means deleting the branch, not setting a variable.
+`NT_DIRAC_FLAT`, `NT_RANK1_PROJM`, `NT_NO_RANK1_PROJE`, `NT_GEN_NO_FMA`, `NT_GEN_NO_CONST_INLINE`,
+`NT_STATS_CSV`, `NT_NO_SLOT_COLLECT_NUMERIC`, `NT_GEN_NO_TABLE_DEDUP`, `NT_GEN_NO_PCH`,
+`NT_GEN_NO_COMPILE_CACHE`, `NT_GEN_NO_TCMALLOC`, `NT_GEN_JOB_MEM`, `NT_TEST_SKIP_CONTROL`.

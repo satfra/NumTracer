@@ -45,7 +45,7 @@ static void check(bool ok, const char *what)
 static std::size_t termsWithAtoms(const nm::MPoly &p)
 {
   std::size_t n = 0;
-  for (const auto &[m, c] : p.t) {
+  for (const auto &[m, c] : p.terms) {
     (void)c;
     if (!m.atoms.empty()) ++n;
   }
@@ -114,16 +114,16 @@ int main()
     const std::vector<nm::MPoly> aden{D};
     const nm::MPoly Q = x0 * x1 + x3 * x3 + env.constant(Cx{-1.5, 0.0});
     const nm::MPoly p = (Q * D) * env.atom(0); // (Q·D)·(1/D)
-    check(termsWithAtoms(p) == p.t.size() && !p.t.empty(), "input carries the atom on every term");
+    check(termsWithAtoms(p) == p.terms.size() && !p.terms.empty(), "input carries the atom on every term");
 
     const nm::MPoly r = nm::divThroughPolyAtoms(p, aden);
     check(termsWithAtoms(r) == 0, "atom fully cancelled on exact division");
-    check(r.t.size() == Q.t.size(), "reduced to the quotient's term count");
+    check(r.terms.size() == Q.terms.size(), "reduced to the quotient's term count");
     checkSameValue("exact-division value preserved", p, r, aden, nsym, rng);
-    check(r.t.size() <= p.t.size(), "no term-count growth");
+    check(r.terms.size() <= p.terms.size(), "no term-count growth");
 
     const nm::MPoly r2 = nm::divThroughPolyAtoms(r, aden);
-    check(r2.t.size() == r.t.size(), "idempotent");
+    check(r2.terms.size() == r.terms.size(), "idempotent");
   }
 
   // ---- 2) divThroughPolyAtoms on a NON-divisible numerator ------------------------------------
@@ -137,7 +137,7 @@ int main()
 
     const nm::MPoly r = nm::divThroughPolyAtoms(p, aden);
     checkSameValue("non-divisible value preserved", p, r, aden, nsym, rng);
-    check(r.t.size() <= p.t.size(), "no term-count growth on a failed division");
+    check(r.terms.size() <= p.terms.size(), "no term-count growth on a failed division");
     check(termsWithAtoms(r) > 0, "the atom survives (it does not divide out)");
   }
 
@@ -149,11 +149,11 @@ int main()
     const nm::MPoly p = (x2 * x2 * x0) * env.atom(0) + (x3 * x1) * env.atom(0);
     const nm::MPoly r = nm::divThroughMonomialAtoms(p, aden);
     checkSameValue("monomial-cancellation value preserved", p, r, aden, nsym, rng);
-    check(r.t.size() <= p.t.size(), "no term-count growth");
+    check(r.terms.size() <= p.terms.size(), "no term-count growth");
     check(termsWithAtoms(r) < termsWithAtoms(p), "at least one atom cancelled");
 
     const nm::MPoly r2 = nm::divThroughMonomialAtoms(r, aden);
-    check(r2.t.size() == r.t.size(), "idempotent");
+    check(r2.terms.size() == r.terms.size(), "idempotent");
   }
 
   // ---- 4) randomised value preservation over mixed inputs -------------------------------------
@@ -176,7 +176,7 @@ int main()
       nm::MPoly r = nm::divThroughMonomialAtoms(p, aden);
       r = nm::divThroughPolyAtoms(r, aden);
       checkSameValue("composed value preserved", p, r, aden, nsym, rng);
-      check(r.t.size() <= p.t.size(), "no term-count growth (composed)");
+      check(r.terms.size() <= p.terms.size(), "no term-count growth (composed)");
       ++cases;
     }
     check(cases == 40, "all randomised cases ran");

@@ -27,8 +27,9 @@
    that scale, never pointwise-relative — two roundings of zero always disagree by 100%.
 
    WHERE THE INDEPENDENCE COMES FROM. There is no dense-oracle twin here: MakeNTKernel no longer
-   accepts "Backend" -> "Dense" (the generators that still pass it — gen_qcd_za.wls, gen_zq.wls,
-   gen_zaqbq1.wls — are stale and in neither DEFAULT_FLOWS nor any ctest). Identity (b) supplies the
+   accepts "Backend" -> "Dense" — and now REFUSES an unknown option name rather than swallowing it,
+   which is what let three stale generators go on passing it (they have since been deleted, along
+   with the orphaned dense kernels they emitted). Identity (b) supplies the
    independence instead, and more sharply than dense-vs-numeric would: its left-hand side is built
    from the TRANSVERSE leaf, which carries 1/q^2 atoms, and its right-hand side from the electric
    and magnetic leaves, which carry 1/|q_vec|^2. Two structurally different lowerings of the same

@@ -117,15 +117,6 @@ Module[{genSrc, traces, symLine, nsym},
     Print["FIXTURE GUARD FAILED: traces are all real — the complex path is not exercised."]; Abort[]];
 ];
 
-(* Scaled-benchmark escape hatch: NT_TEST_SKIP_CONTROL=1 stops after the main kernel. The control
-   below re-runs the whole flow with every lever OFF (NT_NO_UNIT_GROUPS = the measured-70x
-   pre-lever frame path), which at raised NT_TEST_NDIAG is prohibitively expensive and useless for
-   a scaling rung — the rung only needs the main gen sources. NEVER set this when regenerating the
-   committed fixture: the compare test grades against the control. *)
-If[Environment["NT_TEST_SKIP_CONTROL"] =!= $Failed,
-  Print["lambda3d(small): NT_TEST_SKIP_CONTROL set — control kernel SKIPPED (scaling rung only)."];
-  Quit[0]];
-
 (* ---- THE REFERENCE KERNEL: the same flow with every lever switched OFF — the pristine
    pre-lever computation: every (net, sub-term) contracted separately (NT_GEN_NO_DEDUP), the whole
    frame through polyFrameSpec with no unit groups (NT_NO_UNIT_GROUPS), and expression-keyed

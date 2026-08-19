@@ -343,6 +343,23 @@ if(NUMTRACER_BUILD_TESTS)
   target_include_directories(bench_147 PRIVATE tests/gen tests/refshim)
   target_link_libraries(bench_147 PRIVATE NumTracer::NumTracer)
 
+  # The other three benchmarks, wired the same way. They were present in the tree but named by NO
+  # CMakeLists at all, so nothing ever compiled them: a source that is never built rots silently
+  # (its sibling prototype tests/proto_matprod.cpp had already bit-rotted against a private MPoly
+  # factory and no longer compiled). EXCLUDE_FROM_ALL keeps them off the default build; naming them
+  # here is what makes the rot visible.
+  foreach(_bench bench_aqbq147 bench_za_dense bench_za3_147_dense)
+    add_executable(${_bench} EXCLUDE_FROM_ALL tests/refshim/${_bench}.cpp)
+    target_include_directories(${_bench} PRIVATE tests/gen tests/refshim)
+    target_link_libraries(${_bench} PRIVATE NumTracer::NumTracer)
+  endforeach()
+
+  # The dense-tensor pack/unpack round trip (dense/dtensor.hpp). Same story: the source existed and
+  # was built by nothing. It is the only test of that subsystem — README calls DTensor "the naive
+  # baseline the generated kernels are validated against" — so it is registered as a real test.
+  add_executable(test_dense_pack tests/test_dense_pack.cpp)
+  target_link_libraries(test_dense_pack PRIVATE NumTracer::NumTracer)
+
   add_executable(compare_za4_num tests/refshim/compare_za4_num.cpp)
   target_include_directories(compare_za4_num PRIVATE tests/gen tests/refshim)
   target_link_libraries(compare_za4_num PRIVATE NumTracer::NumTracer)
@@ -549,6 +566,7 @@ if(NUMTRACER_BUILD_TESTS)
   enable_testing()
   add_test(NAME numeric_contract COMMAND test_numeric_contract)
   add_test(NAME dpoly COMMAND test_dpoly)
+  add_test(NAME dense_pack COMMAND test_dense_pack)
   add_test(NAME flow_zq_collect COMMAND compare_zq_collect)
   add_test(NAME projector_identity COMMAND test_projector_identity)
   add_test(NAME projector_fusion COMMAND test_projector_fusion)
@@ -649,6 +667,17 @@ if(NUMTRACER_BUILD_TESTS)
              COMMAND "${NT_WOLFRAM_EXE}" -noprompt
                      -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ad_param_typing.wls")
     set_tests_properties(wolfram_ad_param_typing PROPERTIES LABELS wolfram TIMEOUT 300)
+
+    # The codegen EMISSION GUARDS: that $ntCppLeakPatterns still names symbols that exist (the list
+    # had already gone stale once — it carried a deleted function's name, so the backstop was
+    # watching for something unproducible), that ntExportCpp actually ABORTS on each pattern with
+    # verbosity OFF (the scan lives inside an ntLog[] argument, so this also pins that ntLog keeps
+    # evaluating its arguments), and that ntStageResult refuses a stage record with an unassigned
+    # field — the structural counter to the outer-declare/inner-assign bug class in mkGenerateKernel.
+    add_test(NAME wolfram_codegen_stages
+             COMMAND "${NT_WOLFRAM_EXE}" -noprompt
+                     -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codegen_stages.wls")
+    set_tests_properties(wolfram_codegen_stages PROPERTIES LABELS wolfram TIMEOUT 300)
   else()
     message(STATUS "NumTracer: no Wolfram kernel found; the fast mathematica/ unit tests are skipped")
   endif()

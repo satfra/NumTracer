@@ -170,11 +170,12 @@ itself is unchanged, so colour-blind flows are byte-identical.)
 
 Each diagram's `MPoly` is handed to `to_genprog` (`numeric_contract.hpp`), which lowers it into
 one shared fundamental-symbol environment (`network`'s `GlobalEnv`) via the
-[CSE + Horner lowering](cse-and-lowering.md), returning a `GenProg`. The driver
-`numeric/numeric_driver.hpp` (`run_numeric`) does this for every diagram and the generator prints
-the `trN(const double* f)` functions plus the `fill` that computes the frame symbols once per
-call. `mpoly_to_cpp` renders a momentum component or a propagator denominator as a C++ expression
-for the `fill` body.
+[CSE + Horner lowering](cse-and-lowering.md), returning a `GenProg`. The emitted generator drives
+that over every diagram through the two parallel phases of `numeric/trace_fold.hpp`
+(`contract_traces` then `fold_groups_streaming`), and prints the `trN(const double* f)` functions
+plus the `fill` that computes the frame symbols once per call. `mpoly_to_cpp`
+(`numeric/numeric_driver.hpp`) renders a momentum component or a propagator denominator as a C++
+expression for the `fill` body.
 
 ## Why the kernel is compact and fast
 

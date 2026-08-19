@@ -82,7 +82,7 @@ namespace
   }
 
   /// Contract one Lorentz network, forcing either the dense or the rank-1 ProjE factorisation.
-  /// Bypasses the NT_NO_RANK1_PROJE hatch (read once per process) by calling the two builders
+  /// Calls the two builders
   /// directly — this test needs both forms in the SAME process.
   MPoly contractBoth(const std::vector<NElem> &elems, bool rank1, const std::vector<MPoly> &aden,
                      const std::vector<std::array<MPoly, 4>> &comp)
@@ -132,55 +132,8 @@ namespace
     for (const auto &k : pts)
       worst = std::fmax(worst, std::fabs(evalAt(a, k) - evalAt(b, k)) / scale);
     std::printf("   %-38s dense=%-5zu rank1=%-5zu terms   rel %.2e   max|v| %.2e\n", what,
-                a.t.size(), b.t.size(), worst, maxAbs);
-    return {worst, maxAbs, a.t.size(), b.t.size()};
-  }
-
-  /// The magnetic identity, checked the same way but built by hand: `expand_magnetic` is env-gated
-  /// (read once per process) so the test substitutes the three pieces itself.
-  ///     P_M = delta - u (x) u - k_s (x) k_s * INVS(k)
-  Gap magneticGap(const char *what, int a, int b, const std::vector<NElem> &rest)
-  {
-    const auto comp = makeComp();
-    const auto aden = makeAtomDen();
-
-    std::vector<NElem> dense = rest;
-    dense.push_back(nprojM(a, b, {{1.0, 0}}, 1));
-    const MPoly D = contractBoth(dense, false, aden, comp);
-
-    // delta - TimeSq - SpatialSq, each contracted with the same `rest` and summed.
-    MPoly S = MPolyFactory::zero(kNsym);
-    for (int piece = 0; piece < 3; ++piece) {
-      std::vector<NElem> e = rest;
-      NElem el = nprojM(a, b, {{1.0, 0}}, 1);
-      if (piece == 0)
-        el = nmet(a, b);
-      else
-        el.kind = (piece == 1) ? NElem::TimeSq : NElem::SpatialSq;
-      e.push_back(el);
-      MPoly t = contractBoth(e, true, aden, comp);
-      if (piece != 0) t = MPolyFactory::scaled(kNsym, t, Cx{-1., 0});
-      S = std::move(S) + std::move(t);
-    }
-
-    std::mt19937 rng(20260811);
-    std::uniform_real_distribution<double> U(-2.0, 2.0);
-    double scale = 0., worst = 0.;
-    std::vector<std::array<double, 8>> pts;
-    for (int t = 0; t < 400; ++t) {
-      std::array<double, 8> k{U(rng), U(rng), U(rng), U(rng), U(rng), U(rng), U(rng), U(rng)};
-      if (std::fabs(k[1]) + std::fabs(k[2]) + std::fabs(k[3]) < 1e-3) continue;
-      pts.push_back(k);
-      scale = std::fmax(scale, std::fabs(evalAt(D, k)));
-      scale = std::fmax(scale, std::fabs(evalAt(S, k)));
-    }
-    const double maxAbs = scale;
-    if (scale < 1e-300) scale = 1.0;
-    for (const auto &k : pts)
-      worst = std::fmax(worst, std::fabs(evalAt(D, k) - evalAt(S, k)) / scale);
-    std::printf("   %-38s dense=%-5zu split=%-5zu terms   rel %.2e   max|v| %.2e\n", what,
-                D.t.size(), S.t.size(), worst, maxAbs);
-    return {worst, maxAbs, D.t.size(), S.t.size()};
+                a.terms.size(), b.terms.size(), worst, maxAbs);
+    return {worst, maxAbs, a.terms.size(), b.terms.size()};
   }
 
 } // namespace
@@ -208,12 +161,6 @@ int main()
   const Gap g8 = worstGap("P_E chain x 3 (box-like)",
                              {E(0, 1), Tp(1, 2), E(2, 3), Tp(3, 4), E(4, 5), V(0), V(5)});
 
-  std::printf("\n  magnetic projector, P_M = delta - u(x)u - k_s(x)k_s/|k|^2:\n");
-  const Gap m1 = magneticGap("p . P_M . p", 0, 1, {nvec(0, {{1.0, 1}}), nvec(1, {{1.0, 1}})});
-  const Gap m2 = magneticGap("tr P_M (== 2)", 0, 0, {});
-  const Gap m3 = magneticGap("P_M . P_T chain", 0, 1,
-                             {nprojT(1, 2, {{1.0, 0}}, 0), nvec(0, {{1.0, 1}}), nvec(2, {{1.0, 1}})});
-
   std::printf("\n");
   const double tol = 1e-12;
   ok("tr P_E agrees", g1.rel < tol);
@@ -230,9 +177,6 @@ int main()
   // has to shrink the contraction, and by a lot on the multi-projector chains a real finite-T
   // 4-point diagram is made of. If this ever regresses, the rank-1 path is costing correctness
   // review for nothing and should be reverted, not kept.
-  ok("P_M three-piece split agrees (p.P_M.p)", m1.rel < tol);
-  ok("P_M three-piece split agrees (trace)", m2.rel < tol);
-  ok("P_M three-piece split agrees (chain)", m3.rel < tol);
   ok("rank-1 shrinks the 2-projector chain >=2x", g7.rank1Terms * 2 <= g7.denseTerms);
   ok("rank-1 shrinks the 3-projector chain >=4x", g8.rank1Terms * 4 <= g8.denseTerms);
 

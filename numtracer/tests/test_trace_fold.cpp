@@ -51,20 +51,20 @@ namespace
 
   bool same(const MPoly &a, const MPoly &b)
   {
-    if (a.t.size() != b.t.size()) return false;
-    for (std::size_t i = 0; i < a.t.size(); ++i) {
-      if (!(a.t[i].first == b.t[i].first)) return false;
-      if (a.t[i].second.re != b.t[i].second.re || a.t[i].second.im != b.t[i].second.im) return false;
+    if (a.terms.size() != b.terms.size()) return false;
+    for (std::size_t i = 0; i < a.terms.size(); ++i) {
+      if (!(a.terms[i].first == b.terms[i].first)) return false;
+      if (a.terms[i].second.re != b.terms[i].second.re || a.terms[i].second.im != b.terms[i].second.im) return false;
     }
     return true;
   }
 
   bool same(const DPoly &a, const DPoly &b)
   {
-    if (a.t.size() != b.t.size()) return false;
-    for (std::size_t i = 0; i < a.t.size(); ++i) {
-      if (a.t[i].first != b.t[i].first) return false;
-      if (!same(a.t[i].second, b.t[i].second)) return false;
+    if (a.terms.size() != b.terms.size()) return false;
+    for (std::size_t i = 0; i < a.terms.size(); ++i) {
+      if (a.terms[i].first != b.terms[i].first) return false;
+      if (!same(a.terms[i].second, b.terms[i].second)) return false;
     }
     return true;
   }

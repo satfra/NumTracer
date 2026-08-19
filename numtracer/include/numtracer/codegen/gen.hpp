@@ -13,8 +13,9 @@
 #pragma once
 
 #include "numtracer/core/export.hpp"   // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
+#include "numtracer/core/envvar.hpp"   // env_flag / env_int — the single truth test for NT_* switches
 #include "numtracer/codegen/lower.hpp"
-#include "numtracer/network/network.hpp" // splitmix64_finalise / hash_combine hash helpers + <cstdint>
+#include "numtracer/network/network.hpp" // NetVal / Elem / GenProg
 
 #include <climits>
 #include <cstdint> // SIZE_MAX (the NT_GEN_NOINLINE_MIN "off" sentinel)
@@ -219,10 +220,10 @@ namespace numtracer::network
   namespace gdetail
   {
     /// Pick the cheapest Horner ordering of @p monos (costed on scratch builders), then replay it into
-    /// @p w (so several parts — e.g. a trace's real and imaginary halves — share one CSE stream). Returns
-    /// the result slot in @p w. Takes the monomials by value so the no-sweep path (numOrderings <= 1,
+    /// @p builder (so several parts — e.g. a trace's real and imaginary halves — share one CSE stream). Returns
+    /// the result slot in @p builder. Takes the monomials by value so the no-sweep path (numOrderings <= 1,
     /// i.e. every >2000-monomial trace) hands them straight to horner without a deep copy.
-    inline int best_into(std::vector<LMono> monos, rdetail::RBuilder &w)
+    inline int best_into(std::vector<LMono> monos, rdetail::RBuilder &builder)
     {
       // The greedy Horner is order-sensitive, so we cost several deterministic orderings and keep the
       // cheapest. But each trial is a FULL horner pass: for the dense 1/4/7 traces (tens of thousands of
@@ -230,14 +231,13 @@ namespace numtracer::network
       // tracks the monomial count, not the pivot order — see the noise-prune notes). So scale the sweep
       // down with the polynomial size; NT_GEN_HORNER_ORDERS=<n> overrides.
       std::size_t numOrderings = 8;
-      if (const char *e = std::getenv("NT_GEN_HORNER_ORDERS")) {
-        int v = std::atoi(e);
-        if (v > 0) numOrderings = (std::size_t)v;
-      } else if (monos.size() > 2000)
+      if (const long v = env_int("NT_GEN_HORNER_ORDERS", 0); v > 0)
+        numOrderings = static_cast<std::size_t>(v);
+      else if (monos.size() > 2000)
         numOrderings = 1;
       else if (monos.size() > 500)
         numOrderings = 3;
-      if (numOrderings <= 1) return horner(w, std::move(monos)); // canonical (as-built) order only — no sweep
+      if (numOrderings <= 1) return horner(builder, std::move(monos)); // canonical (as-built) order only — no sweep
       auto orders = make_orderings(monos, numOrderings);
       if (numOrderings > orders.size()) numOrderings = orders.size();
       std::size_t bestIdx = 0, bestOps = 0;
@@ -251,7 +251,7 @@ namespace numtracer::network
           have = true;
         }
       }
-      return horner(w, std::move(orders[bestIdx]));
+      return horner(builder, std::move(orders[bestIdx]));
     }
   } // namespace gdetail
 #endif // NUMTRACER_DEFINE_BODIES
@@ -272,7 +272,7 @@ namespace numtracer::network
     /// (@ref emit_cpp_fused) writers so their statement forms cannot drift. Two statement-level
     /// rewrites, both pure emission (the SSA program itself is untouched, slot numbering included):
     ///
-    ///  - fmaFold: a MUL whose ONLY use is one ADD/SUB is emitted inside that consumer as
+    ///  - fmaFold: a MUL whose ONLY use is one ADD is emitted inside that consumer as
     ///    `fma(a,b,c)` instead of its own `const double` line. gcc/nvcc contract these pairs anyway
     ///    (-ffp-contract=fast / -fmad=true), so the value is (a) the line count — the pair collapses
     ///    to one statement — and (b) making contraction GUARANTEED where the default doesn't reach:
@@ -281,20 +281,21 @@ namespace numtracer::network
     ///  - cInline: an RCONST used exactly once is emitted as a (parenthesised) literal at its use
     ///    site instead of occupying its own declaration line.
     ///
-    /// Opt-outs, read once per process (emission must be uniform across a run, same contract as
-    /// NT_GEN_NOINLINE_MIN): NT_GEN_NO_FMA=1 and NT_GEN_NO_CONST_INLINE=1 — the A/B controls.
+    /// Both rewrites are unconditional. They used to sit behind NT_GEN_NO_FMA / NT_GEN_NO_CONST_INLINE
+    /// A/B controls; both measured as wins, both hatches were referenced nowhere (no test, no
+    /// fixture, no doc), and both were spelled `getenv(x) != nullptr` — under which `NT_GEN_NO_FMA=0`
+    /// turned fma folding OFF. Reinstating an A/B here means deleting the branch, not setting a
+    /// variable.
     struct EmitPlan
     {
       std::vector<int> use;       ///< total references: instruction operands + result roots
       std::vector<int> consumer;  ///< single consuming instruction, or -2 (root / >1 consumers)
-      std::vector<char> fmaFold;  ///< MUL folded into its single ADD/SUB consumer
+      std::vector<char> fmaFold;  ///< MUL folded into its single ADD consumer
       std::vector<char> cInline;  ///< RCONST inlined at its single use site
     };
 
     inline EmitPlan make_plan(const std::vector<RInstr> &ins, const int *roots, std::size_t nroots)
     {
-      static const bool fmaOn = std::getenv("NT_GEN_NO_FMA") == nullptr;
-      static const bool ciOn = std::getenv("NT_GEN_NO_CONST_INLINE") == nullptr;
       const int n = static_cast<int>(ins.size());
       EmitPlan pl;
       pl.use.assign(ins.size(), 0);
@@ -307,29 +308,26 @@ namespace numtracer::network
       };
       for (int i = 0; i < n; ++i) {
         const RInstr &in = ins[i];
-        if (in.op == RADD || in.op == RSUB || in.op == RMUL) {
+        if (in.op == RADD || in.op == RMUL) {
           touch(in.a, i);
           touch(in.b, i);
         } else if (in.op == RNEG)
           touch(in.a, i);
       }
       for (std::size_t r = 0; r < nroots; ++r) touch(roots[r], -2);
-      if (fmaOn) {
-        // At most ONE folded MUL per consumer (an fma has one addend); prefer operand `a`.
-        auto foldable = [&](int r, int c) {
-          return r >= 0 && r < n && ins[r].op == RMUL && pl.use[r] == 1 && pl.consumer[r] == c;
-        };
-        for (int i = 0; i < n; ++i) {
-          if (ins[i].op != RADD && ins[i].op != RSUB) continue;
-          if (foldable(ins[i].a, i))
-            pl.fmaFold[ins[i].a] = 1;
-          else if (foldable(ins[i].b, i))
-            pl.fmaFold[ins[i].b] = 1;
-        }
+      // At most ONE folded MUL per consumer (an fma has one addend); prefer operand `a`.
+      auto foldable = [&](int r, int c) {
+        return r >= 0 && r < n && ins[r].op == RMUL && pl.use[r] == 1 && pl.consumer[r] == c;
+      };
+      for (int i = 0; i < n; ++i) {
+        if (ins[i].op != RADD) continue;
+        if (foldable(ins[i].a, i))
+          pl.fmaFold[ins[i].a] = 1;
+        else if (foldable(ins[i].b, i))
+          pl.fmaFold[ins[i].b] = 1;
       }
-      if (ciOn)
-        for (int i = 0; i < n; ++i)
-          if (ins[i].op == RCONST && pl.use[i] == 1) pl.cInline[i] = 1;
+      for (int i = 0; i < n; ++i)
+        if (ins[i].op == RCONST && pl.use[i] == 1) pl.cInline[i] = 1;
       return pl;
     }
 
@@ -342,7 +340,7 @@ namespace numtracer::network
         return;
       }
       if (pl.cInline[static_cast<std::size_t>(r)])
-        out << "(" << ins[static_cast<std::size_t>(r)].k << ")";
+        out << "(" << ins[static_cast<std::size_t>(r)].value << ")";
       else
         out << "s" << r;
     }
@@ -354,45 +352,34 @@ namespace numtracer::network
       if (pl.fmaFold[i] || pl.cInline[i]) return;
       const RInstr &in = ins[i];
       auto opnd = [&](int r) { emit_operand(out, ins, pl, r); };
-      auto fma3 = [&](int mul, char sign, int addend) {
-        // sign applies to the whole fma pattern: '+' -> a*b + c, '-' -> a*b - c, 'n' -> c - a*b.
+      // Emit `fma(a, b, c)` for a folded MUL (`mul` = a*b) and its addend. Only the `+` pattern
+      // exists: the SSA has no subtract opcode — a difference is RADD against an RNEG — so there is
+      // no `a*b - c` or `c - a*b` form to spell.
+      auto fma3 = [&](int mul, int addend) {
         out << "fma(";
-        if (sign == 'n') out << "-";
         opnd(ins[static_cast<std::size_t>(mul)].a);
         out << ", ";
         opnd(ins[static_cast<std::size_t>(mul)].b);
         out << ", ";
-        if (sign == '-') out << "-";
         opnd(addend);
         out << ")";
       };
       out << (pl.use[i] ? "  const double s" : "  [[maybe_unused]] const double s") << i << " = ";
       switch (in.op) {
       case RCONST:
-        out << in.k;
+        out << in.value;
         break;
       case RVAR:
         out << "f[" << in.a << "]";
         break;
       case RADD:
         if (in.a >= 0 && pl.fmaFold[static_cast<std::size_t>(in.a)])
-          fma3(in.a, '+', in.b);
+          fma3(in.a, in.b);
         else if (in.b >= 0 && pl.fmaFold[static_cast<std::size_t>(in.b)])
-          fma3(in.b, '+', in.a);
+          fma3(in.b, in.a);
         else {
           opnd(in.a);
           out << "+";
-          opnd(in.b);
-        }
-        break;
-      case RSUB:
-        if (in.a >= 0 && pl.fmaFold[static_cast<std::size_t>(in.a)])
-          fma3(in.a, '-', in.b); // (a*b) - c
-        else if (in.b >= 0 && pl.fmaFold[static_cast<std::size_t>(in.b)])
-          fma3(in.b, 'n', in.a); // c - (a*b) = fma(-a, b, c)
-        else {
-          opnd(in.a);
-          out << "-";
           opnd(in.b);
         }
         break;
@@ -468,19 +455,11 @@ namespace numtracer::network
     /// from out-of-lining (ZAqbq1_147, 108 functions of ~125 instructions) sits far below 500 and is
     /// therefore untouched at this threshold — lowering it is what would put that claim in play, and
     /// that claim has never been reproduced. Re-measure it before moving the default.
+
     /// Is this generation targeting device code? Authoritative signal is `NT_GEN_DEVICE` (set by
     /// Codegen.m from the same condition that chooses the decorator); the raw-CUDA spelling is
     /// honoured as a fallback. Read once per process: emission must be consistent across every
     /// function in a run.
-    /// An environment variable read as a boolean the same way everywhere in this header: set, and
-    /// neither empty nor "0". The `!= nullptr` spelling this replaces is a footgun — `FOO=` and
-    /// `FOO=0` both read as TRUE under it, so unsetting a flag by emptying it silently leaves it on.
-    inline bool env_flag(const char *name)
-    {
-      const char *e = std::getenv(name);
-      return e != nullptr && *e != '\0' && std::strcmp(e, "0") != 0;
-    }
-
     inline bool device_target(const std::string &decor)
     {
       static const bool envDevice = env_flag("NT_GEN_DEVICE");
@@ -494,16 +473,17 @@ namespace numtracer::network
       if (!noinline && device_target(decor)) {
         static const std::size_t noinlineMinInstr = [] {
           const char *e = std::getenv("NT_GEN_NOINLINE_MIN");
-          if (e != nullptr && *e != '\0') { // empty means unset, NOT the very aggressive 0 below
-            // "off" / any negative value disables the gate outright (all-inline emission, the
-            // pre-2026-08-11 behaviour). It needs its own spelling because the natural guess, 0,
-            // means the OPPOSITE here: the test is `nInstr > N`, so 0 out-of-lines everything.
-            if (std::strcmp(e, "off") == 0) return SIZE_MAX;
-            const long v = std::atol(e);
-            if (v < 0) return SIZE_MAX;
-            return static_cast<std::size_t>(v);
-          }
-          return static_cast<std::size_t>(500);
+          if (e == nullptr || *e == '\0') return static_cast<std::size_t>(500); // empty means unset,
+                                                                               // NOT the very
+                                                                               // aggressive 0 below
+          // "off" / any negative value disables the gate outright (all-inline emission, the
+          // pre-2026-08-11 behaviour). It needs its own spelling because the natural guess, 0,
+          // means the OPPOSITE here: the test is `nInstr > N`, so 0 out-of-lines everything.
+          // Anything unparsable reads as "off" too: silently treating a typo as 0 would
+          // out-of-line every device function in the kernel.
+          if (std::strcmp(e, "off") == 0) return SIZE_MAX;
+          const long v = env_int("NT_GEN_NOINLINE_MIN", -1);
+          return v < 0 ? SIZE_MAX : static_cast<std::size_t>(v);
         }();
         noinline = nInstr > noinlineMinInstr;
       }

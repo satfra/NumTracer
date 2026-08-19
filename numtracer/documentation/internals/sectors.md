@@ -1,6 +1,6 @@
 # Sector data
 
-> Headers: `dirac/dirac_data.hpp`, `dirac/dense_trace.hpp`, `sun/sun_data.hpp`, `core/cmat.hpp`
+> Headers: `dirac/dirac_data.hpp`, `sun/sun_data.hpp`, `core/cmat.hpp`, `tests/oracle/dense_trace.hpp`
 
 The contraction engine is ignorant of physics — it folds matrices and sums indices. The physics
 constants live in small, typed-out tables that the engine reads. Each sector has a `constexpr`
@@ -28,8 +28,9 @@ sixteen; that sparsity, and the block-antidiagonal Weyl structure, are what the 
 
 ### The chiral dense trace
 
-`dirac/dense_trace.hpp` provides a sparsity-aware dense gamma trace, `chiral_gamma_trace`
-(the tests keep a mirror copy at `tests/oracle/dense_trace.hpp`). A
+`tests/oracle/dense_trace.hpp` provides a sparsity-aware dense gamma trace, `chiral_gamma_trace`.
+It lives under `tests/` because it is an ORACLE, not an engine component — nothing the library ships
+calls it. (An identical copy used to sit at `dirac/dense_trace.hpp`, included by nothing.) A
 slashed momentum in the Weyl basis is block-antidiagonal, $\slashed p = \big[\begin{smallmatrix}0
 & P\\ Q & 0\end{smallmatrix}\big]$, so a chain of them folds into products of 2×2 chiral blocks
 rather than 4×4 matrices — a few times faster than the brute 4×4 chain — and yields

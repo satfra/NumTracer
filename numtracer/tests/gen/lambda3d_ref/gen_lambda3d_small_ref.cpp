@@ -114,9 +114,9 @@ int main(int argc, char** argv){
   auto atomDen = env.collect_atom_denoms(sln, comp);
   for(auto &a: atomDen) a = reduce_units(a, units);  // bare-loop k^2 -> monomial l1^2 -> cancels
   const bool ntprof = (std::getenv("NT_GEN_PROFILE")!=nullptr);
-  unsigned hw=std::thread::hardware_concurrency(); if(!hw)hw=4u;
-  if(const char* mw=std::getenv("NT_GEN_MAXW")){int v=std::atoi(mw); if(v>0&&(unsigned)v<hw)hw=(unsigned)v;}
-  unsigned hwB=hw; if(const char* mb=std::getenv("NT_GEN_MAXW_B")){int v=std::atoi(mb); if(v>0)hwB=(unsigned)v;}
+  unsigned workersA=std::thread::hardware_concurrency(); if(!workersA)workersA=4u;
+  if(const char* mw=std::getenv("NT_GEN_MAXW")){int v=std::atoi(mw); if(v>0&&(unsigned)v<workersA)workersA=(unsigned)v;}
+  unsigned workersB=workersA; if(const char* mb=std::getenv("NT_GEN_MAXW_B")){int v=std::atoi(mb); if(v>0)workersB=(unsigned)v;}
   const long NSUB = 4180;
   long nCache = 4180;
   if(const char* mm=std::getenv("NT_GEN_MEMO_MAX")){ long v=std::atol(mm); if(v>=0) nCache=std::min<long>(v,NSUB); }
@@ -126,10 +126,10 @@ int main(int argc, char** argv){
       : env.numeric_value_dressed_netval_mp(sdch[k], sdsl[k], sln[k], comp, atomDen);
   };
   auto tA=std::chrono::steady_clock::now();
-  std::vector<MPoly> T = env.contract_traces<MPoly>(nCache, hw, trace);
-  if(ntprof){ std::size_t tb=0; for(auto &p: T) tb+=poly_bytes(p);
+  std::vector<MPoly> traceTable = env.contract_traces<MPoly>(nCache, workersA, trace);
+  if(ntprof){ std::size_t tb=0; for(auto &p: traceTable) tb+=poly_bytes(p);
     std::fprintf(stderr,"[num] phase A: %ld distinct traces, %ld cached, table %.1f MB, %.1f s (W=%u)\n",
-      NSUB, nCache, tb/1048576.0, std::chrono::duration<double>(std::chrono::steady_clock::now()-tA).count(), hw); }
+      NSUB, nCache, tb/1048576.0, std::chrono::duration<double>(std::chrono::steady_clock::now()-tA).count(), workersA); }
 #if defined(__GLIBC__)
   { const double rssPre = ntRssMB(); malloc_trim(0);
     if(ntprof) std::fprintf(stderr,"[num] arena trim after phase A: RSS %.0f -> %.0f MB\n", rssPre, ntRssMB()); }
@@ -142,16 +142,20 @@ int main(int argc, char** argv){
   std::vector<numtracer::Cx> colv(66);
   for(int i=0;i<66;++i) colv[i]=colvU[colR[i]];
   std::vector<std::vector<int>> groups = ntGroups();
-  GlobalEnv g;
+  // `genv`, not `env`: `env` above is the LorentzEnv (nsym + unit groups) that mints and
+  // contracts polynomials. This is the GLOBAL SYMBOL environment the lowering interns
+  // fundamental symbols into. Naming it `env` would shadow the other and silently rebind
+  // every env.contract_traces / env.fold_groups_streaming call below.
+  GlobalEnv genv;
   std::vector<GenProg> progs;
   std::vector<int> realOnly = {0,0,0,0,0,0};
-  long gwin = numtracer::numeric::net_window((long)sidx.size(), hwB);
+  long netWindow = numtracer::numeric::net_window((long)sidx.size(), workersB);
   numtracer::numeric::check_group_partition(groups, 66);
-  env.fold_groups_streaming_dressed(sidx, dsc, sdr, groups, T, nCache, hwB, gwin, trace,
+  env.fold_groups_streaming_dressed(sidx, dsc, sdr, groups, traceTable, nCache, workersB, netWindow, trace,
     [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },
-    [&](size_t gi, DPoly &&acc){ progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); });
-  if(ntprof) std::fprintf(stderr,"[num] phase B+lower: %d nets in %d groups, window %ld, %.1f s (W=%u)\n", 66, 6, gwin, std::chrono::duration<double>(std::chrono::steady_clock::now()-tB).count(), hwB);
-  { std::vector<MPoly> dead; T.swap(dead); }
+    [&](size_t gi, DPoly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });
+  if(ntprof) std::fprintf(stderr,"[num] phase B+lower: %d nets in %d groups, window %ld, %.1f s (W=%u)\n", 66, 6, netWindow, std::chrono::duration<double>(std::chrono::steady_clock::now()-tB).count(), workersB);
+  { std::vector<MPoly> dead; traceTable.swap(dead); }
   const auto tEmit = std::chrono::steady_clock::now();
   FillFormulas fm;
   fm.var = [](int id)->std::string{
@@ -174,9 +178,9 @@ int main(int argc, char** argv){
   std::cout << "#pragma once\n#include <cmath>\n#include <complex>\nnamespace DiFfRG { namespace " << hns << " {\n";
   std::cout << "#ifndef NT_TRACE_COMPLEX\n#define NT_TRACE_COMPLEX std::complex<double>\n#endif\nusing nt_complex_t = NT_TRACE_COMPLEX;\n";
   std::cout << "template<int N> " << decor << " double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }\n";
-  emit_env_layout(std::cout, g);
-  std::cout << "static inline constexpr int nenv = " << g.syms.size() << ";\n";
-  emit_fill(std::cout, g, "fill", "[[maybe_unused]] double l1, [[maybe_unused]] double cos1, [[maybe_unused]] double cos2, [[maybe_unused]] double S0, [[maybe_unused]] double S1, [[maybe_unused]] double SPhi, [[maybe_unused]] double dr_0, [[maybe_unused]] double dr_1, [[maybe_unused]] double dr_2, [[maybe_unused]] double dr_3, [[maybe_unused]] double dr_4, [[maybe_unused]] double dr_5, [[maybe_unused]] double dr_6, [[maybe_unused]] double dr_7, [[maybe_unused]] double dr_8, [[maybe_unused]] double dr_9, [[maybe_unused]] double dr_10, [[maybe_unused]] double dr_11, [[maybe_unused]] double dr_12, [[maybe_unused]] double dr_13, [[maybe_unused]] double dr_14, [[maybe_unused]] double dr_15, [[maybe_unused]] double dr_16, [[maybe_unused]] double dr_17, [[maybe_unused]] double dr_18, [[maybe_unused]] double dr_19, [[maybe_unused]] double dr_20, [[maybe_unused]] double dr_21, [[maybe_unused]] double dr_22, [[maybe_unused]] double dr_23, [[maybe_unused]] double dr_24", fm, decor);
+  emit_env_layout(std::cout, genv);
+  std::cout << "static inline constexpr int nenv = " << genv.syms.size() << ";\n";
+  emit_fill(std::cout, genv, "fill", "[[maybe_unused]] double l1, [[maybe_unused]] double cos1, [[maybe_unused]] double cos2, [[maybe_unused]] double S0, [[maybe_unused]] double S1, [[maybe_unused]] double SPhi, [[maybe_unused]] double dr_0, [[maybe_unused]] double dr_1, [[maybe_unused]] double dr_2, [[maybe_unused]] double dr_3, [[maybe_unused]] double dr_4, [[maybe_unused]] double dr_5, [[maybe_unused]] double dr_6, [[maybe_unused]] double dr_7, [[maybe_unused]] double dr_8, [[maybe_unused]] double dr_9, [[maybe_unused]] double dr_10, [[maybe_unused]] double dr_11, [[maybe_unused]] double dr_12, [[maybe_unused]] double dr_13, [[maybe_unused]] double dr_14, [[maybe_unused]] double dr_15, [[maybe_unused]] double dr_16, [[maybe_unused]] double dr_17, [[maybe_unused]] double dr_18, [[maybe_unused]] double dr_19, [[maybe_unused]] double dr_20, [[maybe_unused]] double dr_21, [[maybe_unused]] double dr_22, [[maybe_unused]] double dr_23, [[maybe_unused]] double dr_24", fm, decor);
   { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)6);
     for(int i=0;i<6;++i){
       const std::string nm = "tr"+std::to_string(i);

@@ -51,11 +51,14 @@ namespace numtracer::network
   struct DFac {
     enum Kind { Gamma, Gamma5, Slash, Comm, LoopSep };
     Kind kind = Gamma;
-    int mu = -1; ///< kind 0: open Lorentz id; kind 3: leg-A FREE id (or -1 ⇒ leg-A is a slash, use `vlc`)
+    // Field docs name the VARIANT, never its enum ordinal — the ordinal tags that used to be here
+    // pointed at the wrong variant (`vlc` is the Slash momentum, which was tagged "kind 1" = Gamma5,
+    // a variant that carries nothing at all).
+    int mu = -1; ///< Gamma: open Lorentz id. Comm: leg-A FREE id (-1 ⇒ leg-A is a slash, use `vlc`)
     std::vector<std::pair<double, int>>
-        vlc;     ///< kind 1: momentum lin. comb.; kind 3: leg-A slash momentum (when mu<0)
-    int nu = -1; ///< kind 3: leg-B FREE id (or -1 ⇒ leg-B is a slash, use `vlc2`)
-    std::vector<std::pair<double, int>> vlc2; ///< kind 3: leg-B slash momentum (when nu<0)
+        vlc;     ///< Slash: the momentum lin. comb. Comm: leg-A slash momentum (when mu < 0)
+    int nu = -1; ///< Comm: leg-B FREE id (-1 ⇒ leg-B is a slash, use `vlc2`)
+    std::vector<std::pair<double, int>> vlc2; ///< Comm: leg-B slash momentum (when nu < 0)
   };
   /// @brief A closed gamma chain in trace order (loop closes implicitly).
   using DiracNet = std::vector<DFac>;
@@ -161,10 +164,10 @@ namespace numtracer::network
     // structural zero for a nonzero 4-gamma trace like {sigma, gamma, gamma} and passing a genuinely
     // odd chain like {sigma, gamma} through to trace_rec. Both are now refused above, but keep the
     // count in step with its sibling so the two engines cannot drift again.
-    std::size_t ng = 0;
+    std::size_t nAntidiag = 0;
     for (const DFac &d : chain)
-      if (d.kind == DFac::Gamma || d.kind == DFac::Slash) ++ng;
-    if (ng % 2 == 1) return {};         // odd chain → 0
+      if (d.kind == DFac::Gamma || d.kind == DFac::Slash) ++nAntidiag;
+    if (nAntidiag % 2 == 1) return {}; // odd chain → 0
     int fresh = firstFreeLabel;
     NetVal r = dirac_detail::trace_rec(chain, fresh); // stage 1: no γ5 tokens
     return scale(Cx{4.0, 0}, std::move(r));               // tr(1) = 4

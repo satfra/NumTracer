@@ -24,10 +24,10 @@ namespace numtracer::numeric
   /// @brief A 4×4 spinor matrix whose entries are @ref MPoly (numeric γ, symbolic momentum data).
   struct Mat4 {
     int nsym;
-    std::array<std::array<MPoly, 4>, 4> a;
+    std::array<std::array<MPoly, 4>, 4> entries;
     explicit Mat4(int ns) : nsym(ns)
     {
-      for (auto &row : a)
+      for (auto &row : entries)
         for (auto &e : row)
           e = MPolyFactory::zero(ns);
     }
@@ -40,8 +40,8 @@ namespace numtracer::numeric
       for (int j = 0; j < 4; ++j) {
         MPoly s = MPolyFactory::zero(A.nsym);
         for (int k = 0; k < 4; ++k)
-          s = s + A.a[i][k] * B.a[k][j];
-        C.a[i][j] = std::move(s);
+          s = s + A.entries[i][k] * B.entries[k][j];
+        C.entries[i][j] = std::move(s);
       }
     return C;
   }
@@ -49,7 +49,7 @@ namespace numtracer::numeric
   {
     MPoly s = MPolyFactory::zero(A.nsym);
     for (int i = 0; i < 4; ++i)
-      s = s + A.a[i][i];
+      s = s + A.entries[i][i];
     return s;
   }
 
@@ -61,7 +61,7 @@ namespace numtracer::numeric
       for (int j = 0; j < 4; ++j) {
         const Cx g = numtracer::dirac::kGamma[mu][i][j];
         if (g.re == 0 && g.im == 0) continue;
-        S.a[i][j] = MPolyFactory::constant(nsym, g);
+        S.entries[i][j] = MPolyFactory::constant(nsym, g);
       }
     return S;
   }
@@ -71,7 +71,7 @@ namespace numtracer::numeric
   {
     Mat4 S(nsym);
     for (int mu = 0; mu < 4; ++mu) {
-      if (comp[mu].t.empty()) continue;
+      if (comp[mu].terms.empty()) continue;
       for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j) {
           const Cx g = numtracer::dirac::kGamma[mu][i][j];
@@ -80,8 +80,8 @@ namespace numtracer::numeric
           // order and the same monomial order, but without the scratch + `from_scratch` sort. γ is
           // sparse, so this fires a handful of times per (mu,i,j) sweep — but the sweep itself runs per
           // Slash token per `numeric_dirac` call, i.e. inside the 89%-of-phase-A Dirac fold. The
-          // accumulate moves as well: `S.a[i][j]` starts empty.
-          S.a[i][j] = std::move(S.a[i][j]) + MPolyFactory::scaled(nsym, comp[mu], g);
+          // accumulate moves as well: `S.entries[i][j]` starts empty.
+          S.entries[i][j] = std::move(S.entries[i][j]) + MPolyFactory::scaled(nsym, comp[mu], g);
         }
     }
     return S;

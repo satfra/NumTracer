@@ -28,20 +28,20 @@ namespace numtracer::core
   /// which can transiently outer-product (grow) before a shared axis closes it — not
   /// just the final rank. Larger networks (the 3-gluon Lorentz chains) need headroom
   /// here; an overflow silently corrupts the contraction.
-  inline constexpr int kER = 16;
+  inline constexpr int kMaxAxisRank = 16;
 
-  /// @brief Guard every @ref kER-sized scratch write in the planners below.
+  /// @brief Guard every @ref kMaxAxisRank-sized scratch write in the planners below.
   ///
-  /// The doc on @ref kER says an overflow "silently corrupts the contraction", and it used to: not
-  /// one of the `[kER]` arrays was bounds-checked. This is the *validation oracle*'s planner
+  /// The doc on @ref kMaxAxisRank says an overflow "silently corrupts the contraction", and it used to: not
+  /// one of the `[kMaxAxisRank]` arrays was bounds-checked. This is the *validation oracle*'s planner
   /// (@ref numtracer::dense::DTensor), so a silent corruption here does not merely produce a wrong
   /// number — it produces a wrong number that then CONFIRMS a wrong engine result. Loud is the only
   /// acceptable behaviour.
   ///
   /// Checking the operand ranks alone is NOT enough, which is the whole reason this exists as a
-  /// named helper rather than two `if (RA > kER)` lines: the result rank is `nFreeA + nFreeB`, so
-  /// two perfectly in-range rank-10 operands **with no shared axis** produce `RR = 20 > kER` and
-  /// overrun `rid`/`rdim`. That is exactly the "transient outer-product growth" the @ref kER doc
+  /// named helper rather than two `if (RA > kMaxAxisRank)` lines: the result rank is `nFreeA + nFreeB`, so
+  /// two perfectly in-range rank-10 operands **with no shared axis** produce `RR = 20 > kMaxAxisRank` and
+  /// overrun `rid`/`rdim`. That is exactly the "transient outer-product growth" the @ref kMaxAxisRank doc
   /// warns about, and it is reachable from in-range inputs.
   ///
   /// `constexpr`-friendly: in a constant-evaluated call (@ref numtracer::dense::contract) a thrown
@@ -49,7 +49,7 @@ namespace numtracer::core
   /// offending call site. At runtime (the `DynTensor` fold, `dense/dtensor.hpp`) it throws.
   constexpr void ax_check_rank(int r, const char *what)
   {
-    if (r < 0 || r > kER) NT_THROW(std::runtime_error, what);
+    if (r < 0 || r > kMaxAxisRank) NT_THROW(std::runtime_error, what);
   }
 
   /// @brief One tensor axis: a contraction identity and an extent.
@@ -107,18 +107,18 @@ namespace numtracer::core
     int RA = 0;                 ///< Rank of operand A.
     int RB = 0;                 ///< Rank of operand B.
     int RR = 0;                 ///< Result rank.
-    int nSh = 0;                ///< Number of shared-axis entries (1-based; slot 0 unused).
+    int nSh = 0;                ///< Number of shared (summed) axes; entries occupy slots [0, nSh).
     int nFreeA = 0;             ///< Number of free axes of A.
     int nFreeB = 0;             ///< Number of free axes of B.
-    int faAxis[kER] = {};       ///< Free-axis positions of A.
-    int fbAxis[kER] = {};       ///< Free-axis positions of B.
-    int saAxis[kER] = {};       ///< Shared-axis positions in A.
-    int sbAxis[kER] = {};       ///< Shared-axis positions in B.
-    int sdim[kER] = {};         ///< Extent of each shared axis.
-    int rid[kER] = {};          ///< Identity of each result axis.
-    int rdim[kER] = {};         ///< Extent of each result axis.
-    std::size_t strA[kER] = {}; ///< Row-major strides of operand A.
-    std::size_t strB[kER] = {}; ///< Row-major strides of operand B.
+    int faAxis[kMaxAxisRank] = {};       ///< Free-axis positions of A.
+    int fbAxis[kMaxAxisRank] = {};       ///< Free-axis positions of B.
+    int saAxis[kMaxAxisRank] = {};       ///< Shared-axis positions in A.
+    int sbAxis[kMaxAxisRank] = {};       ///< Shared-axis positions in B.
+    int sdim[kMaxAxisRank] = {};         ///< Extent of each shared axis.
+    int rid[kMaxAxisRank] = {};          ///< Identity of each result axis.
+    int rdim[kMaxAxisRank] = {};         ///< Extent of each result axis.
+    std::size_t strA[kMaxAxisRank] = {}; ///< Row-major strides of operand A.
+    std::size_t strB[kMaxAxisRank] = {}; ///< Row-major strides of operand B.
     std::size_t nShared = 1;    ///< Product of the shared extents (the sum length).
     std::size_t nResult = 1;    ///< Product of the result extents (the entry count).
   };
@@ -143,13 +143,13 @@ namespace numtracer::core
                              const std::array<int, Nb> &idb, const std::array<int, Nb> &bdim, int RB)
   {
     EPlan p;
-    // Guard BEFORE any [kER] write. RA/RB bound the b_is_shared / faAxis / fbAxis / strA / strB
+    // Guard BEFORE any [kMaxAxisRank] write. RA/RB bound the b_is_shared / faAxis / fbAxis / strA / strB
     // writes; p.RR (checked after it is known, below) bounds rid/rdim.
-    ax_check_rank(RA, "make_eplan: operand A rank exceeds kER (core/axplan.hpp)");
-    ax_check_rank(RB, "make_eplan: operand B rank exceeds kER (core/axplan.hpp)");
+    ax_check_rank(RA, "make_eplan: operand A rank exceeds kMaxAxisRank (core/axplan.hpp)");
+    ax_check_rank(RB, "make_eplan: operand B rank exceeds kMaxAxisRank (core/axplan.hpp)");
     p.RA = RA;
     p.RB = RB;
-    bool b_is_shared[kER] = {};
+    bool b_is_shared[kMaxAxisRank] = {};
     for (int a = 0; a < RA; ++a) {
       int m = -1;
       for (int b = 0; b < RB; ++b)
@@ -177,8 +177,8 @@ namespace numtracer::core
       if (!b_is_shared[b]) p.fbAxis[p.nFreeB++] = b;
     p.RR = p.nFreeA + p.nFreeB;
     // THE case rank-checking the operands misses: two in-range operands sharing NO axis
-    // outer-product to RR = RA + RB. Two rank-10 operands give RR = 20 > kER and overrun rid/rdim.
-    ax_check_rank(p.RR, "make_eplan: result rank nFreeA+nFreeB exceeds kER — the chain "
+    // outer-product to RR = RA + RB. Two rank-10 operands give RR = 20 > kMaxAxisRank and overrun rid/rdim.
+    ax_check_rank(p.RR, "make_eplan: result rank nFreeA+nFreeB exceeds kMaxAxisRank — the chain "
                         "outer-products before a shared axis closes it (core/axplan.hpp)");
     for (int t = 0; t < p.nFreeA; ++t) {
       p.rid[t] = ida[p.faAxis[t]];
@@ -189,7 +189,7 @@ namespace numtracer::core
       p.rdim[p.nFreeA + t] = bdim[p.fbAxis[t]];
     }
     // The arrays may be padded to size 1 for rank-0 operands; loops use RA/RB only.
-    int a_dims_local[kER] = {}, b_dims_local[kER] = {};
+    int a_dims_local[kMaxAxisRank] = {}, b_dims_local[kMaxAxisRank] = {};
     for (int a = 0; a < RA; ++a)
       a_dims_local[a] = adim[a];
     for (int b = 0; b < RB; ++b)
@@ -212,7 +212,7 @@ namespace numtracer::core
   /// @return The flat index into A's entries.
   constexpr std::size_t a_index(std::size_t r, std::size_t s, const EPlan &p)
   {
-    std::size_t cr[kER] = {}, cs[kER] = {};
+    std::size_t cr[kMaxAxisRank] = {}, cs[kMaxAxisRank] = {};
     unflatten_mixed(r, p.rdim, p.RR, cr);
     unflatten_mixed(s, p.sdim, p.nSh, cs);
     std::size_t a = 0;
@@ -229,7 +229,7 @@ namespace numtracer::core
   /// @return The flat index into B's entries.
   constexpr std::size_t b_index(std::size_t r, std::size_t s, const EPlan &p)
   {
-    std::size_t cr[kER] = {}, cs[kER] = {};
+    std::size_t cr[kMaxAxisRank] = {}, cs[kMaxAxisRank] = {};
     unflatten_mixed(r, p.rdim, p.RR, cr);
     unflatten_mixed(s, p.sdim, p.nSh, cs);
     std::size_t b = 0;
@@ -257,8 +257,8 @@ namespace numtracer::core
   /// A's layout — the additive analogue of @ref numtracer::core::EPlan.
   struct EAddPlan {
     int R = 0;                  ///< Rank (shared by both operands and the result).
-    int rdim[kER] = {};         ///< Result (A's) per-axis extents.
-    std::size_t bstr[kER] = {}; ///< `bstr[a]` = stride of B's axis whose id equals A's axis `a`.
+    int rdim[kMaxAxisRank] = {};         ///< Result (A's) per-axis extents.
+    std::size_t bstr[kMaxAxisRank] = {}; ///< `bstr[a]` = stride of B's axis whose id equals A's axis `a`.
     std::size_t n = 1;          ///< Entry count (product of dims).
   };
   /// @brief Build the add plan: match axes by identity, take B's stride for each A axis.
@@ -268,10 +268,10 @@ namespace numtracer::core
                                    const std::array<int, Nb> &idb, const std::array<int, Nb> &bdim)
   {
     EAddPlan p;
-    ax_check_rank(R, "make_eaddplan: rank exceeds kER (core/axplan.hpp)");
+    ax_check_rank(R, "make_eaddplan: rank exceeds kMaxAxisRank (core/axplan.hpp)");
     p.R = R;
-    int b_dims_local[kER] = {};
-    std::size_t bstrideAll[kER] = {};
+    int b_dims_local[kMaxAxisRank] = {};
+    std::size_t bstrideAll[kMaxAxisRank] = {};
     for (int b = 0; b < R; ++b)
       b_dims_local[b] = bdim[b];
     strides_mixed(b_dims_local, R, bstrideAll);
@@ -289,7 +289,7 @@ namespace numtracer::core
   /// @brief B's flat index for result index `r` (which is in A's layout).
   constexpr std::size_t add_bindex(std::size_t r, const EAddPlan &p)
   {
-    std::size_t cr[kER] = {};
+    std::size_t cr[kMaxAxisRank] = {};
     unflatten_mixed(r, p.rdim, p.R, cr);
     std::size_t b = 0;
     for (int a = 0; a < p.R; ++a)

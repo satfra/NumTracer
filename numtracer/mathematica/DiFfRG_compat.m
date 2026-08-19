@@ -487,7 +487,8 @@ UpdateNTFlows[name_String, opts : OptionsPattern[]] :=
     flowDir = ntFlowDir[OptionValue["FlowDirectory"]];
 (* (1) DiFfRG aggregation — regenerates flows/CMakeLists.txt from its template (wipes any prior patch).
    Chatter captured; step (4) prints the NumTracer-native summary once the patch is back on. *)
-    ntLog["[DiFfRG] ", #]& /@ Last @ ntCapturePrint[DiFfRG`CodeTools`UpdateFlows[name]];
+    With[{chatter = Last @ ntCapturePrint[DiFfRG`CodeTools`UpdateFlows[name]]},
+      ntLog["[DiFfRG] ", #]& /@ chatter];
     f = FileNameJoin[{flowDir, "CMakeLists.txt"}];
     If[!FileExistsQ[f],
       Message[UpdateNTFlows::nocmake, f];

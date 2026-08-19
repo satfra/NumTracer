@@ -207,7 +207,7 @@ int main()
     nm::MPoly tr = env.numeric_value(chain, lor, comp, atomDen);
     // does any monomial still carry the atom?
     bool hasAtom = false;
-    for (const auto &[m, c] : tr.t)
+    for (const auto &[m, c] : tr.terms)
       if (!m.atoms.empty()) {
         hasAtom = true;
         break;
@@ -425,7 +425,7 @@ int main()
       double err = 0, maxabs = 0;
       for (int a = 0; a < 4; ++a)
         for (int b = 0; b < 4; ++b) {
-          Cx sym = nm::eval(T.v[static_cast<std::size_t>(a * 4 + b)], x, {});
+          Cx sym = nm::eval(T.entries[static_cast<std::size_t>(a * 4 + b)], x, {});
           Cx num = nTrace(nMul(nMul(nCommM(nGamma(a), nGamma(b)), nSlash(p)), nSlash(q)));
           maxabs = std::max(maxabs, std::abs(num.re) + std::abs(num.im));
           err = std::max(err, cdiff(sym, num));
@@ -438,7 +438,7 @@ int main()
     {
       network::DiracNet chain = {network::dcomm_ss({{1.0, 2}}, {{1.0, 0}}), network::dslash({{1.0, 0}}), network::dslash({{1.0, 1}})};
       auto T = nm::numeric_dirac(nsym, chain, comp);
-      Cx sym = nm::eval(T.v[0], x, {});
+      Cx sym = nm::eval(T.entries[0], x, {});
       Cx num = nTrace(nMul(nMul(nCommM(nSlash(r), nSlash(p)), nSlash(p)), nSlash(q)));
       double err = cdiff(sym, num);
       std::printf("  G2 slash/slash tr([r,p] p q): |num|=%.2e |sym-num|=%.2e %s\n", std::abs(num.re) + std::abs(num.im),
@@ -451,7 +451,7 @@ int main()
       auto T = nm::numeric_dirac(nsym, chain, comp);
       double err = 0, maxabs = 0;
       for (int a = 0; a < 4; ++a) {
-        Cx sym = nm::eval(T.v[static_cast<std::size_t>(a)], x, {});
+        Cx sym = nm::eval(T.entries[static_cast<std::size_t>(a)], x, {});
         Cx num = nTrace(nMul(nMul(nCommM(nGamma(a), nSlash(r)), nSlash(p)), nSlash(q)));
         maxabs = std::max(maxabs, std::abs(num.re) + std::abs(num.im));
         err = std::max(err, cdiff(sym, num));

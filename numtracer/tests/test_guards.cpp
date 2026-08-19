@@ -14,10 +14,10 @@
 //        trace_rec, whose pair_factor read the Comm's empty vlc and silently collapsed it. This
 //        function is the cross-validation ORACLE in test_numeric_contract.cpp, so a wrong verdict
 //        here would "confirm" a wrong engine result.
-//   (D1) core/axplan.hpp's kER=16 scratch arrays were entirely unbounds-checked, though the header
+//   (D1) core/axplan.hpp's kMaxAxisRank=16 scratch arrays were entirely unbounds-checked, though the header
 //        itself says an overflow "silently corrupts the contraction". Checking the OPERAND ranks is
 //        not enough: the result rank is nFreeA+nFreeB, so two in-range rank-10 operands sharing no
-//        axis give RR=20>kER and overrun rid/rdim. This is the dense validation ORACLE's planner, so
+//        axis give RR=20>kMaxAxisRank and overrun rid/rdim. This is the dense validation ORACLE's planner, so
 //        a silent corruption here confirms a wrong engine result.
 //   (D2) MPoly::atom narrowed the atom id to int16 with no check; aid>=32768 wrapped to a different
 //        (or negative) id, so the term carried somebody else's denominator into the cancellation.
@@ -125,7 +125,7 @@ int main() {
     }
   };
 
-  // ---- D1: axplan kER bounds ----------------------------------------------------------------
+  // ---- D1: axplan kMaxAxisRank bounds ----------------------------------------------------------------
   // NOTE the pre-fix behaviour of the overflow cases is UB (an out-of-bounds write into a stack
   // array), not a wrong-but-defined value, so these were confirmed red by hand under
   // -fsanitize=address rather than by expecting a particular garbage result.
@@ -146,7 +146,7 @@ int main() {
       ok("axplan: rank-8 x rank-8 with 4 shared does not throw", !threw);
       ok("axplan: ...and still plans RR=8, nSh=4", p.RR == 8 && p.nSh == 4);
     }
-    // Operand rank past kER.
+    // Operand rank past kMaxAxisRank.
     {
       std::array<int, 17> id{}, dim{};
       for (int i = 0; i < 17; ++i) {

@@ -23,3 +23,10 @@ tests/gen/gen_*_pch.hh
 # the subdirectories. The precompiled header is different: it is a pure build artifact with no
 # fixture value, and it is regenerated on every run — so ignore it there too.
 tests/gen/*/gen_*_pch.hh
+
+# CMake writes NumTracerPaths.m (from cmake/NumTracerPaths.m.in) into the BUILD dir and installs it
+# beside NumTracer.m, recording where the C++ headers landed. A copy was also committed here, which
+# is worse than useless: it carried one machine's absolute install path, and Codegen.m's
+# resolveIncludeDir reads $NumTracerDirectory/NumTracerPaths.m — so in a source-tree run the STALE
+# committed copy is what won. It is generated; it is not source.
+mathematica/NumTracerPaths.m

@@ -10,6 +10,7 @@
 #pragma once
 
 #include "numtracer/core/cx.hpp"
+#include "numtracer/core/hash.hpp" // splitmix64_finalise / hash_combine
 #include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
 
 #include <cstdint>
@@ -19,23 +20,6 @@
 
 namespace numtracer::network
 {
-
-  /// @brief splitmix64 finaliser (local copy so this header has no heavy dependency; used by the
-  ///        codegen env's open-addressed symbol index — constexpr-friendly).
-  constexpr std::uint64_t splitmix64_finalise(std::uint64_t x)
-  {
-    x ^= x >> 30;
-    x *= 0xbf58476d1ce4e5b9ULL;
-    x ^= x >> 27;
-    x *= 0x94d049bb133111ebULL;
-    x ^= x >> 31;
-    return x;
-  }
-  /// @brief boost-style hash combine of two 64-bit hashes.
-  constexpr std::uint64_t hash_combine(std::uint64_t a, std::uint64_t b)
-  {
-    return splitmix64_finalise(a ^ (b + 0x9e3779b97f4a7c15ULL + (a << 6) + (a >> 2)));
-  }
 
   /// @brief A flattened network factor, tagged by @ref Elem::Kind:
   ///   - `Metric`  — δ_{a b}
@@ -55,11 +39,14 @@ namespace numtracer::network
   struct Elem {
     enum Kind { Metric, Vector, Epsilon, ProjT, ProjL, ProjE, ProjM };
     Kind kind = Metric;
-    int a = 0, b = 0;                        ///< indices (kinds 0/2/3); kind 3 also uses c,d below
-    int vid = -1;                            ///< proj's loop momentum `l` (kind 2)
-    int inv = -1;                            ///< inverse env id (proj)
-    std::vector<std::pair<double, int>> vlc; ///< vector linear combination `Σ coeff·vec(vid)` (kind 1)
-    int c = 0, d = 0; ///< ε's 3rd/4th Lorentz indices (kind 3 only; default 0 leaves kinds 0/1/2 unchanged)
+    // Field docs name the VARIANT, never its enum ordinal: the ordinals shifted when `Epsilon` was
+    // inserted into the middle of `Kind`, and the old "kind 2 / kind 3" tags then pointed at the
+    // wrong variant in every one of these lines.
+    int a = 0, b = 0;                        ///< Lorentz index ids (Metric, Epsilon, and every projector)
+    int vid = -1;                            ///< the projector's momentum `l` (ProjT / ProjL / ProjE / ProjM)
+    int inv = -1;                            ///< inverse env id `1/l²` (projectors)
+    std::vector<std::pair<double, int>> vlc; ///< vector linear combination `Σ coeff·vec(vid)` (Vector)
+    int c = 0, d = 0; ///< ε's 3rd/4th Lorentz index ids (Epsilon only; the default 0 leaves every other kind unchanged)
     int invS = -1;    ///< spatial inverse env id `1/|l⃗|²` (finite-T electric/magnetic projectors only)
   };
 

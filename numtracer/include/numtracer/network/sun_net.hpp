@@ -272,9 +272,9 @@ inline SUNDyn build_oracle(int N) {
 /// parallel. `std::map` node addresses are stable across inserts and a built @ref SUNDyn is never
 /// mutated, so the returned reference stays valid for concurrent read-only use.
 inline const SUNDyn &sun_data_for(int N) {
-  static std::mutex mu;
+  static std::mutex cacheMutex;
   static std::map<int, SUNDyn> cache;
-  std::lock_guard<std::mutex> lk(mu);
+  std::lock_guard<std::mutex> lock(cacheMutex);
   auto it = cache.find(N);
   if (it == cache.end()) {
     if (N < 1) NT_THROW(std::runtime_error, "sun_net: group rank N must be >= 1");
@@ -318,11 +318,26 @@ inline void assert_no_open_labels(int N, const std::vector<const SUNFac *> &net)
     }
 }
 
-/// @brief Extract the generator fundamental cycles. Each generator `T^a_{ij}` is a directed edge
-///        rowClass(i) → colClass(j); a closed contraction makes these disjoint cycles, one
-///        `tr(T^{a_1}…T^{a_m})` per cycle. Returns each cycle as its ordered adjoint classes.
-///        Shared verbatim by @ref contract_group and @ref contract_group_dressed.
-inline std::vector<std::vector<int>> extract_cycles(const std::vector<std::array<int, 3>> &gens) {
+/// @brief Walk the generator chain into its disjoint cycles.
+///
+/// Each generator `T^a_{ij}` is a directed edge rowClass(i) → colClass(j); a closed contraction
+/// makes these edges disjoint cycles, one `tr(T^{a_1}…T^{a_m})` per cycle.
+///
+/// `field` picks WHAT each visited generator contributes to its cycle, and is the only difference
+/// between the two things callers want:
+///   - `0` → the generator's ADJOINT class. All the undressed trace needs; a dense matrix product
+///           sums the fundamental indices implicitly. Used by @ref contract_group.
+///   - `2` → the generator's COLUMN class, i.e. the FUNDAMENTAL index sitting immediately AFTER it,
+///           so the last entry is the one closing the trace. A `diagFund` weights one such index per
+///           component, so the dressed contraction has to know which class sits where. Used by
+///           @ref contract_group_dressed.
+///
+/// One walk, so the two results are aligned entry-for-entry by construction. They were two copies of
+/// this function differing in that single subscript, with a comment asking the reader to keep the
+/// orders in step by hand.
+inline std::vector<std::vector<int>> extract_cycles(const std::vector<std::array<int, 3>> &gens,
+                                                    std::size_t field)
+{
   std::map<int, std::size_t> rowToGen; // rowClass(i) -> generator index
   for (std::size_t gi = 0; gi < gens.size(); ++gi) rowToGen[gens[gi][1]] = gi;
   std::vector<char> seen(gens.size(), 0);
@@ -333,7 +348,7 @@ inline std::vector<std::vector<int>> extract_cycles(const std::vector<std::array
     std::size_t curGen = start;
     do {
       seen[curGen] = 1;
-      cycle.push_back(gens[curGen][0]); // adjoint class of this generator
+      cycle.push_back(gens[curGen][field]);
       auto it = rowToGen.find(gens[curGen][2]); // next generator: its row == this col
       if (it == rowToGen.end())
         NT_THROW(std::runtime_error, "sun_net: open fundamental chain (only closed traces supported)");
@@ -344,34 +359,16 @@ inline std::vector<std::vector<int>> extract_cycles(const std::vector<std::array
   return cycles;
 }
 
-/// @brief The FUNDAMENTAL index classes of each generator cycle, aligned entry-for-entry with
-///        @ref extract_cycles: entry `k` is the class of the index sitting immediately AFTER
-///        generator `k` (its column class), so the last entry is the one closing the trace.
-///
-/// @ref extract_cycles keeps only the adjoint classes, which is all the undressed trace needs — a
-/// dense matrix product sums the fundamental indices implicitly. A `diagFund` weights one of those
-/// indices per component, so the dressed contraction has to know which class sits where. Same walk,
-/// same order, so the two results index the same cycles.
-inline std::vector<std::vector<int>> extract_cycles_fund(const std::vector<std::array<int, 3>> &gens) {
-  std::map<int, std::size_t> rowToGen; // rowClass(i) -> generator index
-  for (std::size_t gi = 0; gi < gens.size(); ++gi) rowToGen[gens[gi][1]] = gi;
-  std::vector<char> seen(gens.size(), 0);
-  std::vector<std::vector<int>> cycles;
-  for (std::size_t start = 0; start < gens.size(); ++start) {
-    if (seen[start]) continue;
-    std::vector<int> cycle;
-    std::size_t curGen = start;
-    do {
-      seen[curGen] = 1;
-      cycle.push_back(gens[curGen][2]); // column class: the index AFTER this generator
-      auto it = rowToGen.find(gens[curGen][2]);
-      if (it == rowToGen.end())
-        NT_THROW(std::runtime_error, "sun_net: open fundamental chain (only closed traces supported)");
-      curGen = it->second;
-    } while (curGen != start);
-    cycles.push_back(std::move(cycle));
-  }
-  return cycles;
+/// Adjoint classes per cycle — see @ref extract_cycles.
+inline std::vector<std::vector<int>> extract_cycles_adj(const std::vector<std::array<int, 3>> &gens)
+{
+  return extract_cycles(gens, 0);
+}
+
+/// Fundamental (column) classes per cycle, aligned with @ref extract_cycles_adj — see @ref extract_cycles.
+inline std::vector<std::vector<int>> extract_cycles_fund(const std::vector<std::array<int, 3>> &gens)
+{
+  return extract_cycles(gens, 2);
 }
 
 /// @brief The product of generator traces `∏_cycles tr(T^{a_1}…T^{a_m})` for a fully-pinned adjoint
@@ -472,7 +469,7 @@ inline Cx contract_group(int N, const std::vector<const SUNFac *> &net) {
     if (!fClasses.count(c)) genOnly.push_back(c);
 
   // ---- fundamental-cycle extraction (generator traces) ----
-  const std::vector<std::vector<int>> cycles = extract_cycles(gens);
+  const std::vector<std::vector<int>> cycles = extract_cycles_adj(gens);
   // the product of generator traces for a fully-pinned adjoint assignment (`classVal`: class -> 0..Adim-1).
   auto loopProd = [&](const std::map<int, int> &classVal) { return loop_prod(dat, cycles, classVal); };
 
@@ -757,7 +754,7 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
     if (fClasses.count(kv.first) || genAdjClasses.count(kv.first)) asgDiag[kv.first] = kv.second;
 
   // ---- fundamental-cycle extraction (generator traces) — shared with contract_group ----
-  const std::vector<std::vector<int>> cycles = extract_cycles(gens);
+  const std::vector<std::vector<int>> cycles = extract_cycles_adj(gens);
   // the fundamental classes riding those same cycles, needed only when a diagFund sits on one
   const std::vector<std::vector<int>> cyclesFund = extract_cycles_fund(gens);
 

@@ -91,7 +91,7 @@ ntSUNDiagAdj::usage = "ntSUNDiagAdj[N, a, b, spec] — an adjoint Kronecker delt
    correctly refuses to pass vacuously it failed the run — and took regen_check.sh's whole test phase
    with it. The bodies below reference none of these names, so blanks are a pure deletion. *)
 (* The 5-argument (N, i, j, spec, scale) spelling is gone. Reject it AT CONSTRUCTION rather than
-   letting it reach the emitter: colFacG only runs at kernel-generation time, so a stale call would
+   letting it reach the emitter: colourFacStr only runs at kernel-generation time, so a stale call would
    otherwise survive NumTrace and fail much later, far from the line that wrote it. *)
 ntSUNDiagFund[_, _, _, _, _] := (
     Print["[NumTracer] ERROR: ntSUNDiagFund no longer takes a separate `scale`. Apply each dressing ",

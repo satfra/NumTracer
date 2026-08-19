@@ -62,7 +62,7 @@ namespace numtracer::numeric
   /// @brief A dressing polynomial: sorted-by-@ref DMono, like terms combined, no empty `MPoly` coeffs.
   struct DPoly {
     int nsym = 0;
-    std::vector<std::pair<DMono, MPoly>> t; ///< sorted by DMono; each MPoly is non-empty
+    std::vector<std::pair<DMono, MPoly>> terms; ///< sorted by DMono; each MPoly is non-empty
 
     // Sanctioned construction paths (see @ref MPoly). The in-header DPoly arithmetic keeps constructing
     // results directly, so the dressing hot path is unchanged.
@@ -84,26 +84,26 @@ namespace numtracer::numeric
     static DPoly fromMPoly(const MPoly &p)
     {
       DPoly d(p.nsym);
-      if (!p.empty()) d.t.push_back({DMono{}, p});
+      if (!p.empty()) d.terms.push_back({DMono{}, p});
       return d;
     }
 
   public:
-    bool empty() const { return t.empty(); }
-    int size() const { return static_cast<int>(t.size()); }
+    bool empty() const { return terms.empty(); }
+    int size() const { return static_cast<int>(terms.size()); }
 
     /// Accumulate `p` into the coefficient of dressing monomial `d` (kept sorted; `d` already sorted).
     /// Drops the term if the resulting `MPoly` is empty (full cancellation).
     void add(const DMono &d, const MPoly &p)
     {
       if (p.empty()) return;
-      auto it = std::lower_bound(t.begin(), t.end(), d,
+      auto it = std::lower_bound(terms.begin(), terms.end(), d,
                                  [](const std::pair<DMono, MPoly> &a, const DMono &k) { return a.first < k; });
-      if (it != t.end() && it->first == d) {
+      if (it != terms.end() && it->first == d) {
         it->second = it->second + p;
-        if (it->second.empty()) t.erase(it);
+        if (it->second.empty()) terms.erase(it);
       } else {
-        t.insert(it, {d, p});
+        terms.insert(it, {d, p});
       }
     }
   };
@@ -117,27 +117,27 @@ namespace numtracer::numeric
 
   inline DPoly operator+(const DPoly &a, const DPoly &b)
   {
-    if (a.t.empty()) return b;
-    if (b.t.empty()) return a;
+    if (a.terms.empty()) return b;
+    if (b.terms.empty()) return a;
     DPoly r(a.nsym ? a.nsym : b.nsym);
-    r.t.reserve(a.t.size() + b.t.size());
+    r.terms.reserve(a.terms.size() + b.terms.size());
     std::size_t i = 0, j = 0;
-    while (i < a.t.size() && j < b.t.size()) {
-      if (a.t[i].first < b.t[j].first)
-        r.t.push_back(a.t[i++]);
-      else if (b.t[j].first < a.t[i].first)
-        r.t.push_back(b.t[j++]);
+    while (i < a.terms.size() && j < b.terms.size()) {
+      if (a.terms[i].first < b.terms[j].first)
+        r.terms.push_back(a.terms[i++]);
+      else if (b.terms[j].first < a.terms[i].first)
+        r.terms.push_back(b.terms[j++]);
       else {
-        MPoly s = a.t[i].second + b.t[j].second;
-        if (!s.empty()) r.t.push_back({a.t[i].first, std::move(s)});
+        MPoly s = a.terms[i].second + b.terms[j].second;
+        if (!s.empty()) r.terms.push_back({a.terms[i].first, std::move(s)});
         ++i;
         ++j;
       }
     }
-    while (i < a.t.size())
-      r.t.push_back(a.t[i++]);
-    while (j < b.t.size())
-      r.t.push_back(b.t[j++]);
+    while (i < a.terms.size())
+      r.terms.push_back(a.terms[i++]);
+    while (j < b.terms.size())
+      r.terms.push_back(b.terms[j++]);
     return r;
   }
 
@@ -148,9 +148,9 @@ namespace numtracer::numeric
   {
     const int ns = a.nsym ? a.nsym : b.nsym;
     DPoly r(ns);
-    if (a.t.empty() || b.t.empty()) return r;
-    for (const auto &[da, pa] : a.t)
-      for (const auto &[db, pb] : b.t)
+    if (a.terms.empty() || b.terms.empty()) return r;
+    for (const auto &[da, pa] : a.terms)
+      for (const auto &[db, pb] : b.terms)
         r.add(dmono_merge(da, db), pa * pb);
     return r;
   }
@@ -161,14 +161,14 @@ namespace numtracer::numeric
   {
     DPoly r(a.nsym);
     if (c.re == 0 && c.im == 0) return r;
-    r.t.reserve(a.t.size());
-    for (const auto &[d, mp] : a.t) {
+    r.terms.reserve(a.terms.size());
+    for (const auto &[d, mp] : a.terms) {
       // Direct coefficient scaling instead of `mp * constant(c)`: skips the n·m scratch and the dead
       // std::sort a constant multiply pays (see MPoly::scaled). Bit-identical (Cx multiply commutes
       // componentwise). Each stored `mp` is non-empty and `c != 0`, so `s` is non-empty; the guard is
       // kept for parity with the previous body.
       MPoly s = MPolyFactory::scaled(a.nsym, mp, c);
-      if (!s.empty()) r.t.push_back({d, std::move(s)});
+      if (!s.empty()) r.terms.push_back({d, std::move(s)});
     }
     return r;
   }
@@ -180,7 +180,7 @@ namespace numtracer::numeric
                  const std::vector<double> &drVal)
   {
     Cx s{0, 0};
-    for (const auto &[d, mp] : p.t) {
+    for (const auto &[d, mp] : p.terms) {
       double dm = 1.0;
       for (int id : d)
         dm *= drVal[id];

@@ -25,6 +25,7 @@
 #pragma once
 
 #include "numtracer/numeric/dpoly.hpp"
+#include "numtracer/core/envvar.hpp" // env_flag / env_int — the single truth test for NT_* switches
 #include "numtracer/numeric/mpoly.hpp"
 
 #include <algorithm>
@@ -64,11 +65,11 @@ namespace numtracer::numeric
 
   /// @brief Approximate heap footprint of a polynomial, for the trace-table RAM report. The table is
   ///        the one place this design trades memory for time, so the generator prints what it costs.
-  inline std::size_t poly_bytes(const MPoly &p) { return p.t.size() * sizeof(std::pair<Mono, Cx>); }
+  inline std::size_t poly_bytes(const MPoly &p) { return p.terms.size() * sizeof(std::pair<Mono, Cx>); }
   inline std::size_t poly_bytes(const DPoly &p)
   {
     std::size_t b = 0;
-    for (const auto &[d, m] : p.t)
+    for (const auto &[d, m] : p.terms)
       b += d.size() * sizeof(int) + poly_bytes(m);
     return b;
   }
@@ -115,7 +116,7 @@ namespace numtracer::numeric
 #if NT_PHASEA_STATS
   /// Print the merged phase-A counter/timer report plus the per-trace wall-time distribution.
   /// Stats builds only (see stats.hpp); called by contract_traces after the workers have joined, so
-  /// the counters hold exactly phase A. `NT_STATS_CSV=<path>` additionally dumps per-trace times.
+  /// the counters hold exactly phase A.
   inline void phasea_stats_report(const std::vector<double> &tsec, unsigned W)
   {
     const stats::PhaseACounters m = stats::merged();
@@ -167,14 +168,6 @@ namespace numtracer::numeric
     std::fprintf(stderr, "[stats] dirac: loops %llu (odd-skip %llu)  tokens %llu  4^f assignments %llu  mul2 %llu\n",
                  (unsigned long long)m.nd_calls, (unsigned long long)m.nd_odd_skip, (unsigned long long)m.nd_tokens,
                  (unsigned long long)m.nd_assign, (unsigned long long)m.mul2_calls);
-    if (const char *csv = std::getenv("NT_STATS_CSV")) {
-      if (std::FILE *fp = std::fopen(csv, "w")) {
-        std::fprintf(fp, "trace,seconds\n");
-        for (std::size_t k = 0; k < tsec.size(); ++k)
-          std::fprintf(fp, "%zu,%.9f\n", k, tsec[k]);
-        std::fclose(fp);
-      }
-    }
   }
 #endif // NT_PHASEA_STATS
 
@@ -301,6 +294,12 @@ namespace numtracer::numeric
 
   /// @brief PHASE B, driver — fold every net, in parallel over the nets.
   ///
+  /// TEST-ONLY. Codegen.m no longer emits a call to this: production goes through
+  /// @ref fold_groups_streaming, which folds each group on demand and drains straight to the sink so
+  /// no net polynomial outlives its group. This one materialises them all, which is exactly why it
+  /// makes a good reference — `tests/test_trace_fold.cpp` diffs the streaming fold against it and
+  /// requires bit-identity. Keep it, but do not mistake it for a live path.
+  ///
   /// Still net-parallel (unlike phase A), but that is fine here: the contraction is done, so a net's
   /// fold is proportional to its term count rather than to thousands of matrix products, and the
   /// merge in Codegen.m has already collapsed each net's repeated traces into one scalar apiece.
@@ -335,13 +334,7 @@ namespace numtracer::numeric
   /// per-net skew — and phase B must not give it up.
   inline long net_window(long nNet, unsigned W)
   {
-    static const long ov = [] {
-      if (const char *e = std::getenv("NT_GEN_GROUP_WINDOW")) {
-        const long x = std::atol(e);
-        if (x > 0) return x;
-      }
-      return 0L;
-    }();
+    static const long ov = env_int("NT_GEN_GROUP_WINDOW", 0); // 0 = no override, use the rule below
     if (nNet <= 0) return 0;
     if (ov > 0) return std::min(ov, nNet);
     return std::min(nNet, std::max<long>(64, 8L * static_cast<long>(W)));
@@ -493,17 +486,11 @@ namespace numtracer::numeric
     // a SAWTOOTH with a flat ceiling means the peak is the transient of the heaviest trace contraction
     // in a wave, which only a lower worker count can reduce; a climb that tracks wave size means the
     // window itself is the cost.
-    const bool wprof = [] {
-      const char *e = std::getenv("NT_GEN_PROFILE");
-      return e && e[0] == '2';
-    }();
+    const bool wprof = env_int("NT_GEN_PROFILE", 0) == 2;
     // Any-level profile: the phase-B wall is really three unlike costs — the parallel per-net fold,
     // the serial group-sum drain, and the serial lowering hiding inside `sink`. One fused number
     // cannot say which of them a slow flow is paying, so split them here.
-    const bool pprof = [] {
-      const char *e = std::getenv("NT_GEN_PROFILE");
-      return e && e[0] != '\0' && e[0] != '0';
-    }();
+    const bool pprof = env_flag("NT_GEN_PROFILE");
     double foldSec = 0.0, drainSec = 0.0, sinkSec = 0.0;
     using pclock = std::chrono::steady_clock;
     auto secsSince = [](pclock::time_point t0) { return std::chrono::duration<double>(pclock::now() - t0).count(); };

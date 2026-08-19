@@ -6,7 +6,7 @@
 /// @ref numtracer::network::rdetail::RBuilder: a growable array of real SSA instructions
 /// (@ref RInstr) with hash-consed value numbering — `find_or_add` returns the existing slot for
 /// an identical instruction instead of appending a duplicate. The `rconst`/`rvar`/`rneg`/`rmul`/
-/// `radd`/`rsub` helpers layer the cheap algebraic folds on top (`×0`/`×1`/`×(-1)`, `+0`,
+/// `radd` helper layers the cheap algebraic folds on top (`×0`/`×1`/`×(-1)`, `+0`,
 /// `-(-x)`, commutative operand ordering), so the emitted program is already free of trivial ops
 /// before it reaches the C++ printer in `codegen/gen.hpp`.
 ///
@@ -16,6 +16,7 @@
 #pragma once
 
 #include <bit>
+#include "numtracer/core/hash.hpp" // splitmix64_finalise / hash_combine
 #include <cstdint>
 #include <vector>
 
@@ -27,7 +28,6 @@ namespace numtracer::network
     RCONST, ///< Real constant (value in @ref RInstr::k).
     RVAR,   ///< Real variable (environment index in @ref RInstr::a).
     RADD,   ///< `a + b`.
-    RSUB,   ///< `a - b`.
     RMUL,   ///< `a * b`.
     RNEG    ///< `-a`.
   };
@@ -36,28 +36,11 @@ namespace numtracer::network
     int op = RCONST; ///< Opcode (one of @ref ROp).
     int a = -1;      ///< First operand slot; for `RVAR` this is the environment id.
     int b = -1;      ///< Second operand slot (binary ops only).
-    double k = 0;    ///< Constant value, for `RCONST`.
+    double value = 0; ///< Constant value, for `RCONST`.
   };
 
   namespace rdetail
   {
-    /// @brief splitmix64 finalizer — scrambles a 64-bit value (local copy; any hash serves, the
-    ///        emitted SSA depends only on insertion order, not on the hash).
-    constexpr std::uint64_t mix64(std::uint64_t x)
-    {
-      x ^= x >> 30;
-      x *= 0xbf58476d1ce4e5b9ULL;
-      x ^= x >> 27;
-      x *= 0x94d049bb133111ebULL;
-      x ^= x >> 31;
-      return x;
-    }
-    /// @brief Combine two hashes into one (boost-style mix; order-sensitive).
-    constexpr std::uint64_t hcomb(std::uint64_t a, std::uint64_t b)
-    {
-      return mix64(a ^ (b + 0x9e3779b97f4a7c15ULL + (a << 6) + (a >> 2)));
-    }
-
     // ---- hash-indexed buffer for the real SSA: no fixed capacity, O(1) amortised dedup -----
     // A dynamically growing instruction array so the real lowering has no capacity bound *and*
     // value-numbering stays O(w) (not O(w²)) as the real SSA grows.
@@ -68,12 +51,12 @@ namespace numtracer::network
 
       static constexpr std::uint64_t ihash(const RInstr &e)
       {
-        const std::uint64_t h = hcomb(hcomb(e.op, e.a), e.b);
-        return hcomb(h, std::bit_cast<std::uint64_t>(e.k));
+        const std::uint64_t h = hash_combine(hash_combine(e.op, e.a), e.b);
+        return hash_combine(h, std::bit_cast<std::uint64_t>(e.value));
       }
       static constexpr bool ieq(const RInstr &a, const RInstr &b)
       {
-        return a.op == b.op && a.a == b.a && a.b == b.b && a.k == b.k;
+        return a.op == b.op && a.a == b.a && a.b == b.b && a.value == b.value;
       }
       constexpr void rehash(std::size_t cap)
       {
@@ -108,44 +91,37 @@ namespace numtracer::network
     };
 
     /// @brief Emit a real constant, mapping `0` to the structural-zero sentinel (`-1`).
-    constexpr int rconst(RBuilder &w, double k) { return k == 0.0 ? -1 : w.find_or_add({RCONST, -1, -1, k}); }
+    constexpr int rconst(RBuilder &builder, double k) { return k == 0.0 ? -1 : builder.find_or_add({RCONST, -1, -1, k}); }
     /// @brief Emit a real variable (environment lookup).
-    constexpr int rvar(RBuilder &w, int id) { return w.find_or_add({RVAR, id, -1, 0}); }
+    constexpr int rvar(RBuilder &builder, int id) { return builder.find_or_add({RVAR, id, -1, 0}); }
     /// @brief Emit a negation, folding `-(const)` and cancelling `-(-x)`.
-    constexpr int rneg(RBuilder &w, int y)
+    constexpr int rneg(RBuilder &builder, int y)
     {
       if (y < 0) return -1;
-      if (w.ins[y].op == RCONST) return w.find_or_add({RCONST, -1, -1, -w.ins[y].k});
-      if (w.ins[y].op == RNEG) return w.ins[y].a;
-      return w.find_or_add({RNEG, y, -1, 0});
+      if (builder.ins[y].op == RCONST) return builder.find_or_add({RCONST, -1, -1, -builder.ins[y].value});
+      if (builder.ins[y].op == RNEG) return builder.ins[y].a;
+      return builder.find_or_add({RNEG, y, -1, 0});
     }
     /// @brief Emit a multiply, folding `×0`, `×1`, `×(-1)` and canonicalising operand order.
-    constexpr int rmul(RBuilder &w, int x, int y)
+    constexpr int rmul(RBuilder &builder, int x, int y)
     {
       if (x < 0 || y < 0) return -1;
-      if (w.ins[x].op == RCONST) {
-        if (w.ins[x].k == 1.0) return y;
-        if (w.ins[x].k == -1.0) return rneg(w, y);
+      if (builder.ins[x].op == RCONST) {
+        if (builder.ins[x].value == 1.0) return y;
+        if (builder.ins[x].value == -1.0) return rneg(builder, y);
       }
-      if (w.ins[y].op == RCONST) {
-        if (w.ins[y].k == 1.0) return x;
-        if (w.ins[y].k == -1.0) return rneg(w, x);
+      if (builder.ins[y].op == RCONST) {
+        if (builder.ins[y].value == 1.0) return x;
+        if (builder.ins[y].value == -1.0) return rneg(builder, x);
       }
-      return w.find_or_add({RMUL, x < y ? x : y, x < y ? y : x, 0});
+      return builder.find_or_add({RMUL, x < y ? x : y, x < y ? y : x, 0});
     }
     /// @brief Emit an addition, dropping structural-zero operands and canonicalising order.
-    constexpr int radd(RBuilder &w, int x, int y)
+    constexpr int radd(RBuilder &builder, int x, int y)
     {
       if (x < 0) return y;
       if (y < 0) return x;
-      return w.find_or_add({RADD, x < y ? x : y, x < y ? y : x, 0});
-    }
-    /// @brief Emit a subtraction, handling structural-zero operands.
-    constexpr int rsub(RBuilder &w, int x, int y)
-    {
-      if (y < 0) return x;
-      if (x < 0) return rneg(w, y);
-      return w.find_or_add({RSUB, x, y, 0});
+      return builder.find_or_add({RADD, x < y ? x : y, x < y ? y : x, 0});
     }
   } // namespace rdetail
 

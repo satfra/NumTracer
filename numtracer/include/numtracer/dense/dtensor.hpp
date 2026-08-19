@@ -72,7 +72,7 @@ namespace numtracer::dense
     DTensor<AX> out{};
     for (std::size_t r = 0; r < plan.nResult; ++r) {
       // free-axis base offsets into A and B for this result entry (computed once per r)
-      std::size_t cur_result_idx[core::kER] = {};
+      std::size_t cur_result_idx[core::kMaxAxisRank] = {};
       core::unflatten_mixed(r, plan.rdim, plan.RR, cur_result_idx);
       std::size_t baseA = 0, baseB = 0;
       for (int t = 0; t < plan.nFreeA; ++t)
@@ -80,7 +80,7 @@ namespace numtracer::dense
       for (int t = 0; t < plan.nFreeB; ++t)
         baseB += cur_result_idx[plan.nFreeA + t] * plan.strB[plan.fbAxis[t]];
       Cx acc{0, 0};
-      std::size_t cur_shared_idx[core::kER] = {};
+      std::size_t cur_shared_idx[core::kMaxAxisRank] = {};
       for (std::size_t s = 0; s < plan.nShared; ++s) {
         core::unflatten_mixed(s, plan.sdim, plan.nSh, cur_shared_idx);
         std::size_t offA = baseA, offB = baseB;
@@ -121,8 +121,8 @@ namespace numtracer::dense
   struct DynTensor {
     std::vector<Cx> data;              ///< Heap-backed row-major entries (all of them).
     int rank = 0;                      ///< Number of axes.
-    std::array<int, core::kER> ids{};  ///< Per-axis identities (first @ref rank valid).
-    std::array<int, core::kER> dims{}; ///< Per-axis extents (first @ref rank valid).
+    std::array<int, core::kMaxAxisRank> ids{};  ///< Per-axis identities (first @ref rank valid).
+    std::array<int, core::kMaxAxisRank> dims{}; ///< Per-axis extents (first @ref rank valid).
     /// @brief The rank-0 (scalar) result as a `Cx`.
     constexpr Cx scalar_value() const { return data[0]; }
     /// @brief The rank-0 (scalar) result as a `std::complex<double>`.
@@ -167,7 +167,7 @@ NT_BEGIN_NO_LOOP_VECTORIZE
   ///        typed @ref contract.
   constexpr void contract_into(DynTensor &out, detail::View a, detail::View b)
   {
-    std::array<int, core::kER> a_ids{}, a_dims{}, b_ids{}, b_dims{};
+    std::array<int, core::kMaxAxisRank> a_ids{}, a_dims{}, b_ids{}, b_dims{};
     for (int i = 0; i < a.rank; ++i) {
       a_ids[i] = a.ids[i];
       a_dims[i] = a.dims[i];
@@ -187,21 +187,21 @@ NT_BEGIN_NO_LOOP_VECTORIZE
     // Division-free odometers: instead of recomputing a mixed-radix decomposition (a modulo/divide
     // per axis) of r and s at every step — which dominated the runtime — precompute each axis's
     // flat-offset increment and walk the result- and shared-index counters by add/sub with carry.
-    std::size_t result_stride_a[core::kER] = {}, result_stride_b[core::kER] = {}; // result axis t -> stride into A / B (one is 0)
+    std::size_t result_stride_a[core::kMaxAxisRank] = {}, result_stride_b[core::kMaxAxisRank] = {}; // result axis t -> stride into A / B (one is 0)
     for (int t = 0; t < plan.nFreeA; ++t)
       result_stride_a[t] = plan.strA[plan.faAxis[t]];
     for (int t = 0; t < plan.nFreeB; ++t)
       result_stride_b[plan.nFreeA + t] = plan.strB[plan.fbAxis[t]];
-    std::size_t shared_stride_a[core::kER] = {}, shared_stride_b[core::kER] = {}; // shared axis k -> stride into A / B
+    std::size_t shared_stride_a[core::kMaxAxisRank] = {}, shared_stride_b[core::kMaxAxisRank] = {}; // shared axis k -> stride into A / B
     for (int k = 0; k < plan.nSh; ++k) {
       shared_stride_a[k] = plan.strA[plan.saAxis[k]];
       shared_stride_b[k] = plan.strB[plan.sbAxis[k]];
     }
 
-    int cur_result_idx[core::kER] = {};
+    int cur_result_idx[core::kMaxAxisRank] = {};
     std::size_t baseA = 0, baseB = 0;
     for (std::size_t r = 0; r < plan.nResult; ++r) {
-      int cur_shared_idx[core::kER] = {};
+      int cur_shared_idx[core::kMaxAxisRank] = {};
       std::size_t offA = baseA, offB = baseB;
       Cx acc{0, 0};
       for (std::size_t s = 0; s < plan.nShared; ++s) {
@@ -287,7 +287,7 @@ NT_BEGIN_NO_LOOP_VECTORIZE
   ///        alias either operand) — the eager structure-summation primitive.
   constexpr void add_into(DynTensor &out, detail::View a, detail::View b)
   {
-    std::array<int, core::kER> a_ids{}, a_dims{}, b_ids{}, b_dims{};
+    std::array<int, core::kMaxAxisRank> a_ids{}, a_dims{}, b_ids{}, b_dims{};
     for (int i = 0; i < a.rank; ++i) {
       a_ids[i] = a.ids[i];
       a_dims[i] = a.dims[i];

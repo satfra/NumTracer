@@ -16,7 +16,3 @@
 #include "numtracer/network/sun_net.hpp"
 #include "numtracer/codegen/gen.hpp"
 
-namespace numtracer::detail {
-/// Anchor symbol so the archive is never empty before/while the split is in progress.
-int numtracer_lib_anchor = 0;
-} // namespace numtracer::detail

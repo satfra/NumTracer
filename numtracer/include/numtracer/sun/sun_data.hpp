@@ -105,27 +105,6 @@ template <> struct SUNData<3> {
 template <> inline constexpr bool kHasSUNData<3> = true; ///< SU(3) data is tabulated.
 
 namespace sun_detail {
-/// @brief Compile-time lookup of a structure constant in the @ref numtracer::sun::SUNData table.
-/// @tparam N The colour group rank.
-/// @tparam a First adjoint index.
-/// @tparam b Second adjoint index.
-/// @tparam c Third adjoint index.
-/// @return @f$f^{abc}@f$ as a @ref numtracer::Cx (zero if absent from the table).
-template <int N, int a, int b, int c> constexpr Cx f_val() {
-  for (const auto &e : SUNData<N>::f_nonzeros)
-    if (e.a == a && e.b == b && e.c == c) return Cx{e.v, 0.0};
-  return Cx{0.0, 0.0};
-}
-/// @brief Compile-time lookup of a generator entry @f$(T^a)_{ij}@f$.
-/// @tparam N The colour group rank.
-/// @tparam a The adjoint (generator) index.
-/// @tparam i The row (fundamental) index.
-/// @tparam j The column (fundamental) index.
-/// @return @f$(T^a)_{ij}@f$ as a @ref numtracer::Cx.
-template <int N, int a, int i, int j> constexpr Cx gen_val() {
-  const auto z = SUNData<N>::generators[a].data[i * N + j];
-  return Cx{z.real(), z.imag()};
-}
 } // namespace sun_detail
 
 /// @brief The SU(N) sector: a runtime numeric oracle for the colour algebra.
@@ -145,9 +124,6 @@ public:
     build_generators();
     build_structure_constants();
   }
-  /// @brief The number of colours `N`.
-  /// @return `N`.
-  static constexpr int num_colors() { return N; }
   /// @brief The adjoint dimension.
   /// @return @f$N^2-1@f$.
   static constexpr int adj_dim() { return kAdjDim; }

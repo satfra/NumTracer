@@ -81,12 +81,12 @@ int main()
     for (const auto &f : chain)
       dchain.push_back(nm::dtfix(f));
     nm::DPoly dp = env.numeric_value_dressed(dchain, /*slots*/ {}, lor, comp, {});
-    bool oneTerm = (dp.size() == 1) && dp.t[0].first.empty();
-    bool mpEqual = oneTerm && (dp.t[0].second.t.size() == mp.t.size());
+    bool oneTerm = (dp.size() == 1) && dp.terms[0].first.empty();
+    bool mpEqual = oneTerm && (dp.terms[0].second.terms.size() == mp.terms.size());
     if (mpEqual)
-      for (std::size_t i = 0; i < mp.t.size(); ++i) {
-        const auto &dterm = dp.t[0].second.t[i];
-        const auto &mterm = mp.t[i];
+      for (std::size_t i = 0; i < mp.terms.size(); ++i) {
+        const auto &dterm = dp.terms[0].second.terms[i];
+        const auto &mterm = mp.terms[i];
         if (!(dterm.first == mterm.first) || dterm.second.re != mterm.second.re ||
             dterm.second.im != mterm.second.im) {
           mpEqual = false;
@@ -627,13 +627,13 @@ int main()
     bool sameKeys = (ref.size() == asmb.size());
     double coeffErr = 0.0;
     if (sameKeys)
-      for (std::size_t i = 0; i < ref.t.size(); ++i) {
-        if (ref.t[i].first != asmb.t[i].first) { sameKeys = false; break; }
-        const auto &ra = ref.t[i].second, &ab = asmb.t[i].second;
-        if (ra.t.size() != ab.t.size()) { sameKeys = false; break; }
-        for (std::size_t m = 0; m < ra.t.size(); ++m) {
-          if (!(ra.t[m].first == ab.t[m].first)) { sameKeys = false; break; }
-          coeffErr = std::max(coeffErr, cdiff(ra.t[m].second, ab.t[m].second));
+      for (std::size_t i = 0; i < ref.terms.size(); ++i) {
+        if (ref.terms[i].first != asmb.terms[i].first) { sameKeys = false; break; }
+        const auto &ra = ref.terms[i].second, &ab = asmb.terms[i].second;
+        if (ra.terms.size() != ab.terms.size()) { sameKeys = false; break; }
+        for (std::size_t m = 0; m < ra.terms.size(); ++m) {
+          if (!(ra.terms[m].first == ab.terms[m].first)) { sameKeys = false; break; }
+          coeffErr = std::max(coeffErr, cdiff(ra.terms[m].second, ab.terms[m].second));
         }
       }
     // value comparison: eval both at random points (the hard gate — never trust a byte/structural check
@@ -704,7 +704,7 @@ int main()
       sum = sum + env.var(i);
     bool orderOk = sum.size() == nsym;
     for (int i = 0; orderOk && i < nsym; ++i)
-      orderOk = sum.t[static_cast<std::size_t>(i)].first.e[nsym - 1 - i] == 1; // descending exponent order
+      orderOk = sum.terms[static_cast<std::size_t>(i)].first.e[nsym - 1 - i] == 1; // descending exponent order
 
     const bool ok = worst == 0 && powOk && orderOk;
     std::printf("  ab terms=%d worst=%.2e (%d/2000)  x7^40 exact=%d  cross-boundary order=%d  %s\n", ab.size(),
