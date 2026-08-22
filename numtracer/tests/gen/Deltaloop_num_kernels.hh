@@ -20,12 +20,11 @@ static inline double tr1([[maybe_unused]] const double *f) {
   return (4);
 }
 static inline double tr2([[maybe_unused]] const double *f) {
-  [[maybe_unused]] const double s0 = 1;
-  const double s1 = f[2];
-  const double s2 = f[1];
-  const double s3 = s1*s2;
-  const double s4 = f[0];
-  const double s5 = s3*s4;
-  return s5;
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s2 = s0*s1;
+  const double s3 = f[0];
+  const double s4 = s2*s3;
+  return s4;
 }
 }} // namespace numtracer_kernels::deltaloop_num

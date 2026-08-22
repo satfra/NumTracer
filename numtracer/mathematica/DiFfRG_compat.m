@@ -144,6 +144,11 @@ Options[MakeNTKernelDiFfRG] =
    are not even -- silently dropping the odd half of the Matsubara sum. The verdict has to come
    from the polynomials, which is where NumTracer proves it. *)
     "MatsubaraVar" -> Automatic,
+(* Passed straight through to MakeNTKernel; see the options there. Together they decide whether the
+   `matsubara_finite_extent` trait is emitted, i.e. whether DiFfRG replaces the Gaussian Matsubara rule
+   with the exact sum over the modes inside the regulator's support. *)
+    "DecayingRegulators" -> Automatic,
+    "MatsubaraFiniteExtent" -> Automatic,
     "IntegrationVariables" -> Automatic
     ,(* REQUIRED, e.g. {"l1","cos1"} *)
     "Parameters" -> Automatic
@@ -254,10 +259,11 @@ MakeNTKernelDiFfRG::mixtype = "Parameters declare more than one interpolator typ
 ntPatchHoistWrappers[kernelDir_String, name_String, m_Integer] :=
   Module[{kcls = name <> "_kernel<Regulator>", idxs, files, txt, patched, nPatched = 0, hdr, hdrTxt, hdrPatched},
     idxs = StringRiffle[("_nth[" <> ToString[#] <> "]")& /@ Range[0, m - 1], ", "];
-(* The scaffold's tuple forwarders in <name>.hh unpack the dressing tuple BY VALUE
-   (`const auto...t`), which is fine for the device path (the integrator copies into its own
-   tuple anyway) but hands ntHoisted COPIES — and a SplineInterpolator1D copy has no host
-   mirror, so .CPU() throws ("get_on() on a copied instance"). Unpack by reference instead. *)
+(* Older MakeKernel scaffolds unpacked the dressing tuple BY VALUE in the <name>.hh forwarders
+   (`const auto...t`), handing ntHoisted a full copy of every interpolator per call. Current
+   DiFfRG interpolators are shallow-copyable (Kokkos views, host AND device buffers survive a
+   copy), so this is no longer a correctness matter — but the copies are pure cost, and current
+   scaffolds already emit `const auto&...t`, in which case this rewrite is a no-op. *)
     hdr = FileNameJoin[{kernelDir, name <> ".hh"}];
     If[FileExistsQ[hdr],
       hdrTxt = Import[hdr, "Text"];
@@ -268,8 +274,9 @@ ntPatchHoistWrappers[kernelDir_String, name_String, m_Integer] :=
         hdrPatched =!= hdrTxt,
           Export[hdr, hdrPatched, "Text"],
         True,
-          Print["[NumTracer] ", name, ": WARNING — tuple-forwarder pattern not found in ",
-            hdr, "; the hoisted-lookup host evaluation may receive interpolator copies and throw."]]];
+          Print["[NumTracer] ", name, ": note — tuple-forwarder pattern not found in ",
+            hdr, "; the hoisted-lookup host evaluation may receive interpolator copies (a cost, ",
+            "not an error)."]]];
     files = FileNames[{"CT_map_*.cc", "CT_get.cc"}, FileNameJoin[{kernelDir, "src"}]];
     Do[
       txt = Import[f, "Text"];
@@ -458,7 +465,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
    kernels. *)
     $ntLastHoistCount = 0;
     If[TrueQ @ CheckAbort[
-         MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "DeviceTarget" -> (device === "GPU"), "Dressings" -> dress, "DressingType" -> dressTy, "ShareInterpolatorIndex" -> shareInterpIdx, "HoistLoopConstLookups" -> shareInterpIdx, "CrossTraceCSE" -> OptionValue["CrossTraceCSE"], "RealOutput" -> OptionValue["RealOutput"], "ComplexRuntimeProjection" -> OptionValue["ComplexRuntimeProjection"], "ComplexEndProjection" -> OptionValue["ComplexEndProjection"], "ScalarParams" -> scalarParams, "ADParams" -> adParams, "ParameterOrder" -> parameterOrder, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"], "MatsubaraVar" -> ntMatsubaraVar[OptionValue["MatsubaraVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
+         MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "DeviceTarget" -> (device === "GPU"), "Dressings" -> dress, "DressingType" -> dressTy, "ShareInterpolatorIndex" -> shareInterpIdx, "HoistLoopConstLookups" -> shareInterpIdx, "CrossTraceCSE" -> OptionValue["CrossTraceCSE"], "RealOutput" -> OptionValue["RealOutput"], "ComplexRuntimeProjection" -> OptionValue["ComplexRuntimeProjection"], "ComplexEndProjection" -> OptionValue["ComplexEndProjection"], "ScalarParams" -> scalarParams, "ADParams" -> adParams, "ParameterOrder" -> parameterOrder, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"], "MatsubaraVar" -> ntMatsubaraVar[OptionValue["MatsubaraVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]], "DecayingRegulators" -> OptionValue["DecayingRegulators"], "MatsubaraFiniteExtent" -> OptionValue["MatsubaraFiniteExtent"], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
          True,
          False],
       Null,
@@ -471,6 +478,78 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
       ntPatchHoistWrappers[kernelDir, name, $ntLastHoistCount]];
     kernelFile
   ];
+
+(* ============================================================================================
+   NTFlowGate — per-flow selection, so one derivation file can be sliced across processes.
+
+   A derivation file emits every flow it defines, top to bottom, in one kernel. That is fine until
+   the file is big: with_mesons/QCD.wl spends ~63% of a ~30 min regeneration on nine four-fermion
+   channels that differ only in a projector index. Nothing in the Wolfram layer is parallel (the
+   generator's own phases and its compile are, but they run later, under the `numtrace` target), so
+   the only lever on wall clock is to run the FILE several times over disjoint flow subsets.
+
+   That works because aggregation is filesystem-based: DiFfRG's UpdateFlows rebuilds
+   flows/CMakeLists.txt from `FileNames["*", flowDir, 1]`, not from an in-process registry. So the
+   workers need share nothing, and a single UpdateNTFlows afterwards — in any process — sees them all.
+
+   The gate must wrap the WHOLE flow, FunKit derivative and NumTrace included. Gating only the
+   MakeNTKernelDiFfRG call would skip the emission and still pay the front end, and that is not a
+   rounding error: measured on the four-fermion channels it is 35-43 s (of which NumTrace alone is
+   18-21 s), against a whole-flow cost of 83-210 s. Hence HoldRest.
+   ============================================================================================ *)
+
+(* The selection, re-read on every call (delayed, like every other env-derived flag here — with an
+   immediate `=` the value would latch at Get[] time and SetEnvironment from a driver .wls would
+   silently do nothing). All = no selection = emit everything, so an ungated file is unaffected. *)
+(* With, not Module: this runs once per gate per flow, and a Module would mint a fresh `s$nnn` each
+   time, bumping $ModuleNumber and renaming every Module local below the gates relative to an ungated
+   run. Nothing observable was traced to that -- the gate is byte-inert either way (verified: seven
+   flows regenerate identically to a serial run) -- but a scoping construct on a hot path should not
+   churn a global counter for a binding that is never captured. Matches ntEnvFlag in DSL.m. *)
+$ntFlowSelection :=
+  With[{s = Environment["NT_FLOWS"]},
+    If[! StringQ[s] || StringTrim[s] === "",
+      All,
+      DeleteCases[StringTrim /@ StringSplit[s, ","], ""]]];
+
+(* Names actually seen by a gate this run — the other half of the typo check. A selection entry that
+   matches no gate produces no output and no error, which is indistinguishable from a run that had
+   nothing to do; NTFlowSelectionReport turns that into a message. *)
+$ntFlowGateSeen = {};
+
+NTFlowSelectedQ[name_String] :=
+  With[{sel = $ntFlowSelection},
+    sel === All || MemberQ[sel, name]];
+
+(* Is this run a SLICE (a selection is in force) rather than the whole file? A derivation file uses
+   it to decide whether to run the final UpdateNTFlows itself: a slice must not, because the flows
+   its siblings are still writing are not on disk yet, and CMakeLists.txt is built from what IS. *)
+NTFlowSliceQ[] := $ntFlowSelection =!= All;
+
+SetAttributes[NTFlowGate, HoldRest];
+
+NTFlowGate[name_String, body_] := NTFlowGate[{name}, body];
+
+(* List form, for a block whose FRONT END is shared by several flows (etaPiL/zPiL take one FunKit
+   derivative and emit two kernels from it). Gate the block on the whole set and each emit on its own
+   name: selecting one of the pair then pays the shared derivative once and emits only what was asked
+   for, instead of forcing an all-or-nothing split of a block that is deliberately fused. *)
+NTFlowGate[names : {__String}, body_] :=
+  ($ntFlowGateSeen = Union[$ntFlowGateSeen, names];
+   If[AnyTrue[names, NTFlowSelectedQ],
+     body,
+     Print["[NumTracer] " <> StringRiffle[names, "/"] <> ": skipped (NT_FLOWS)"];
+     Null]);
+
+NTFlowSelectionReport::unmatched = "NT_FLOWS asked for `1`, which no NTFlowGate in this run matched — check the spelling against the gate names in the derivation file. Nothing was emitted for it.";
+
+NTFlowSelectionReport[] :=
+  With[{sel = $ntFlowSelection},
+    If[sel === All,
+      {},
+      With[{missing = Complement[sel, $ntFlowGateSeen]},
+        If[missing =!= {}, Message[NTFlowSelectionReport::unmatched, missing]];
+        missing]]];
 
 (* ============================================================================================
    UpdateNTFlows — DiFfRG UpdateFlows + idempotent NumTracer CMake patch (atomic).

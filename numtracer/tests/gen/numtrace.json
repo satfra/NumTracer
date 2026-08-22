@@ -1,17 +1,18 @@
 {
 	"name":"gen",
-	"class":"EtaPiL_num_kernel",
-	"namespace":"etapil_num",
+	"class":"ZA3_147_num_kernel",
+	"namespace":"za3_147_num",
 	"gen_dir":".",
-	"generator":"gen_qcd_etapil_num.cpp",
+	"generator":"gen_qcd_za3_147_num.cpp",
 	"units":[
-		"gen_qcd_etapil_num_u0.cpp",
-		"gen_qcd_etapil_num_u1.cpp",
-		"gen_qcd_etapil_num_u2.cpp",
-		"gen_qcd_etapil_num_u3.cpp",
-		"gen_qcd_etapil_num_u4.cpp",
-		"gen_qcd_etapil_num_u5.cpp",
-		"gen_qcd_etapil_num_u6.cpp"
+		"gen_qcd_za3_147_num_u0.cpp",
+		"gen_qcd_za3_147_num_u1.cpp",
+		"gen_qcd_za3_147_num_u2.cpp",
+		"gen_qcd_za3_147_num_u3.cpp",
+		"gen_qcd_za3_147_num_u4.cpp",
+		"gen_qcd_za3_147_num_u5.cpp",
+		"gen_qcd_za3_147_num_u6.cpp",
+		"gen_qcd_za3_147_num_u7.cpp"
 	],
 	"decorator":"static inline",
 	"main_opt":"-O1",
@@ -20,9 +21,9 @@
 	"maxw_b":0,
 	"device":false,
 	"complex":true,
-	"kernels":"EtaPiL_num_kernels.hh",
-	"probe":"probe_etapil_num.cpp",
-	"verdict_macro":"NT_ETAPIL_NUM_VERDICT",
+	"kernels":"ZA3_147_num_kernels.hh",
+	"probe":"probe_za3_147_num.cpp",
+	"verdict_macro":"NT_ZA3_147_NUM_VERDICT",
 	"verdict":"numtrace_verdict.hh",
 	"generated":1
 }

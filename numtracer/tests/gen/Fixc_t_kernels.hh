@@ -10,8 +10,8 @@ static inline void fill(double *f, [[maybe_unused]] double p0, [[maybe_unused]] 
   f[0] = p0;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s1 = f[0];
-  const double s2 = (4)*s1;
+  const double s0 = f[0];
+  const double s2 = s0*(4);
   return s2;
 }
 }} // namespace numtracer_kernels::fixc_t

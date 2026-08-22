@@ -219,10 +219,37 @@ namespace numtracer::network
 
   namespace gdetail
   {
+    /// @brief Traces at or below this monomial count have BOTH lowerings costed; larger ones are
+    ///        normalised unconditionally. `NT_GEN_NORM_GUARD_MAX` overrides: 0 switches the check OFF
+    ///        (nothing is `<= 0`, so everything normalises); a very large value costs both everywhere.
+    ///
+    /// Scalar normalisation is a large win on a trace with many repeated shapes and a small LOSS on
+    /// one with none. Measured: on the small fixtures nearly every trace grows ~5-10% (73 of 75 on the
+    /// vendored nf2 ZA4), while on the big flows nearly every trace shrinks (138 of 143 on
+    /// with_mesons/ZA4). Costing both arms and keeping the smaller makes the lever self-guarding, and
+    /// is why no regenerated kernel came out larger than its baseline. It is not free — it is a second
+    /// full Horner pass — so it is spent only where the regression actually lives and where that pass
+    /// is cheap; big traces reliably win and are the expensive ones to re-lower, so they skip it.
+    inline std::size_t norm_guard_max()
+    {
+      static const std::size_t m = [] {
+        const long v = env_int("NT_GEN_NORM_GUARD_MAX", -1);
+        return v >= 0 ? static_cast<std::size_t>(v) : static_cast<std::size_t>(2000);
+      }();
+      return m;
+    }
+
     /// Pick the cheapest Horner ordering of @p monos (costed on scratch builders), then replay it into
     /// @p builder (so several parts — e.g. a trace's real and imaginary halves — share one CSE stream). Returns
     /// the result slot in @p builder. Takes the monomials by value so the no-sweep path (numOrderings <= 1,
     /// i.e. every >2000-monomial trace) hands them straight to horner without a deep copy.
+    ///
+    /// The scalar of the normalised lowering (@ref NVal) is materialised HERE, via @ref scale_into, so
+    /// callers keep dealing in plain slots. Doing it at this one seam rather than at each `lower_into`
+    /// call site also covers the shared-builder (`CrossTraceCSE`) path, where the per-trace scaling has
+    /// to land inside the fused builder before the root is recorded. `scale_into` is likewise what keeps
+    /// a trace whose polynomial is a pure CONSTANT correct: its shape slot is negative, and handing that
+    /// to `rmul` — which reads a negative slot as structural zero — would silently emit `return 0.0;`.
     inline int best_into(std::vector<LMono> monos, rdetail::RBuilder &builder)
     {
       // The greedy Horner is order-sensitive, so we cost several deterministic orderings and keep the
@@ -230,6 +257,7 @@ namespace numtracer::network
       // monomials) the 8-way sweep dominates GENERATION while changing the op count only ~1% (the op count
       // tracks the monomial count, not the pivot order — see the noise-prune notes). So scale the sweep
       // down with the polynomial size; NT_GEN_HORNER_ORDERS=<n> overrides.
+      const bool norm = normhorner_enabled();
       std::size_t numOrderings = 8;
       if (const long v = env_int("NT_GEN_HORNER_ORDERS", 0); v > 0)
         numOrderings = static_cast<std::size_t>(v);
@@ -237,21 +265,42 @@ namespace numtracer::network
         numOrderings = 1;
       else if (monos.size() > 500)
         numOrderings = 3;
-      if (numOrderings <= 1) return horner(builder, std::move(monos)); // canonical (as-built) order only — no sweep
-      auto orders = make_orderings(monos, numOrderings);
-      if (numOrderings > orders.size()) numOrderings = orders.size();
-      std::size_t bestIdx = 0, bestOps = 0;
-      bool have = false;
-      for (std::size_t i = 0; i < numOrderings; ++i) {
-        rdetail::RBuilder scratch; // cost this ordering on a throwaway builder
-        horner(scratch, orders[i]);
-        if (!have || scratch.ins.size() < bestOps) {
-          bestOps = scratch.ins.size();
-          bestIdx = i;
-          have = true;
+
+      std::vector<LMono> chosen;
+      if (numOrderings <= 1)
+        chosen = std::move(monos); // canonical (as-built) order only — no sweep, no deep copy
+      else {
+        auto orders = make_orderings(monos, numOrderings);
+        if (numOrderings > orders.size()) numOrderings = orders.size();
+        std::size_t bestIdx = 0, bestOps = 0;
+        bool have = false;
+        for (std::size_t i = 0; i < numOrderings; ++i) {
+          rdetail::RBuilder scratch; // cost this ordering on a throwaway builder
+          scale_into(scratch, horner(scratch, orders[i], norm));
+          if (!have || scratch.ins.size() < bestOps) {
+            bestOps = scratch.ins.size();
+            bestIdx = i;
+            have = true;
+          }
         }
+        chosen = std::move(orders[bestIdx]);
       }
-      return horner(builder, std::move(orders[bestIdx]));
+
+      // Cost the strategies against each other and keep the smallest. Both levers are wins in
+      // aggregate but losses on individual traces with nothing to share, and this is what makes them
+      // self-guarding. Only traces at or below the guard size pay for the extra passes.
+      // Cost the two lowerings against each other and keep the smaller. Normalisation is a large win
+      // on a trace with many repeated shapes and a small loss on one with none, and this is what makes
+      // it self-guarding. The comparison is STRICT so a tie keeps the normalised form: flipping ties to
+      // the plain lowering would change the emitted kernel on those traces for no gain at all.
+      bool useNorm = norm;
+      if (norm && chosen.size() <= norm_guard_max()) {
+        rdetail::RBuilder sn, sp;
+        scale_into(sn, horner(sn, chosen, true));
+        scale_into(sp, horner(sp, chosen, false));
+        if (sp.ins.size() < sn.ins.size()) useNorm = false;
+      }
+      return scale_into(builder, horner(builder, std::move(chosen), useNorm));
     }
   } // namespace gdetail
 #endif // NUMTRACER_DEFINE_BODIES
@@ -291,8 +340,23 @@ namespace numtracer::network
       std::vector<int> use;       ///< total references: instruction operands + result roots
       std::vector<int> consumer;  ///< single consuming instruction, or -2 (root / >1 consumers)
       std::vector<char> fmaFold;  ///< MUL folded into its single ADD consumer
+      std::vector<char> negFold;  ///< NEG folded into its single ADD consumer (spelled as a subtract)
       std::vector<char> cInline;  ///< RCONST inlined at its single use site
     };
+
+    /// @brief Does @p r name an RNEG whose only consumer is the RADD @p c? Such a NEG is spelled as
+    ///        the minus of a subtraction at @p c instead of taking a declaration line of its own.
+    ///
+    /// `make_plan` (which sets the flag) and `emit_stmt` (which prints it) MUST agree on every
+    /// instance: a NEG marked folded but not actually consumed leaves a slot referenced and never
+    /// emitted. Both therefore reproduce the same operand preference, which is why this predicate —
+    /// and the order in which the two callers try `b` before `a` — is stated once, here.
+    inline bool neg_foldable(const std::vector<RInstr> &ins, const EmitPlan &pl, int r, int c)
+    {
+      return r >= 0 && r < static_cast<int>(ins.size()) &&
+             ins[static_cast<std::size_t>(r)].op == RNEG && pl.use[static_cast<std::size_t>(r)] == 1 &&
+             pl.consumer[static_cast<std::size_t>(r)] == c;
+    }
 
     inline EmitPlan make_plan(const std::vector<RInstr> &ins, const int *roots, std::size_t nroots)
     {
@@ -301,6 +365,7 @@ namespace numtracer::network
       pl.use.assign(ins.size(), 0);
       pl.consumer.assign(ins.size(), -2);
       pl.fmaFold.assign(ins.size(), 0);
+      pl.negFold.assign(ins.size(), 0);
       pl.cInline.assign(ins.size(), 0);
       auto touch = [&](int r, int c) {
         if (r < 0 || r >= n) return; // kRealProgram / -1 roots
@@ -326,6 +391,21 @@ namespace numtracer::network
         else if (foldable(ins[i].b, i))
           pl.fmaFold[ins[i].b] = 1;
       }
+      // Then fold a single-use NEG addend into the same ADD, so `x + (-y)` is spelled `x-y` and
+      // `fma(a,b,-y)` rather than costing a separate `const double s = -sy;` line. Runs AFTER the fma
+      // pass because which operand is left over as the addend depends on that choice.
+      for (int i = 0; i < n; ++i) {
+        if (ins[i].op != RADD) continue;
+        const int a = ins[i].a, b = ins[i].b;
+        const bool fa = a >= 0 && pl.fmaFold[a], fb = b >= 0 && pl.fmaFold[b];
+        if (fa || fb) {
+          const int addend = fa ? b : a;
+          if (neg_foldable(ins, pl, addend, i)) pl.negFold[addend] = 1;
+        } else if (neg_foldable(ins, pl, b, i))
+          pl.negFold[b] = 1;
+        else if (neg_foldable(ins, pl, a, i))
+          pl.negFold[a] = 1;
+      }
       for (int i = 0; i < n; ++i)
         if (ins[i].op == RCONST && pl.use[i] == 1) pl.cInline[i] = 1;
       return pl;
@@ -349,19 +429,24 @@ namespace numtracer::network
     /// plan folded it into its consumer. The opcode set lives here so the two writers cannot drift.
     inline void emit_stmt(std::ostream &out, const std::vector<RInstr> &ins, std::size_t i, const EmitPlan &pl)
     {
-      if (pl.fmaFold[i] || pl.cInline[i]) return;
+      if (pl.fmaFold[i] || pl.negFold[i] || pl.cInline[i]) return;
       const RInstr &in = ins[i];
       auto opnd = [&](int r) { emit_operand(out, ins, pl, r); };
-      // Emit `fma(a, b, c)` for a folded MUL (`mul` = a*b) and its addend. Only the `+` pattern
-      // exists: the SSA has no subtract opcode — a difference is RADD against an RNEG — so there is
-      // no `a*b - c` or `c - a*b` form to spell.
+      // Emit `fma(a, b, c)` for a folded MUL (`mul` = a*b) and its addend. The SSA has no subtract
+      // opcode — a difference is an RADD against an RNEG — so when that RNEG is single-use the minus
+      // is spelled here, as `fma(a, b, -c)`, instead of taking a line of its own.
       auto fma3 = [&](int mul, int addend) {
+        const bool neg = addend >= 0 && pl.negFold[static_cast<std::size_t>(addend)];
         out << "fma(";
         opnd(ins[static_cast<std::size_t>(mul)].a);
         out << ", ";
         opnd(ins[static_cast<std::size_t>(mul)].b);
         out << ", ";
-        opnd(addend);
+        if (neg) {
+          out << "-";
+          opnd(ins[static_cast<std::size_t>(addend)].a);
+        } else
+          opnd(addend);
         out << ")";
       };
       out << (pl.use[i] ? "  const double s" : "  [[maybe_unused]] const double s") << i << " = ";
@@ -377,7 +462,15 @@ namespace numtracer::network
           fma3(in.a, in.b);
         else if (in.b >= 0 && pl.fmaFold[static_cast<std::size_t>(in.b)])
           fma3(in.b, in.a);
-        else {
+        else if (in.b >= 0 && pl.negFold[static_cast<std::size_t>(in.b)]) {
+          opnd(in.a);
+          out << "-";
+          opnd(ins[static_cast<std::size_t>(in.b)].a);
+        } else if (in.a >= 0 && pl.negFold[static_cast<std::size_t>(in.a)]) {
+          opnd(in.b);
+          out << "-";
+          opnd(ins[static_cast<std::size_t>(in.a)].a);
+        } else {
           opnd(in.a);
           out << "+";
           opnd(in.b);

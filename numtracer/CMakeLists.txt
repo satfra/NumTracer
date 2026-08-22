@@ -259,6 +259,9 @@ if(NUMTRACER_BUILD_TESTS)
   add_executable(test_poly_cancel tests/test_poly_cancel.cpp)
   target_link_libraries(test_poly_cancel PRIVATE NumTracer::NumTracer)
 
+  add_executable(test_lowering_norm tests/test_lowering_norm.cpp)
+  target_link_libraries(test_lowering_norm PRIVATE NumTracer::NumTracer)
+
   # The device __noinline__ size gate. It was dead in production twice over, each time silently (a
   # dead gate emits a valid, merely all-inline kernel), so it needs a test that asserts it FIRES.
   # The gate caches its environment once per process on purpose, so the modes cannot share one — see
@@ -587,6 +590,7 @@ if(NUMTRACER_BUILD_TESTS)
   add_test(NAME guards COMMAND test_guards)
   add_test(NAME trace_fold COMMAND test_trace_fold)
   add_test(NAME poly_cancel COMMAND test_poly_cancel)
+  add_test(NAME lowering_norm COMMAND test_lowering_norm)
 
   # One process per mode: eff_decor reads NT_GEN_DEVICE / NT_GEN_NOINLINE_MIN /
   # NT_GEN_NOINLINE_TRACES once and caches them, because emission has to be consistent across every

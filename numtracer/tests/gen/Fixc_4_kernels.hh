@@ -18,16 +18,16 @@ static inline void fill(double *f, [[maybe_unused]] double p0, [[maybe_unused]] 
   f[4] = p0;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s1 = f[2];
-  const double s2 = (-4)*s1;
-  const double s3 = f[1];
-  const double s4 = s2*s3;
-  const double s6 = f[4];
-  const double s7 = (4)*s6;
-  const double s8 = f[3];
-  const double s10 = f[0];
-  const double s11 = s4*s10;
-  const double s12 = fma(s7, s8, s11);
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s2 = s0*s1;
+  const double s3 = f[4];
+  const double s4 = f[3];
+  const double s5 = s3*s4;
+  const double s6 = f[0];
+  [[maybe_unused]] const double s8 = -1;
+  const double s10 = fma(s2, s6, -s5);
+  const double s12 = s10*(-4);
   return s12;
 }
 }} // namespace numtracer_kernels::fixc_4

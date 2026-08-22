@@ -15,13 +15,12 @@ static inline double tr0([[maybe_unused]] const double *f) {
   return (1);
 }
 static inline double tr1([[maybe_unused]] const double *f) {
-  const double s1 = f[0];
-  const double s2 = (4)*s1;
+  const double s0 = f[0];
+  const double s2 = s0*(4);
   return s2;
 }
 static inline double tr2([[maybe_unused]] const double *f) {
-  [[maybe_unused]] const double s0 = 1;
-  const double s1 = f[1];
-  return s1;
+  const double s0 = f[1];
+  return s0;
 }
 }} // namespace numtracer_kernels::fixc_g

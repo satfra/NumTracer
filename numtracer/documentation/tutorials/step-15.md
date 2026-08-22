@@ -166,6 +166,60 @@ The `"Namespace"` option names the generator source file, not just the C++ names
 `"Namespace" -> "za_qcd"` overwrite each other's generator, and whichever ran last wins. The
 convention in the production tree is `ToLowerCase[Name] <> "_qcd"`.
 
+## Emitting a subset: `NTFlowGate`
+
+A derivation file emits every flow it defines, top to bottom, in one Wolfram kernel — and nothing on
+that path is parallel. The generator's own threaded phases and its compile happen later, under the
+`numtrace` target ([step-20](step-20.md)); the Wolfram side is a serial prefix to all of it. On
+`with_mesons/QCD.wl` that prefix is about half an hour, and 63% of it is the nine `lambda4L`
+channels, which differ only in a Fierz projector index.
+
+`NTFlowGate` lets one file be run several times over disjoint subsets:
+
+```mathematica
+NTFlowGate["ZA", Module[{fRG, tr, ntk}, … MakeNTKernelDiFfRG[ntk, "Name" -> "ZA", …]]];
+
+NTFlowGate[{"etaPiL", "zPiL"}, Module[{…},
+  (* front end shared by both *)
+  NTFlowGate["etaPiL", … MakeNTKernelDiFfRG[…]];
+  NTFlowGate["zPiL",   … MakeNTKernelDiFfRG[…]]]];
+```
+
+The selection is the `NT_FLOWS` environment variable, comma-separated; unset or empty selects
+everything, so adding gates changes nothing about an ordinary run. The list form gates a block whose
+front end several flows share: the block runs if *any* of its names is selected, and each inner gate
+decides whether that kernel is emitted.
+
+Two things make this work rather than merely look like it works.
+
+**The gate must wrap the whole flow.** `NTFlowGate` is `HoldRest` so that a skipped flow costs
+nothing. Wrapping only the `MakeNTKernelDiFfRG` call would skip the emission and still pay the
+`FTakeDerivatives` → `NumTrace` front end, which on the four-fermion channels is 35–43 s against a
+whole-flow cost of 83–210 s.
+
+**Aggregation is filesystem-based.** `UpdateFlows` builds `flows/CMakeLists.txt` from
+`FileNames["*", flowDir, 1]` — from what is on disk, not from an in-process registry. So the workers
+share nothing, and one `UpdateNTFlows` afterwards, in any process, sees them all. Which is also why a
+slice must *not* aggregate: while it runs, its siblings' flows are not written yet. Guard the call
+and report unmatched names at the bottom of the file:
+
+```mathematica
+NTFlowSelectionReport[];
+If[!NTFlowSliceQ[], UpdateNTFlows["QCDFlows"]];
+```
+
+`NTFlowSelectionReport[]` is not decoration. A misspelt `NT_FLOWS` entry emits nothing, prints
+nothing and exits 0 — indistinguishable from a run that had nothing to do. It turns that into a
+message, and `with_mesons/regen.sh` greps for it because the exit status will not.
+
+```{admonition} The ceiling is RAM, not cores
+:class: warning
+Measured on `with_mesons`: `lambda4L2` peaks at 7.4 GB resident in the WolframKernel, and `hPhiL` is
+larger. Two heavy flows at once already want ~15 GB. At the other end, all seven propagator and
+vertex flows emitted *together* in one kernel peak at 450 MB, so those will happily run eight at a
+time — pick the worker count per subset, not once for the file.
+```
+
 ## How a model consumes a flow
 
 From `no_mesons/model.hh`:
@@ -195,16 +249,18 @@ at every quadrature point for every grid momentum and writes the integral into t
 That is the whole interface. Everything NumTracer did — the trace, the lowering, the CSE — is behind
 `ZA_kernel::kernel(...)`, which the integrator calls and nothing else ever sees.
 
-```{admonition} An interpolator gotcha worth knowing
+```{admonition} Interpolators pick their own side
 :class: note
-`with_mesons` keeps **CPU-native twins** of every GPU interpolator for its TBB potential kernels,
-with this rationale:
+A DiFfRG interpolator has no `.CPU()` / `.GPU()` selector: `operator()` is a `KOKKOS_FUNCTION`
+that reads the host mirror or the device buffer depending on where it is executing
+(`KOKKOS_IF_ON_HOST` / `KOKKOS_IF_ON_DEVICE` inside), and `update()` leaves both current. So one
+instance serves flows on `"Device" -> "GPU"` and on `"TBB"` alike, and copying a handle is a
+shallow copy of Kokkos views rather than a rebuild.
 
-> Calling `.CPU()` on a GPU interpolator rebuilds a *shared* twin spline on every call
-> (`get_on()` does `other_instance->update(...)` each time) → **data race** across threads.
-
-If some of your flows run on `"Device" -> "GPU"` and some on `"TBB"`, the CPU ones need their own
-interpolator instances.
+Older DiFfRG kept CPU-native twins for exactly this — `with_mesons` did so for its TBB potential
+kernels, because `.CPU()` on a GPU interpolator rebuilt a *shared* twin spline per call and raced
+across threads. That is gone; NumTracer's hoisted host evaluator `ntHoisted()` just calls the
+interpolator directly.
 ```
 
 ## Possibilities for extensions

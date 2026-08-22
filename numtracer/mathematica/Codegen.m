@@ -3370,6 +3370,46 @@ ntShareInterpIndices[text_String, splines_List] :=
       " distinct interpolator arguments (", nrw, " lookups rewritten)"];
     StringRiffle[If[out === {}, lines, First[out]], "\n"]];
 
+(* FINITE MATSUBARA EXTENT. A finite-T kernel is a sum of terms, each carrying exactly one
+   dR/dt insertion, and it is that insertion -- not the propagators -- that decides how far the sum
+   reaches in frequency. Where the insertion's ARGUMENT is coercive in the Matsubara symbol, the
+   whole term dies super-polynomially in it, so `T Sum_n f(w_n)` is a FINITE sum: DiFfRG can
+   enumerate the modes inside the regulator's support instead of approximating the infinite sum with a
+   Gaussian rule. Below the crossover that is both exact and an order of magnitude cheaper.
+
+   Deliberately NOT keyed on the function name. `RBdot`/`RFdot` are defaults, and one model can
+   regulate four boson species through the same `RB` with four different arguments, or two fermion
+   species 4D and 3D. The name only identifies "this factor is the insertion"; whether it confines
+   the frequency is read off the argument, which is exactly the thing that differs. A 3D-regulated
+   species writes `RB[k^2, l1^2]`, has no `f0` in the argument, and classifies itself as unbounded
+   with no extra bookkeeping and no chance of the tag drifting out of sync with the algebra.
+
+   The insertion's DECAY SHAPE is the one thing the argument cannot tell us: a Callan-Symanzik
+   `R = k^2` confines nothing and `k^2/(1+x)` decays only algebraically, and against either the
+   polynomial growth of the traces the term does not vanish at all. That is a property of the
+   regulator, not of the diagram, so it is declared once per head via "DecayingRegulators" rather
+   than inferred. *)
+ntCoerciveInQ[a_, ms_Symbol] :=
+  With[{p = Expand[a]},
+    PolynomialQ[p, ms] && Exponent[p, ms] === 2 && TrueQ[Positive[N[Coefficient[p, ms, 2]]]]];
+
+(* True if `e` vanishes for large |ms|. Structural and conservative in the safe direction: a false
+   "unbounded" costs an optimisation, a false "finite extent" truncates the sum.
+     Plus  -- every summand must vanish (one surviving term is enough to ruin it),
+     Times -- ONE vanishing factor suffices, because the declared decay is super-polynomial and the
+              other factors (traces, propagators) grow at most polynomially,
+     Power -- a positive integer power of something vanishing still vanishes. *)
+ntFiniteExtentQ[e_, ms_Symbol, hs_List] :=
+  Which[
+    Head[e] === Plus, AllTrue[List @@ e, ntFiniteExtentQ[#, ms, hs] &],
+    Head[e] === Times, AnyTrue[List @@ e, ntFiniteExtentQ[#, ms, hs] &],
+    Head[e] === Power && IntegerQ[e[[2]]] && Positive[e[[2]]], ntFiniteExtentQ[e[[1]], ms, hs],
+    (* Matched by NAME, not by symbol identity: the caller's RBdot is Global`RBdot while this file
+       reads it from a package context, and MatsubaraVar already resolves its symbol the same way. *)
+    Length[e] >= 1 && Head[Head[e]] === Symbol && MemberQ[hs, SymbolName[Head[e]]],
+      ntCoerciveInQ[Last[e], ms],
+    True, False];
+
 ntKernelClass[name_, members_List, decor_, regTemplate_, regAlias_, extraPriv_List] :=
   FunKit`MakeCppClass[
     Sequence @@
@@ -3469,6 +3509,31 @@ Options[mkGenerateKernel] =
    instead of twice. None = not a finite-T flow, no trait, no check. DiFfRG_compat passes the last
    entry of "IntegrationVariables", which is where DiFfRG's own integrators put it. *)
     "MatsubaraVar" -> None,
+(* Regulator functions that DECAY super-polynomially in their momentum argument. A factor of one
+   of these, at a coercive argument, is what gives a finite-T summand finite extent in the
+   frequency; see ntFiniteExtentQ. Automatic = DiFfRG's six regulator wrappers.
+
+   All six, not just the `dot` pair. A DRESSED insertion is dt(Z R) = Zdot R + Z Rdot, so half of
+   every gluon/ghost term carries the regulator ITSELF and not its t-derivative:
+     dressing[Rdot,{A,A},1,..] :> ZA[evP] RBdot[k^2,q2] + RB[k^2,q2] (dtZA[evP] + ..)
+   Listing only RBdot/RFdot made that half unclassifiable and every flow came out unbounded --
+   including the pure-gauge ones, whose every term does die with the regulator. RB dying is also
+   what makes the term die, so it belongs here.
+
+   Only a factor in a PRODUCT counts. `RB` inside a propagator denominator reaches ntFiniteExtentQ
+   as Power[q2 + RB[..], -1], which it does not treat as vanishing -- correctly, since a decaying
+   denominator makes the term GROW.
+
+   A model whose regulator decays only algebraically (k^2/(1+x)), or not at all (Callan-Symanzik
+   R = k^2), must list NOTHING here: then no `matsubara_finite_extent` trait is emitted and the
+   Gaussian rule is kept. The ARGUMENTS are never configured -- they are read off each occurrence,
+   which is what lets one `RB` serve a 4D- and a 3D-regulated species at once. *)
+    "DecayingRegulators" -> Automatic,
+(* Automatic = derive the `matsubara_finite_extent` trait from the algebra (the normal path). True/False
+   force it, for a model that knows better than the syntactic test or wants to price the exact
+   exact sum against the Gaussian rule on the same kernel. Forcing True on a kernel whose summand does
+   NOT die above the regulator's support silently truncates the Matsubara sum. *)
+    "MatsubaraFiniteExtent" -> Automatic,
     "RuntimeInclude" -> "numtracer/codegen/runtime.hpp",
     "ExtraIncludes" -> {},
     "KernelNamespace" -> "numtracer_kernels",
@@ -4178,7 +4243,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    and so became NumTracer`Private` globals that survive ACROSS generations. Every path assigns
    them, so there was no bug today; but that is the outer-declare/inner-assign hazard one level
    worse, and it is the same class as the `diagData` note above. Declared. *)
-    hoistCalls = {}, hoistSyms = {}, hoistFnStr = "", mVarIdx = -1, mEvenBody = False, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
+    hoistCalls = {}, hoistSyms = {}, hoistFnStr = "", mVarIdx = -1, mSym = None, mEvenBody = False, mFiniteExtentBody = False, mSplit = False, feExpr = 0, tailExpr = 0, splitFns = {}, mkKernelFnNamed, timedBodyNamed, bodyFor, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
 (* diagData lives HERE, in the outer Module, not in the net-build Module below that assigns it.
    It used to be declared local to that inner Module (which spans the net-build loop and closes
    right after the `integrand` Sum), while `pruneG` reads it AFTER that close. Out of scope there,
@@ -4294,28 +4359,50 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
         symDefs = Join[ad, ud];
         numericComponents[env, pf, symDefs, ug]];]},
       ntLog["[prof] numericComponents + frame spec: ", ntT, " s"]];
-(* MPoly var index of the Matsubara frequency, matched by name against the FRAME's symbols (-1 =
-   option unset, i.e. not a finite-T flow). Everything downstream keys off this one number: >= 0
-   turns on the generator's evenness proof and the trait emission. *)
-    mVarIdx =
+(* The Matsubara frequency, resolved twice for two different consumers.
+
+   `mSym` is the SYMBOL, and everything decided on THIS side of the fence keys off it: the evenness
+   test on the integrand and the finite-extent partition further down only ever need to know which
+   symbol to look for.
+
+   `mVarIdx` is that symbol's MPoly variable index, and ONLY the generator needs it — it proves
+   evenness of the TRACES from their monomial exponents. -1 means "not a momentum-component
+   variable", which is NOT an error: a purely SCALAR integrand (a bosonic meson-potential tadpole,
+   say) has an empty 4-vector component env, so `usyms` is empty and no frame symbol can be found
+   there — while the kernel still depends on the frequency through its propagator denominators and
+   regulator arguments, which live in the COEFFICIENT. Keying the traits off `usyms` alone is what
+   used to silently drop `matsubara_finite_extent` on exactly those flows (measured on a sigma
+   tadpole: 1 net, tr0 == 1, nenv == 0, every regulator argument f0^2 + l1^2 and so provably of
+   finite extent — yet it fell back to the Gaussian rule and got no trait at all).
+
+   The lookup therefore spans the frame's symbols AND the kernel's own fill arguments. *)
+    mSym =
       With[{mv = OptionValue["MatsubaraVar"]},
         If[mv === None || mv === Automatic,
-          -1,
-          With[{pos = Position[ncomp["usyms"], s_Symbol /; SymbolName[s] === ToString[mv], {1}]},
-            If[pos === {}, -2, pos[[1, 1]] - 1]]]];
-(* A NAME THAT MATCHES NOTHING IS AN ERROR, not a quiet -1. Silently doing nothing is how the
+          None,
+          With[{cands = Select[Join[ncomp["usyms"], fillArgs], SymbolName[#] === ToString[mv]&]},
+            If[cands === {}, $Failed, First[cands]]]]];
+(* A NAME THAT MATCHES NOTHING IS AN ERROR, not a quiet None. Silently doing nothing is how the
    __noinline__ gate stayed dead for months: the caller asked for an optimisation, got a valid
    kernel without it, and had no way to tell. Say so, loudly, and name the symbols that exist. *)
-    If[mVarIdx === -2,
+    If[mSym === $Failed,
       Print["[NumTracer] WARNING: \"MatsubaraVar\" -> ", OptionValue["MatsubaraVar"],
-        " does not name any symbol in this flow's frame, so no evenness check was run and no ",
-        "`matsubara_even` trait will be emitted. The frame's symbols are: ", ncomp["usyms"],
+        " names neither a frame symbol nor a kernel fill argument, so no evenness check was run ",
+        "and no Matsubara trait will be emitted. The frame's symbols are: ", ncomp["usyms"],
+        ", the fill arguments are: ", fillArgs,
         ". (The integration-variable name DiFfRG uses, e.g. \"f\", is often NOT the frame symbol, ",
         "e.g. \"f0\" — this option wants the frame symbol.)"];
-      mVarIdx = -1];
-    If[mVarIdx >= 0,
-      ntLog["[matsubara] frequency symbol ", OptionValue["MatsubaraVar"], " = MPoly var ", mVarIdx,
-        " — evenness will be proven at generation time"]];
+      mSym = None];
+    mVarIdx =
+      If[mSym === None,
+        -1,
+        With[{pos = Position[ncomp["usyms"], mSym, {1}]}, If[pos === {}, -1, pos[[1, 1]] - 1]]];
+    If[mSym =!= None,
+      ntLog["[matsubara] frequency symbol ", mSym, " = ",
+        If[mVarIdx >= 0,
+          "MPoly var " <> ToString[mVarIdx] <> " — trace evenness will be proven at generation time",
+          "not a momentum-component variable (scalar integrand) — the traces carry no MPoly " <>
+            "variable, so the traits are decided entirely here"]]];
 (* [[maybe_unused]]: a frame may not reference every fill() argument (e.g. an angle or dressing atom
    that only some diagrams use), so mark each parameter to keep the emitted kernel -Wunused-clean. *)
     fillArgSig = StringRiffle[("[[maybe_unused]] double " <> SymbolName[#])& /@ fillArgs, ", "];
@@ -4672,7 +4759,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    substitution and the kernel signature is branch-independent.
    NOT bit-identical: host libm log/exp differ from device libdevice in the last ulp, so this is
    gated at the physics level (observables + dressing sweeps), not bitwise.
-   Opt-in (DiFfRG_compat.m enables it after checking the dressing types expose .CPU());
+   Opt-in (DiFfRG_compat.m enables it after checking the dressing types are DiFfRG interpolators);
    NT_GEN_NO_KHOIST=1 is the A/B control. *)
     hoistCalls = {};
     hoistSyms = {};
@@ -4851,9 +4938,12 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
       constParams = Join[mkParam[#, "double"]& /@ Select[args, constArgQ], runtimeParams, mkParam[#, "double"]& /@ hoistSyms];
 (* the host-side evaluator for the hoisted k-only lookups. The DiFfRG wrapper (patched by
    DiFfRG_compat.m) calls it once per map()/get() invocation and appends its results to the
-   integrator call, in hoistSyms order. Host-only by construction (.CPU()); the expressions are
-   the SAME CppForm lowering the kernel would have used, so semantics differ from the in-kernel
-   evaluation only by host-libm-vs-libdevice last-ulp rounding. *)
+   integrator call, in hoistSyms order. The lookups are written as plain `h(x)` calls: a DiFfRG
+   interpolator's operator() is KOKKOS_FUNCTION and picks the host or the device buffer itself
+   (KOKKOS_IF_ON_HOST / KOKKOS_IF_ON_DEVICE inside), so calling it from this un-decorated — hence
+   host — function reads the host mirror with no explicit .CPU()/.GPU() selector; those members no
+   longer exist. The expressions are the SAME CppForm lowering the kernel would have used, so
+   semantics differ from the in-kernel evaluation only by host-libm-vs-libdevice last-ulp rounding. *)
       hoistFnStr =
         If[hoistCalls === {},
           None,
@@ -4861,7 +4951,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
             hkParams = Join[
               mkParam[#, "double"]& /@ Select[args, # === Global`k&],
               runtimeParams];
-            vals = (SymbolName[Head[#]] <> ".CPU()(" <> cppFlat[#[[1]]] <> ")")& /@ hoistCalls;
+            vals = (SymbolName[Head[#]] <> "(" <> cppFlat[#[[1]]] <> ")")& /@ hoistCalls;
             "static device::array<double, " <> ToString[Length[hoistCalls]] <> "> ntHoisted(" <>
               StringRiffle[FunKit`MakeParameterString /@ hkParams, ", "] <> ")\n{\n  " <>
               StringRiffle[ntSupportUsings[sns], "\n  "] <> "\n  return {{" <>
@@ -4885,6 +4975,41 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
       If[bad =!= {},
         Print["[NumTracer] ERROR: the integrand is not numeric — it contains ", Length[bad], " ", "Indeterminate/Infinity value(s), which would be emitted as bare Mathematica symbols in ", "the generated C++ (e.g. `return Indeterminate;`).\n", "  This almost always means a SINGULAR Gram at the chosen kinematics: the basis's ", "structures are linearly dependent there, so the inverse metric — and every dual ", "projector built from it — carries 0/0. Check Det[TBGetMetric[basis]] under the frame's ", "kinematics (e.g. the symmetric point), and project with a restricted sub-basis whose ", "Gram is non-degenerate. Offending value(s): ", Short[DeleteDuplicates[bad], 4]];
         Abort[]]];
+(* FINITE-EXTENT PARTITION. The kernel is a flat sum of per-diagram terms, so classification is a
+   Select, not a rewrite. Three outcomes:
+
+     every term finite extent -> `matsubara_finite_extent` on the whole kernel (the pure-gauge case,
+                                 and every flow while the quark is still 4D-regulated),
+     no term finite extent    -> nothing; the Gaussian rule as before,
+     MIXED                    -> emit BOTH halves as separate C++ entry points and let the
+                                 integrator run each on the rule that suits it.
+
+   The mixed case is the one that pays. A term's cost is dominated by the ONE trace it calls, and
+   those are wildly unequal: ZA4's six terms carry tr0..tr5 at 2918/609/../313 lines, and the single
+   unbounded term (the quark loop) is the 313-line one. Splitting puts the 2918-line trace on ~7
+   exact modes and leaves only the cheap one running the full ~70-node Gaussian rule. COEN's CSE is
+   per-function, so each half's body computes only the traces and interpolator lookups it actually
+   uses -- that pruning is where the saving comes from, and it is automatic. *)
+    With[{ms0 = mSym,
+          hs0 = (If[Head[#] === Symbol, SymbolName[#], ToString[#]] & ) /@
+                  Flatten[{Replace[OptionValue["DecayingRegulators"],
+                    Automatic -> {"RB", "RF", "RBdot", "RFdot", "dq2RB", "dq2RF"}]}],
+          forced = OptionValue["MatsubaraFiniteExtent"]},
+      Which[
+        mSym === None, Null,
+        forced =!= Automatic,
+          mFiniteExtentBody = TrueQ[forced],
+        True,
+          Module[{terms, feT, tlT},
+            terms = If[Head[integrand] === Plus, List @@ integrand, {integrand}];
+            feT = Select[terms, ntFiniteExtentQ[#, ms0, hs0] &];
+            tlT = Select[terms, ! ntFiniteExtentQ[#, ms0, hs0] &];
+            mFiniteExtentBody = (tlT === {}) && (feT =!= {});
+            mSplit = (feT =!= {}) && (tlT =!= {});
+            If[mSplit, feExpr = Total[feT]; tailExpr = Total[tlT]];
+            ntLog["[matsubara] ", Length[terms], " term(s), ", Length[feT], " of finite extent",
+              If[mSplit, " -- emitting a split kernel", ""]]]]];
+
 (* the integrand -> C++ lowering (FunKit). Timed separately: it is the one heavy stage between the
    net-build and the generator emit, so without this the [prof] trail has a blind spot. *)
     With[{ntT =
@@ -4899,51 +5024,64 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    preprocessor pick is what lets the whole generation run offline, as a build step. Each body goes
    through its own MakeCppFunction so COEN's CSE spans the whole expression, exactly as when Mathematica
    used to re-lower the single chosen one after the probe. *)
-          mkKernelFn = Function[expr, ntShareInterpIndices[FunKit`MakeCppFunction[expr, "Name" -> "kernel", "Prefix" -> decor, "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble], If[TrueQ[OptionValue["ShareInterpolatorIndex"]], dress, {}]]];
+          mkKernelFnNamed = Function[{nm, expr}, ntShareInterpIndices[FunKit`MakeCppFunction[expr, "Name" -> nm, "Prefix" -> decor, "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble], If[TrueQ[OptionValue["ShareInterpolatorIndex"]], dress, {}]]];
+          mkKernelFn = Function[expr, mkKernelFnNamed["kernel", expr]];
 (* Per-body timing. The aggregate [prof] line above also covers constFn, the class and the header, so
    the cost of one BODY — which is what "RealOutput" removes — is invisible in it. Without this the
    only evidence for the option's value would be the downstream report's numbers. *)
-          timedBody = Function[{label, expr},
-            Module[{t, res}, {t, res} = AbsoluteTiming[mkKernelFn[expr]];
-              ntLog["[prof]   body ", label, ": ", t, " s"]; res]];
+          timedBodyNamed = Function[{nm, label, expr},
+            Module[{t, res}, {t, res} = AbsoluteTiming[mkKernelFnNamed[nm, expr]];
+              ntLog["[prof]   body ", nm, "/", label, ": ", t, " s"]; res]];
+          timedBody = Function[{label, expr}, timedBodyNamed["kernel", label, expr]];
           realOut = TrueQ[OptionValue["RealOutput"]];
-          kernelFn =
+          bodyFor = Function[{nm, expr},
             If[!complexQ,
-              timedBody["real", integrand],
+              timedBodyNamed[nm, "real", expr],
             If[endProject,
 (* END-PROJECTION mode: build exactly one body, keep the complete assembled expression complex,
    and return its real part at the final C++ level. This avoids the symbolic Pure/RePart projection
    and the probe/verdict machinery. The price is runtime complex arithmetic; the benefit is much
    cheaper Mathematica lowering for finite-density denominators. *)
-              timedBody["EndRe", Global`ntRe[integrand]],
+              timedBodyNamed[nm, "EndRe", Global`ntRe[expr]],
 (* REAL-OUTPUT mode: the consumer takes a double, so the untouched complex body can never be
-   instantiated — and it is the expensive one to lower (COEN CSEs the full complex expression). Emit
+   instantiated -- and it is the expensive one to lower (COEN CSEs the full complex expression). Emit
    the two real projections only. Verdict 0 then falls through to RePart, which is a TRUNCATION of the
    flow equation, not an identity: the imaginary part is discarded pointwise. It is a legitimate thing
-   to ask for — Re of the integral is often what the physics wants, and Im can integrate to zero over
-   the loop angle even where it is nonzero pointwise — but it must never happen silently, hence the
+   to ask for -- Re of the integral is often what the physics wants, and Im can integrate to zero over
+   the loop angle even where it is nonzero pointwise -- but it must never happen silently, hence the
    #warning. It has to be a PREPROCESSOR warning rather than an ntLog: for a DiFfRG flow "Offline" is
    the default, so the probe runs at `make numtrace` time and the verdict is simply not known here.
    NOT the default, and MakeNTKernelDiFfRG does not set it either: opting into a truncation is the
-   consumer's decision to make explicitly. *)
+   consumer's decision to make explicitly.
+   The warning rides on the MAIN body only -- a split flow emits three functions from the same
+   expression and the preprocessor would otherwise print the same warning three times. *)
               If[realOut,
-                StringRiffle[{
+                StringRiffle[Flatten @ {
                   "#if " <> verdictMacro <> " == 2   // Pure: the Complex -> Re projection is exact",
-                  timedBody["Pure", ntPureIntegrand[integrand]],
+                  timedBodyNamed[nm, "Pure", ntPureIntegrand[expr]],
                   "#else                              // 1 = RePart; 0 = complex, truncated by RealOutput",
-                  "#  if " <> verdictMacro <> " == 0",
-                  "#    warning \"NumTracer: flow '" <> ns <> "' probed GENUINELY COMPLEX (verdict 0) but was generated with RealOutput -> True. The kernel returns only the real part; the imaginary part of the integrand is discarded. That is a truncation of the flow equation, not an identity. If it is not what you intended, regenerate without RealOutput and give the consumer a complex integrator.\"",
-                  "#  endif",
-                  timedBody["RePart", ntRePartIntegrand[integrand]],
+                  If[nm === "kernel",
+                    {"#  if " <> verdictMacro <> " == 0",
+                     "#    warning \"NumTracer: flow '" <> ns <> "' probed GENUINELY COMPLEX (verdict 0) but was generated with RealOutput -> True. The kernel returns only the real part; the imaginary part of the integrand is discarded. That is a truncation of the flow equation, not an identity. If it is not what you intended, regenerate without RealOutput and give the consumer a complex integrator.\"",
+                     "#  endif"},
+                    {}],
+                  timedBodyNamed[nm, "RePart", ntRePartIntegrand[expr]],
                   "#endif"}, "\n"],
                 StringRiffle[{
                   "#if " <> verdictMacro <> " == 2   // Pure: the Complex -> Re projection is exact",
-                  timedBody["Pure", ntPureIntegrand[integrand]],
+                  timedBodyNamed[nm, "Pure", ntPureIntegrand[expr]],
                   "#elif " <> verdictMacro <> " == 1   // RePart: real value via complex trace(s), re/im split",
-                  timedBody["RePart", ntRePartIntegrand[integrand]],
+                  timedBodyNamed[nm, "RePart", ntRePartIntegrand[expr]],
                   "#else                              // the imaginary part survives: genuinely complex",
-                  timedBody["Complex", integrand],
-                  "#endif"}, "\n"]]]];
+                  timedBodyNamed[nm, "Complex", expr],
+                  "#endif"}, "\n"]]]]];
+          kernelFn = bodyFor["kernel", integrand];
+(* The two halves are lowered from the SAME machinery as the full body, so a complex flow gets its
+   #if ladder in each of them and the verdict macro keeps meaning one thing across all three. *)
+          splitFns =
+            If[TrueQ[mSplit],
+              {bodyFor["kernel_finite_extent", feExpr], bodyFor["kernel_tail", tailExpr]},
+              {}];
           constFn = ntConstFn[OptionValue["Constant"], decor, constParams, sns];
 (* MATSUBARA EVENNESS, second half. The generator proves it for the TRACES; this proves it for
    everything else the kernel body does with the frequency — dressing arguments, regulator
@@ -4960,18 +5098,48 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    The two halves are combined in C++ rather than here: this side decides whether to emit the
    member at all, the generator's constant supplies its value. An absent member reads as false
    through DiFfRG's `requires K::matsubara_even` trait, which is exactly the fallback we want. *)
-          mEvenBody =
-            mVarIdx >= 0 &&
-              With[{ms = ncomp["usyms"][[mVarIdx + 1]]},
-                FreeQ[integrand /. Power[ms, e_Integer /; EvenQ[e]] :> 1, ms]];
-          If[mVarIdx >= 0 && !mEvenBody,
-            ntLog["[matsubara] kernel body uses ", ncomp["usyms"][[mVarIdx + 1]],
-              " at an odd power (or inside a shifted dressing argument) — no matsubara_even trait"]];
+(* The even-power strip, used on the COEFFICIENT here and on the trace env's atom definitions
+   below. `Sqrt[f0^2 + l1^2]` passes (the inner f0^2 is stripped); a bare f0, or a fermionic
+   dressing at a shifted argument like ZQ[f0 + p0], does not. *)
+          With[{evenFreeQ = Function[{e, ms}, FreeQ[e /. Power[ms, n_Integer /; EvenQ[n]] :> 1, ms]]},
+            mEvenBody =
+              mSym =!= None && evenFreeQ[integrand, mSym] &&
+(* When mVarIdx >= 0 the trace side is the GENERATOR's job and its verdict is what the emitted
+   member reads. When it is < 0 the traces carry no MPoly variable at all, so the only way they
+   could still see the frequency is through a trace-env atom (a dressing evaluated at a shifted
+   argument) — check those here, because no generator-side proof will be emitted to cover them. *)
+                (mVarIdx >= 0 || AllTrue[Values[symDefs], evenFreeQ[#, mSym]&]);
+            If[mSym =!= None && !mEvenBody,
+              ntLog["[matsubara] kernel body uses ", mSym,
+                " at an odd power (or inside a shifted dressing argument) — no matsubara_even trait"]]];
+          If[mSym =!= None,
+            ntLog["[matsubara] decaying regulators: ",
+              Replace[OptionValue["DecayingRegulators"],
+                Automatic -> {"RB", "RF", "RBdot", "RFdot", "dq2RB", "dq2RF"}],
+              " — finite extent in ", mSym, ": ",
+              Which[
+                TrueQ[mSplit], "split — kernel_finite_extent on the exact sum, kernel_tail on the Gaussian rule",
+                TrueQ[mFiniteExtentBody], "yes — emitting matsubara_finite_extent (exact Matsubara sum)",
+                True, "no — the Matsubara sum keeps the Gaussian rule"]]];
 (* ntRe/ntIm are needed by both real branches, so a complex flow always carries them. *)
           classStr = ntKernelClass[name,
             Join[
+(* The VALUE comes from the generator's monomial-exponent proof of the traces — but the generator
+   only emits that constant when the frequency is an MPoly variable (mVarIdx >= 0). For a scalar
+   integrand there is no such variable and no such constant: the traces are MPoly-constant in the
+   frequency and the atom check above has already cleared the trace env, so the verdict is a
+   literal true. Referencing the absent namespace constant here would simply fail to compile. *)
               If[TrueQ[mEvenBody],
-                {"static constexpr bool matsubara_even = " <> kns <> "::" <> ns <> "::matsubara_even;"},
+                {"static constexpr bool matsubara_even = " <>
+                   If[mVarIdx >= 0, kns <> "::" <> ns <> "::matsubara_even", "true"] <> ";"},
+                {}],
+              If[TrueQ[mFiniteExtentBody],
+                {"static constexpr bool matsubara_finite_extent = true;"},
+                {}],
+(* MIXED flow: two entry points instead of one. `kernel` stays and is still the whole thing -- it is
+   what a consumer without the split machinery calls, and what the split is checked against. *)
+              If[TrueQ[mSplit],
+                Prepend[splitFns, "static constexpr bool matsubara_split = true;"],
                 {}],
               {kernelFn, constFn},
               If[hoistFnStr === None, {}, {hoistFnStr}]],
@@ -5259,7 +5427,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    the fundamental symbols and calls the traces. Options are forwarded to the generator
    (see Options[mkGenerateKernel] for the set). *)
 
-Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "ParameterOrder" -> Automatic, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "ComplexRuntimeProjection" -> False, "ComplexEndProjection" -> False, "RealOutput" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None};
+Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "ParameterOrder" -> Automatic, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "ComplexRuntimeProjection" -> False, "ComplexEndProjection" -> False, "RealOutput" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None, "DecayingRegulators" -> Automatic, "MatsubaraFiniteExtent" -> Automatic};
 
 MakeNTKernel::nfiles = "MakeNTKernel needs three output files: MakeNTKernel[ntk, genFile, kernelFile, tracesFile].";
 

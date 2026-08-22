@@ -43,10 +43,26 @@ BASE_VARS = ("l1", "cos1", "cos2", "cos3", "phi", "p", "k")
 NODE_VARS = {"l1", "cos1", "cos2", "cos3", "phi"}
 
 STMT_RE = re.compile(r"^\s*const double (s\d+) = (.+);\s*$")
-FUN_RE = re.compile(
-    r"^static\s+(?:__host__\s+__device__\s+)?(?:__attribute__\(\(noinline\)\)\s+)?"
-    r"inline\s+(?:constexpr\s+)?(double|std::complex<double>|auto)\s+(\w+)\("
+# The decorator run between `static` and the return type is whatever the emitter's
+# "Decorator" option was set to, and it has grown: `static inline`, the CUDA
+# `__host__ __device__` pair, the `__attribute__((noinline))` size gate, and the Kokkos
+# macros used by every production (device) kernel. Match the run generically rather than
+# enumerating orderings — an unmatched spelling makes this tool report ZERO functions and
+# print "no trace functions parsed", which reads like a wrong-file mistake rather than a
+# blind spot. Likewise `nt_complex_t` (the `NT_TRACE_COMPLEX` alias) superseded the literal
+# `std::complex<double>` in the emitted signature, so complex traces went unseen everywhere.
+DECOR_RE = (
+    r"(?:__host__|__device__|__forceinline__|inline|constexpr"
+    r"|__attribute__\(\(noinline\)\)|KOKKOS_[A-Z_]+)"
 )
+FUN_RE = re.compile(
+    r"^static\s+(?:" + DECOR_RE + r"\s+)*"
+    r"(void|double|float|nt_complex_t|std::complex<double>|auto)\s+(\w+)\("
+)
+# CrossTraceCSE emits ONE `void trace_all(const double *f, T *t)` per chunk instead of N `trN()`
+# functions, and its results leave through `t[i] = ...;` stores rather than a `return`. Those stores
+# are the roots — without them every op in the fused body looks dead and the reported cost is zero.
+STORE_RE = re.compile(r"^\s*t\[\d+\] = (.+);\s*$")
 RET_RE = re.compile(r"^\s*return\s+(.*);\s*$")
 NUM_RE = re.compile(r"^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$")
 IDENT_RE = re.compile(r"\b[A-Za-z_]\w*\b")
@@ -106,8 +122,17 @@ def parse_rhs(rhs):
     return Op("other", args=tuple(t for t in re.findall(r"s\d+|f\[\d+\]", rhs)))
 
 
+def roots_of(fn):
+    """Every result expression of a trace fn: its `return`, plus any fused `t[i] =` stores."""
+    out = []
+    if fn["ret"]:
+        out.append(fn["ret"])
+    out.extend(fn.get("stores", ()))
+    return out
+
+
 def parse_functions(lines):
-    """{name: {"ops": {slot: Op}, "order": [slot...], "ret": <return string>}} for trace fns."""
+    """{name: {"ops": {...}, "order": [...], "ret": <return str>, "stores": [<store str>...]}}."""
     fns = {}
     cur = None
     depth = 0
@@ -115,7 +140,7 @@ def parse_functions(lines):
         if cur is None:
             m = FUN_RE.match(ln)
             if m and m.group(2) not in ("powr", "fill"):
-                cur = {"name": m.group(2), "ops": {}, "order": [], "ret": None}
+                cur = {"name": m.group(2), "ops": {}, "order": [], "ret": None, "stores": []}
                 depth = ln.count("{") - ln.count("}")
                 if depth <= 0:
                     depth = 1 if "{" in ln else 0
@@ -133,6 +158,9 @@ def parse_functions(lines):
         m = RET_RE.match(ln)
         if m:
             cur["ret"] = m.group(1)
+        m = STORE_RE.match(ln)
+        if m:
+            cur["stores"].append(m.group(1))
         if depth <= 0:
             fns[cur["name"]] = cur
             cur = None
@@ -166,7 +194,7 @@ def analyze_fn(fn):
     for op in ops.values():
         for a in op.args:
             uses[a] += 1
-    for s in ret_slots(fn["ret"]):
+    for s in (x for r in roots_of(fn) for x in ret_slots(r)):
         uses[s] += 1
     # max-live under emitted order
     last_use = {}
@@ -174,7 +202,7 @@ def analyze_fn(fn):
         for a in ops[slot].args:
             if a.startswith("s"):
                 last_use[a] = ops[slot].idx
-    for s in ret_slots(fn["ret"]):
+    for s in (x for r in roots_of(fn) for x in ret_slots(r)):
         last_use[s] = len(order)
     live = maxlive = 0
     expiring = collections.defaultdict(list)
@@ -374,7 +402,7 @@ def expand_monomials(fn):
         return r
 
     try:
-        polys = [poly(s) for s in ret_slots(fn["ret"])]
+        polys = [poly(s) for r in roots_of(fn) for s in ret_slots(r)]
     except (OverflowError, ValueError) as e:
         return None, str(e)
     union = {}

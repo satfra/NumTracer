@@ -1,1 +1,13 @@
 build*/
+
+# Working directories, not sources. Each is regenerable or machine-local, and together they made
+# `git status` unreadable — which is how a real change hides.
+#   gen/, flows/   generated DiFfRG flow trees (the numtrace target rebuilds them)
+#   example/       ad-hoc measurement runs and their logs
+#   TBCache/       TensorBases' on-disk cache
+#   form.set       a FORM configuration drop
+gen/
+flows/
+example/
+TBCache/
+form.set

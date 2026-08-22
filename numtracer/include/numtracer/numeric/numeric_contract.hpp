@@ -1066,10 +1066,19 @@ namespace numtracer::numeric
   /// purely Dirac-side, and it keeps the byte-identical fast path of the pre-Stage-4 δ/slash collection.
   /// Both overloads exist because the two dressed entry points read different net representations
   /// (@ref network::NetVal for the codegen path, @ref NNet for the numeric one).
+  ///
+  /// An empty @p lor is SEEDED with a unit product term first. "Append to every term" is a no-op on a
+  /// net with no terms, so appending straight into `lor` would DROP @p facs — silently, since the
+  /// result is still empty and @ref numeric_value_netval then takes its `lor.empty()` shortcut into
+  /// @ref close_free_legs, where the option's now-unclosed legs abort (or, when they happen to pair
+  /// up, self-contract to a wrong number). An empty net means "the Lorentz rest is the scalar 1", and
+  /// that is exactly a default-constructed `PTerm`/`NTerm` (coefficient 1, no elements) — the same
+  /// thing the front end emits as `konst(1.0)`. Only reached when @p facs is non-empty, so no
+  /// currently-working flow changes shape.
   inline network::NetVal with_slot_facs(const network::NetVal &lor, const std::vector<network::Elem> &facs)
   {
     if (facs.empty()) return lor;
-    network::NetVal out = lor;
+    network::NetVal out = lor.empty() ? network::NetVal{network::PTerm{}} : lor;
     for (network::PTerm &pt : out)
       pt.e.insert(pt.e.end(), facs.begin(), facs.end());
     return out;
@@ -1077,7 +1086,7 @@ namespace numtracer::numeric
   inline NNet with_slot_facs(const NNet &lor, const std::vector<network::Elem> &facs)
   {
     if (facs.empty()) return lor;
-    NNet out = lor;
+    NNet out = lor.empty() ? NNet{NTerm{}} : lor;
     for (NTerm &t : out)
       for (const network::Elem &e : facs)
         t.e.push_back(elem_to_nelem(e));

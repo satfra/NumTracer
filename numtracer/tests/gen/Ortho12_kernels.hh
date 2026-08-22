@@ -40,61 +40,59 @@ static inline double tr15(const double *f) { return tr3(f); }
 static inline double tr16(const double *f) { return tr3(f); }
 static inline double tr17(const double *f) { return tr3(f); }
 static inline double tr18([[maybe_unused]] const double *f) {
-  const double s0 = 192;
-  const double s1 = f[2];
-  const double s2 = s0*s1;
-  const double s3 = f[0];
-  const double s5 = f[1];
-  const double s6 = s2*s5;
-  const double s7 = fma(s0, s3, s6);
-  const double s8 = s1*s7;
-  const double s10 = s3*s3;
-  const double s12 = s5*s8;
-  const double s13 = fma((48), s10, s12);
+  const double s0 = f[2];
+  const double s1 = f[0];
+  const double s2 = f[1];
+  [[maybe_unused]] const double s4 = 1;
+  const double s5 = fma(s0, s2, s1);
+  const double s6 = s0*s5;
+  const double s7 = s1*s1;
+  const double s10 = s7*(0.25);
+  const double s11 = fma(s2, s6, s10);
+  const double s13 = s11*(192);
   return s13;
 }
 static inline double tr19([[maybe_unused]] const double *f) {
-  const double s2 = f[2];
-  const double s3 = (-96)*s2;
-  const double s4 = f[1];
-  const double s6 = f[0];
-  const double s7 = (-48)*s6;
-  const double s8 = fma(s3, s4, s7);
-  const double s9 = s6*s8;
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s3 = f[0];
+  const double s5 = s3*(0.5);
+  const double s6 = fma(s0, s1, s5);
+  const double s7 = s3*s6;
+  const double s9 = s7*(-96);
   return s9;
 }
 static inline double tr20([[maybe_unused]] const double *f) {
-  const double s2 = f[2];
-  const double s3 = (96)*s2;
-  const double s4 = f[1];
-  const double s6 = f[0];
-  const double s7 = (48)*s6;
-  const double s8 = fma(s3, s4, s7);
-  const double s9 = s6*s8;
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s3 = f[0];
+  const double s5 = s3*(0.5);
+  const double s6 = fma(s0, s1, s5);
+  const double s7 = s3*s6;
+  const double s9 = s7*(96);
   return s9;
 }
 static inline double tr21([[maybe_unused]] const double *f) {
-  const double s1 = f[0];
-  const double s2 = s1*s1;
-  const double s3 = (-48)*s2;
+  const double s0 = f[0];
+  const double s1 = s0*s0;
+  const double s3 = s1*(-48);
   return s3;
 }
 static inline double tr22([[maybe_unused]] const double *f) {
-  const double s1 = 192;
-  const double s2 = f[1];
+  const double s0 = f[1];
+  const double s2 = f[3];
   const double s3 = s2*s2;
-  const double s5 = f[3];
-  const double s6 = s5*s5;
-  const double s7 = (64)*s6;
-  const double s8 = fma(s1, s3, s7);
-  const double s9 = s1*s2;
-  const double s10 = f[0];
-  const double s12 = f[2];
-  const double s13 = s8*s12;
-  const double s14 = fma(s9, s10, s13);
-  const double s16 = s10*s10;
-  const double s18 = s12*s14;
-  const double s19 = fma((48), s16, s18);
+  const double s5 = s3*(0.33333333333333331);
+  const double s6 = fma(s0, s0, s5);
+  const double s7 = f[0];
+  const double s9 = f[2];
+  const double s10 = s6*s9;
+  [[maybe_unused]] const double s11 = 1;
+  const double s12 = fma(s0, s7, s10);
+  const double s13 = s7*s7;
+  const double s16 = s13*(0.25);
+  const double s17 = fma(s9, s12, s16);
+  const double s19 = s17*(192);
   return s19;
 }
 static inline double tr23(const double *f) { return tr19(f); }
@@ -108,15 +106,15 @@ static inline double tr30(const double *f) { return tr3(f); }
 static inline double tr31(const double *f) { return tr3(f); }
 static inline double tr32(const double *f) { return tr3(f); }
 static inline double tr33([[maybe_unused]] const double *f) {
-  const double s1 = f[3];
-  const double s2 = s1*s1;
-  const double s3 = (64)*s2;
-  const double s4 = f[2];
-  const double s5 = s4*s4;
-  const double s6 = s3*s5;
-  const double s7 = f[0];
-  const double s8 = s7*s7;
-  const double s9 = s6*s8;
+  const double s0 = f[3];
+  const double s1 = s0*s0;
+  const double s2 = f[2];
+  const double s3 = s2*s2;
+  const double s4 = s1*s3;
+  const double s5 = f[0];
+  const double s6 = s5*s5;
+  const double s7 = s4*s6;
+  const double s9 = s7*(64);
   return s9;
 }
 static inline double tr34(const double *f) { return tr3(f); }
@@ -124,27 +122,27 @@ static inline double tr35(const double *f) { return tr3(f); }
 static inline double tr36(const double *f) { return tr19(f); }
 static inline double tr37(const double *f) { return tr21(f); }
 static inline double tr38([[maybe_unused]] const double *f) {
-  const double s1 = f[3];
-  const double s2 = s1*s1;
-  const double s3 = (-64)*s2;
-  const double s4 = f[2];
-  const double s5 = s4*s4;
-  const double s6 = s3*s5;
-  const double s7 = f[0];
-  const double s8 = s7*s7;
-  const double s9 = s6*s8;
+  const double s0 = f[3];
+  const double s1 = s0*s0;
+  const double s2 = f[2];
+  const double s3 = s2*s2;
+  const double s4 = s1*s3;
+  const double s5 = f[0];
+  const double s6 = s5*s5;
+  const double s7 = s4*s6;
+  const double s9 = s7*(-64);
   return s9;
 }
 static inline double tr39(const double *f) { return tr33(f); }
 static inline double tr40(const double *f) { return tr3(f); }
 static inline double tr41(const double *f) { return tr3(f); }
 static inline double tr42([[maybe_unused]] const double *f) {
-  const double s1 = f[3];
-  const double s2 = s1*s1;
-  const double s3 = (64)*s2;
-  const double s4 = f[2];
-  const double s5 = s4*s4;
-  const double s6 = s3*s5;
+  const double s0 = f[3];
+  const double s1 = s0*s0;
+  const double s2 = f[2];
+  const double s3 = s2*s2;
+  const double s4 = s1*s3;
+  const double s6 = s4*(64);
   return s6;
 }
 static inline double tr43(const double *f) { return tr3(f); }
@@ -154,17 +152,16 @@ static inline double tr46(const double *f) { return tr3(f); }
 static inline double tr47(const double *f) { return tr3(f); }
 static inline double tr48(const double *f) { return tr3(f); }
 static inline double tr49([[maybe_unused]] const double *f) {
-  const double s0 = 64;
-  const double s1 = f[2];
-  const double s2 = s0*s1;
-  const double s3 = f[0];
-  const double s5 = f[1];
-  const double s6 = s2*s5;
-  const double s7 = fma(s0, s3, s6);
-  const double s8 = s1*s7;
-  const double s10 = s3*s3;
-  const double s12 = s5*s8;
-  const double s13 = fma((16), s10, s12);
+  const double s0 = f[2];
+  const double s1 = f[0];
+  const double s2 = f[1];
+  [[maybe_unused]] const double s4 = 1;
+  const double s5 = fma(s0, s2, s1);
+  const double s6 = s0*s5;
+  const double s7 = s1*s1;
+  const double s10 = s7*(0.25);
+  const double s11 = fma(s2, s6, s10);
+  const double s13 = s11*(64);
   return s13;
 }
 static inline double tr50(const double *f) { return tr49(f); }
@@ -181,28 +178,28 @@ static inline double tr60(const double *f) { return tr3(f); }
 static inline double tr61(const double *f) { return tr3(f); }
 static inline double tr62(const double *f) { return tr3(f); }
 static inline double tr63([[maybe_unused]] const double *f) {
-  const double s1 = f[3];
-  const double s2 = s1*s1;
-  const double s3 = (-64)*s2;
-  const double s4 = f[2];
-  const double s5 = s4*s4;
-  const double s6 = s3*s5;
+  const double s0 = f[3];
+  const double s1 = s0*s0;
+  const double s2 = f[2];
+  const double s3 = s2*s2;
+  const double s4 = s1*s3;
+  const double s6 = s4*(-64);
   return s6;
 }
 static inline double tr64(const double *f) { return tr3(f); }
 static inline double tr65([[maybe_unused]] const double *f) {
-  const double s2 = f[2];
-  const double s3 = (-128)*s2;
-  const double s4 = f[1];
-  const double s6 = f[0];
-  const double s7 = (-64)*s6;
-  const double s8 = fma(s3, s4, s7);
-  const double s9 = f[3];
-  const double s10 = s9*s9;
-  const double s11 = s8*s10;
-  const double s12 = s2*s2;
-  const double s13 = s11*s12;
-  const double s14 = s6*s13;
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s3 = f[0];
+  const double s5 = s3*(0.5);
+  const double s6 = fma(s0, s1, s5);
+  const double s7 = f[3];
+  const double s8 = s7*s7;
+  const double s9 = s6*s8;
+  const double s10 = s0*s0;
+  const double s11 = s9*s10;
+  const double s12 = s3*s11;
+  const double s14 = s12*(-128);
   return s14;
 }
 static inline double tr66(const double *f) { return tr33(f); }
@@ -238,27 +235,27 @@ static inline double tr95(const double *f) { return tr3(f); }
 static inline double tr96(const double *f) { return tr33(f); }
 static inline double tr97(const double *f) { return tr3(f); }
 static inline double tr98([[maybe_unused]] const double *f) {
-  const double s1 = f[3];
-  const double s2 = s1*s1;
-  const double s3 = (128)*s2;
-  const double s4 = f[2];
-  const double s5 = s4*s4;
-  const double s6 = s3*s5;
+  const double s0 = f[3];
+  const double s1 = s0*s0;
+  const double s2 = f[2];
+  const double s3 = s2*s2;
+  const double s4 = s1*s3;
+  const double s6 = s4*(128);
   return s6;
 }
 static inline double tr99([[maybe_unused]] const double *f) {
-  const double s2 = f[2];
-  const double s3 = (128)*s2;
-  const double s4 = f[1];
-  const double s6 = f[0];
-  const double s7 = (64)*s6;
-  const double s8 = fma(s3, s4, s7);
-  const double s9 = f[3];
-  const double s10 = s9*s9;
-  const double s11 = s8*s10;
-  const double s12 = s2*s2;
-  const double s13 = s11*s12;
-  const double s14 = s6*s13;
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s3 = f[0];
+  const double s5 = s3*(0.5);
+  const double s6 = fma(s0, s1, s5);
+  const double s7 = f[3];
+  const double s8 = s7*s7;
+  const double s9 = s6*s8;
+  const double s10 = s0*s0;
+  const double s11 = s9*s10;
+  const double s12 = s3*s11;
+  const double s14 = s12*(128);
   return s14;
 }
 static inline double tr100(const double *f) { return tr33(f); }
@@ -282,15 +279,15 @@ static inline double tr117(const double *f) { return tr3(f); }
 static inline double tr118(const double *f) { return tr3(f); }
 static inline double tr119(const double *f) { return tr3(f); }
 static inline double tr120([[maybe_unused]] const double *f) {
-  const double s1 = f[3];
-  const double s2 = s1*s1;
-  const double s3 = (128)*s2;
-  const double s4 = f[2];
-  const double s5 = s4*s4;
-  const double s6 = s3*s5;
-  const double s7 = f[0];
-  const double s8 = s7*s7;
-  const double s9 = s6*s8;
+  const double s0 = f[3];
+  const double s1 = s0*s0;
+  const double s2 = f[2];
+  const double s3 = s2*s2;
+  const double s4 = s1*s3;
+  const double s5 = f[0];
+  const double s6 = s5*s5;
+  const double s7 = s4*s6;
+  const double s9 = s7*(128);
   return s9;
 }
 static inline double tr121(const double *f) { return tr3(f); }
@@ -346,24 +343,24 @@ static inline double tr168(const double *f) { return tr125(f); }
 static inline double tr169(const double *f) { return tr125(f); }
 static inline double tr170(const double *f) { return tr125(f); }
 static inline double tr171([[maybe_unused]] const double *f) {
-  const double s1 = f[3];
-  const double s2 = s1*s1;
-  const double s3 = (-16)*s2;
-  const double s4 = f[2];
-  const double s5 = s4*s4;
-  const double s6 = s3*s5;
-  const double s7 = f[0];
-  const double s8 = s7*s7;
-  const double s9 = s6*s8;
+  const double s0 = f[3];
+  const double s1 = s0*s0;
+  const double s2 = f[2];
+  const double s3 = s2*s2;
+  const double s4 = s1*s3;
+  const double s5 = f[0];
+  const double s6 = s5*s5;
+  const double s7 = s4*s6;
+  const double s9 = s7*(-16);
   return s9;
 }
 static inline double tr172([[maybe_unused]] const double *f) {
-  const double s1 = f[3];
-  const double s2 = s1*s1;
-  const double s3 = (-4)*s2;
-  const double s4 = f[2];
-  const double s5 = s4*s4;
-  const double s6 = s3*s5;
+  const double s0 = f[3];
+  const double s1 = s0*s0;
+  const double s2 = f[2];
+  const double s3 = s2*s2;
+  const double s4 = s1*s3;
+  const double s6 = s4*(-4);
   return s6;
 }
 static inline double tr173(const double *f) { return tr3(f); }
@@ -371,49 +368,45 @@ static inline double tr174(const double *f) { return tr3(f); }
 static inline double tr175(const double *f) { return tr171(f); }
 static inline double tr176(const double *f) { return tr3(f); }
 static inline double tr177([[maybe_unused]] const double *f) {
-  const double s2 = f[2];
-  const double s3 = (-8)*s2;
-  const double s4 = f[1];
-  const double s6 = f[0];
-  const double s7 = (-4)*s6;
-  const double s8 = fma(s3, s4, s7);
-  const double s9 = s6*s8;
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s3 = f[0];
+  const double s5 = s3*(0.5);
+  const double s6 = fma(s0, s1, s5);
+  const double s7 = s3*s6;
+  const double s9 = s7*(-8);
   return s9;
 }
 static inline double tr178(const double *f) { return tr3(f); }
 static inline double tr179([[maybe_unused]] const double *f) {
-  const double s0 = -16;
-  const double s1 = f[1];
-  const double s2 = s1*s1;
-  const double s4 = f[3];
-  const double s5 = s4*s4;
-  const double s6 = s0*s5;
-  const double s7 = fma(s0, s2, s6);
-  const double s8 = s0*s1;
-  const double s9 = f[0];
-  const double s11 = f[2];
-  const double s12 = s7*s11;
-  const double s13 = fma(s8, s9, s12);
-  const double s15 = s9*s9;
-  const double s17 = s11*s13;
-  const double s18 = fma((-4), s15, s17);
-  return s18;
+  const double s0 = f[1];
+  const double s2 = f[3];
+  const double s3 = s2*s2;
+  [[maybe_unused]] const double s4 = 1;
+  const double s5 = fma(s0, s0, s3);
+  const double s6 = f[0];
+  const double s8 = f[2];
+  const double s9 = s5*s8;
+  const double s10 = fma(s0, s6, s9);
+  const double s11 = s6*s6;
+  const double s14 = s11*(0.25);
+  const double s15 = fma(s8, s10, s14);
+  const double s17 = s15*(-16);
+  return s17;
 }
 static inline double tr180(const double *f) { return tr3(f); }
 static inline double tr181(const double *f) { return tr179(f); }
 static inline double tr182([[maybe_unused]] const double *f) {
-  const double s0 = -4;
-  const double s1 = f[2];
-  const double s2 = s0*s1;
-  const double s3 = f[0];
-  const double s5 = f[1];
-  const double s6 = s2*s5;
-  const double s7 = fma(s0, s3, s6);
-  const double s8 = s1*s7;
-  [[maybe_unused]] const double s9 = -1;
-  const double s10 = s3*s3;
-  const double s11 = -s10;
-  const double s13 = fma(s5, s8, s11);
+  const double s0 = f[2];
+  const double s1 = f[0];
+  const double s2 = f[1];
+  [[maybe_unused]] const double s4 = 1;
+  const double s5 = fma(s0, s2, s1);
+  const double s6 = s0*s5;
+  const double s7 = s1*s1;
+  const double s10 = s7*(0.25);
+  const double s11 = fma(s2, s6, s10);
+  const double s13 = s11*(-4);
   return s13;
 }
 static inline double tr183(const double *f) { return tr125(f); }
@@ -471,22 +464,22 @@ static inline double tr234(const double *f) { return tr3(f); }
 static inline double tr235(const double *f) { return tr171(f); }
 static inline double tr236(const double *f) { return tr3(f); }
 static inline double tr237([[maybe_unused]] const double *f) {
-  const double s1 = f[0];
-  const double s2 = s1*s1;
-  const double s3 = (4)*s2;
+  const double s0 = f[0];
+  const double s1 = s0*s0;
+  const double s3 = s1*(4);
   return s3;
 }
 static inline double tr238(const double *f) { return tr172(f); }
 static inline double tr239(const double *f) { return tr177(f); }
 static inline double tr240(const double *f) { return tr172(f); }
 static inline double tr241([[maybe_unused]] const double *f) {
-  const double s2 = f[2];
-  const double s3 = (8)*s2;
-  const double s4 = f[1];
-  const double s6 = f[0];
-  const double s7 = (4)*s6;
-  const double s8 = fma(s3, s4, s7);
-  const double s9 = s6*s8;
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s3 = f[0];
+  const double s5 = s3*(0.5);
+  const double s6 = fma(s0, s1, s5);
+  const double s7 = s3*s6;
+  const double s9 = s7*(8);
   return s9;
 }
 static inline double tr242(const double *f) { return tr172(f); }

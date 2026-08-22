@@ -549,6 +549,76 @@ int main()
     if (worst != 0) ++fails;
   }
 
+  // ---- J2) an option's netFacs against an EMPTY surrounding net (with_slot_facs regression) ----
+  // Every other netFacs case above hands the option a net that already has a term, so the splice
+  // (`append facs to every term of lor`) always had something to append to. When the Lorentz REST of
+  // a sub-term is trivial the front end emits a net with ZERO terms, and appending into it is a
+  // no-op — the option's factors used to be dropped silently, after which the legs they would have
+  // closed abort in close_free_legs (or, on an even multiplicity, self-contract to a wrong number).
+  //
+  // The shape is the one that bit ZAAqbq1: the FIXED chain carries γ^μ … γ^ν, and the slot is the
+  // δ_{μν}δ_Dirac + [γ_μ,γ_ν] vertex branch — so the commutator option closes μ,ν on the Dirac side
+  // (paired, legal with no net at all) while the metric option can only close them through netFacs.
+  // A pion/σ exchange is what makes the surrounding net empty in the first place, hence the γ5 pair.
+  std::printf("\n== J2: netFacs against an EMPTY Lorentz net (metric must survive the splice) ==\n");
+  {
+    const int nsym = 8; // f1:0..3, f2:4..7
+    nm::LorentzEnv env(nsym);
+    std::vector<std::array<nm::MPoly, 4>> comp(2);
+    for (int v = 0; v < 2; ++v)
+      for (int mu = 0; mu < 4; ++mu)
+        comp[v][mu] = env.var(4 * v + mu);
+    auto met = [](int a, int b) { return network::Elem{network::Elem::Metric, a, b, -1, -1, {}}; };
+    const std::vector<std::pair<double, int>> f1 = {{1.0, 0}}, f2 = {{1.0, 1}};
+    const int MU = 300, NU = 301;
+    // γ^MU S(f1) γ5 [slot] γ5 S(f2) γ^NU — even γ count under BOTH options, so neither branch is
+    // killed by parity and both contribute.
+    std::vector<nm::DChainTok> chain = {nm::dtfix(network::dgamma(MU)), nm::dtfix(network::dslash(f1)),
+                                        nm::dtfix(network::dg5()),     nm::dtslot(0),
+                                        nm::dtfix(network::dg5()),     nm::dtfix(network::dslash(f2)),
+                                        nm::dtfix(network::dgamma(NU))};
+    nm::DSlotOpt oComm; oComm.dress = {0}; oComm.toks = {network::dgamma(MU), network::dgamma(NU)};
+    nm::DSlotOpt oMet;  oMet.dress = {1};  oMet.netFacs = {met(MU, NU)};   // the branch that needs the splice
+    nm::DSlot sV = {oComm, oMet};
+    // the whole point: NO surrounding Lorentz structure.
+    const nm::NNet emptyNNet = {};
+    const network::NetVal emptyNetVal = {};
+    nm::DPoly dpN = env.numeric_value_dressed(chain, {sV}, emptyNNet, comp, {});
+    nm::DPoly dpV = env.numeric_value_dressed_netval(chain, {sV}, emptyNetVal, comp, {});
+    // distributed reference: the commutator option keeps the empty net, the metric option's factor is
+    // written into a one-term net by hand — that IS the distributed diagram, built with public builders.
+    // Splice IN PLACE while walking the chain: the slot sits between the two γ5, and a γ chain does not
+    // commute, so appending the option's tokens at the end would be a different trace.
+    network::DiracNet cComm, cMet;
+    for (const nm::DChainTok &t : chain) {
+      if (!t.isSlot) { cComm.push_back(t.fac); cMet.push_back(t.fac); continue; }
+      for (const network::DFac &d : oComm.toks) cComm.push_back(d);
+    }
+    const nm::NNet refMetNet = {nm::NTerm{Cx{1, 0}, {nm::nmet(MU, NU)}}};
+    nm::MPoly trComm = env.numeric_value(cComm, emptyNNet, comp, {});
+    nm::MPoly trMet = env.numeric_value(cMet, refMetNet, comp, {});
+    int worst = 0; double maxerr = 0.0; double magComm = 0.0, magMet = 0.0;
+    for (int it = 0; it < 5000; ++it) {
+      std::vector<double> x(nsym);
+      for (double &v : x) v = U(rng);
+      std::vector<double> drVal = {U(rng), U(rng)};
+      Cx a = nm::eval(trComm, x, {}), b = nm::eval(trMet, x, {});
+      magComm = std::max(magComm, std::abs(a.re) + std::abs(a.im));
+      magMet = std::max(magMet, std::abs(b.re) + std::abs(b.im));
+      Cx dist{a.re * drVal[0] + b.re * drVal[1], a.im * drVal[0] + b.im * drVal[1]};
+      double e = std::max(cdiff(nm::eval(dpN, x, {}, drVal), dist), cdiff(nm::eval(dpV, x, {}, drVal), dist));
+      maxerr = std::max(maxerr, e);
+      if (e >= 1e-10) ++worst;
+    }
+    // A zero metric channel would make the comparison vacuous — that is exactly the dropped-factor
+    // symptom this case exists to catch, so assert the channel is alive before trusting the match.
+    const bool alive = magMet > 1e-8 && magComm > 1e-8;
+    std::printf("  dp terms=%d/%d worst=%.2e (%d/5000)  |tr| max = {comm %.2f, metric %.2f}  %s\n",
+                dpN.size(), dpV.size(), maxerr, worst, magComm, magMet,
+                (worst == 0 && alive) ? "ok" : "FAIL");
+    if (worst != 0 || !alive) ++fails;
+  }
+
   // ---- K) LEVER (b): structural MPoly traces + carried dressing assemble to numeric_value_dressed ----
   // The generator no longer keys its trace table on the dressing: it strips each option's dressing
   // (coeff→1, dress→{}) into a per-sub-term scalar (`sc`, the numeric part) and monomial (`dmono`, the

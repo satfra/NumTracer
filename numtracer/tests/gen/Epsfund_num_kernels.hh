@@ -14,41 +14,41 @@ static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] 
   f[2] = p;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s1 = f[2];
-  const double s2 = (2)*s1;
-  const double s3 = f[1];
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s2 = s0*s1;
+  const double s3 = f[0];
   const double s4 = s2*s3;
-  const double s5 = f[0];
-  const double s6 = s4*s5;
+  const double s6 = s4*(2);
   return s6;
 }
 static inline double tr1([[maybe_unused]] const double *f) {
-  const double s1 = f[2];
-  const double s2 = (4)*s1;
-  const double s3 = f[1];
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s2 = s0*s1;
+  const double s3 = f[0];
   const double s4 = s2*s3;
-  const double s5 = f[0];
-  const double s6 = s4*s5;
+  const double s6 = s4*(4);
   return s6;
 }
 static inline double tr2(const double *f) { return tr1(f); }
 static inline double tr3(const double *f) { return tr0(f); }
 static inline double tr4([[maybe_unused]] const double *f) {
-  const double s1 = f[2];
-  const double s2 = (3)*s1;
-  const double s3 = f[1];
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s2 = s0*s1;
+  const double s3 = f[0];
   const double s4 = s2*s3;
-  const double s5 = f[0];
-  const double s6 = s4*s5;
+  const double s6 = s4*(3);
   return s6;
 }
 static inline double tr5([[maybe_unused]] const double *f) {
-  const double s1 = f[2];
-  const double s2 = (9)*s1;
-  const double s3 = f[1];
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s2 = s0*s1;
+  const double s3 = f[0];
   const double s4 = s2*s3;
-  const double s5 = f[0];
-  const double s6 = s4*s5;
+  const double s6 = s4*(9);
   return s6;
 }
 static inline double tr6(const double *f) { return tr5(f); }
