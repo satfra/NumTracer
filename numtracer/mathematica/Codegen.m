@@ -2930,6 +2930,39 @@ privDefs[decor_] :=
 ntReImDefs[decor_] :=
   StringRiffle[{decor <> " double ntRe(double x) { return x; }", "template <class T> " <> decor <> " double ntRe(const T &z) { return z.real(); }", decor <> " double ntIm(double) { return 0.0; }", "template <class T> " <> decor <> " double ntIm(const T &z) { return z.imag(); }"}, "\n"];
 
+(* The same accessors for the KERNEL, where they must be type-PRESERVING rather than double-typed.
+
+   Two different jobs share these names. In the "RePart" assembly above they are applied to the
+   TRACE tokens, which are double or nt_complex_t, and `-> double` is right. Under
+   "ComplexEndProjection" they are applied to the whole assembled integrand instead -- and if the
+   kernel is also autodiff-active ("AD" -> True, i.e. ADParams non-empty) that expression is an
+   autodiff type, not a double. Hard-typing then costs twice over: `z.real()` does not exist on
+   autodiff::Real at all (the build fails inside the generated kernel with
+   `Real<1UL, double> has no member "real"`, twenty minutes after a generation that reported
+   success), and even where it does exist, narrowing the return to double would DISCARD THE
+   DERIVATIVE silently. That combination -- AD together with an endpoint projection -- was
+   unusable before this.
+
+   The fallback is deliberately an UNQUALIFIED call. The kernel class sits in "KernelNamespace",
+   which for a DiFfRG consumer is DiFfRG, so ordinary lookup finds DiFfRG::real / DiFfRG::imag from
+   common/complex_math.hh -- which already do exactly the right thing and are the reason this is
+   four lines rather than a reimplementation:
+
+       real(autodiff::Real<N,T>)  -> identity          imag(autodiff::Real<N,T>)  -> 0
+       real(cxReal<N,T>)          -> Real<N,T>         imag(cxReal<N,T>)          -> Real<N,T>
+
+   (cxReal = autodiff::Real<N, complex<T>>, which is what Real<N,T> * complex<double> produces --
+   so the arithmetic already lands on the type these projectors take.) The branch is only ever
+   INSTANTIATED for a type with no .real() member, i.e. an autodiff number, which no consumer
+   outside DiFfRG produces; a generic "numtracer_kernels" consumer never compiles that line. *)
+
+ntReImDefsAD[decor_] :=
+  StringRiffle[{
+    decor <> " double ntRe(double x) { return x; }",
+    decor <> " double ntIm(double) { return 0.0; }",
+    "template <class T> " <> decor <> " auto ntRe(const T &z) { if constexpr (requires { z.real(); }) return z.real(); else return real(z); }",
+    "template <class T> " <> decor <> " auto ntIm(const T &z) { if constexpr (requires { z.imag(); }) return z.imag(); else return imag(z); }"}, "\n"];
+
 (* ---- the two REAL projections of a complex integrand ---------------------------------------
    Both are emitted for every complex flow; the imaginary-part probe picks between them (and the
    untouched complex form) with a preprocessor `#if` — see ntProbeSource. Which one is valid is a
@@ -3929,7 +3962,7 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
         (* the traces header decorates every trN/fill with the kernel decorator; this program is
            compiled standalone with a bare g++, so the device macros must be neutralised. *)
         ntKokkosStubDefs,
-        "#include <complex>\n#include <cmath>\n#include <random>\n#include <cstdio>\n#include <cstring>\n",
+        "#include <complex>\n#include <cmath>\n#include <algorithm>\n#include <random>\n#include <cstdio>\n#include <cstring>\n",
         "#include \"" <> FileNameTake[headerFile] <> "\"\n",
 (* Generic in the ARGUMENT type, not just the exponent. The probe evaluates the integrand itself, so
    under "ComplexRuntimeProjection" it raises a COMPLEX denominator (l0 + I muq) to a power and a
@@ -3937,7 +3970,11 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
    as the only diagnostic. numtracer::compute::powr (runtime.hpp) is already generic this way; this
    is the probe's own private copy catching up. T(1) rather than 1.0 for the identity and inverse. *)
         "template<int N, class T> static inline T powr(T x){ T r=T(1); int n=N<0?-N:N; for(int i=0;i<n;++i) r*=x; return N<0?T(1)/r:r; }\n",
-        "using std::pow; using std::sqrt; using std::sin; using std::cos; using std::tan; using std::exp; using std::log; using std::fma; using std::fabs;\n",
+(* min/max belong here for the same reason the rest do: ntProbeStub's keepHeads deliberately KEEPS
+   Max and Min, so a kernel containing one reaches the probe -- where, unlike the kernel, there is no
+   `using namespace DiFfRG` to supply them. The kernel compiled and only its probe did not, with
+   "'min' was not declared in this scope" as the whole diagnostic. They come from <algorithm>. *)
+        "using std::pow; using std::sqrt; using std::sin; using std::cos; using std::tan; using std::exp; using std::log; using std::fma; using std::fabs; using std::min; using std::max;\n",
         "static inline std::complex<double> fma(const std::complex<double>&a,const std::complex<double>&b,const std::complex<double>&c){return a*b+c;}\n",
         "template<class T> using complex = std::complex<T>;\n",
 (* independently-seeded pseudo-random real in [0.4,0.9): same (seed,arg) -> same value (a dressing is
@@ -5143,7 +5180,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                 {}],
               {kernelFn, constFn},
               If[hoistFnStr === None, {}, {hoistFnStr}]],
-            decor, regTemplate, regAlias, If[complexQ, {ntReImDefs[decor]}, {}]];
+            decor, regTemplate, regAlias, If[complexQ, {ntReImDefsAD[decor]}, {}]];
           hdrInc = FileNameTake[headerFile];
           header =
             ntApplyTraceComplexOverride[
