@@ -91,4 +91,20 @@ Module[{h = Import[FileNameJoin[{$gen, "Cplxdisc_num_kernel.hh"}], "Text"]},
   If[StringContainsQ[h, "tr$"],
     Print["FATAL: leaked Unique[\"tr$\"] placeholder(s) in the emitted kernel."]; Exit[1]]];
 
+(* The SAME ntk in single precision ("ComputeType" -> "float"), graded against the double complex
+   body by compare_cplxdisc_float.cpp. Complex traces, the ntRe/ntIm split and a multilinear body make
+   this the fixture with the most emitted types and literals for a stray double to hide in. *)
+Print["[gen] Numeric backend, single precision ..."];
+MakeNTKernel[ntk,
+  FileNameJoin[{$gen, "gen_cplxdiscf_num.cpp"}],
+  FileNameJoin[{$gen, "Cplxdiscf_num_kernel.hh"}],
+  FileNameJoin[{$gen, "Cplxdiscf_num_kernels.hh"}],
+  "Name" -> "Cplxdiscf_num_kernel", "Namespace" -> "cplxdiscf_num",
+  "Dressings" -> {}, "ComputeType" -> "float"];
+
+Module[{h = Import[FileNameJoin[{$gen, "Cplxdiscf_num_kernel.hh"}], "Text"],
+        t = Import[FileNameJoin[{$gen, "Cplxdiscf_num_kernels.hh"}], "Text"]},
+  If[StringContainsQ[h <> t, "double"],
+    Print["FATAL: the float kernel still names `double` -- that arithmetic runs in double."]; Exit[1]]];
+
 Print["Complex x multi-trace codegen kernels generated."];

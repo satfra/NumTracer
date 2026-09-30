@@ -15,6 +15,7 @@
 #include "numtracer/core/export.hpp"   // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
 #include "numtracer/core/envvar.hpp"   // env_flag / env_int — the single truth test for NT_* switches
 #include "numtracer/codegen/lower.hpp"
+#include "numtracer/codegen/precision.hpp" // float vs double emission
 #include "numtracer/network/network.hpp" // NetVal / Elem / GenProg
 
 #include <climits>
@@ -413,15 +414,28 @@ namespace numtracer::network
 
     /// Print one operand: an inlined single-use constant as a parenthesised literal (parentheses are
     /// load-bearing: `s5--46.7` would lex as a decrement), anything else as its slot name.
+    /// Print a real constant in the emitted precision (see codegen/precision.hpp).
+    inline void emit_real(std::ostream &out, double v)
+    {
+      if (codegen::emit_single())
+        out << codegen::float_literal(v);
+      else
+        out << v;
+    }
+
+    inline const char *zero_literal() { return codegen::emit_single() ? "0.f" : "0.0"; }
+
     inline void emit_operand(std::ostream &out, const std::vector<RInstr> &ins, const EmitPlan &pl, int r)
     {
       if (r < 0) {
-        out << "0.0";
+        out << zero_literal();
         return;
       }
-      if (pl.cInline[static_cast<std::size_t>(r)])
-        out << "(" << ins[static_cast<std::size_t>(r)].value << ")";
-      else
+      if (pl.cInline[static_cast<std::size_t>(r)]) {
+        out << "(";
+        emit_real(out, ins[static_cast<std::size_t>(r)].value);
+        out << ")";
+      } else
         out << "s" << r;
     }
 
@@ -449,10 +463,10 @@ namespace numtracer::network
           opnd(addend);
         out << ")";
       };
-      out << (pl.use[i] ? "  const double s" : "  [[maybe_unused]] const double s") << i << " = ";
+      out << (pl.use[i] ? "  const " : "  [[maybe_unused]] const ") << codegen::emit_real_type() << " s" << i << " = ";
       switch (in.op) {
       case RCONST:
-        out << in.value;
+        emit_real(out, in.value);
         break;
       case RVAR:
         out << "f[" << in.a << "]";
@@ -632,7 +646,8 @@ namespace numtracer::network
     // return std::complex<double>{re, im}. The kernel multiplies it by the (complex) dressing
     // coefficient and the consumer takes std::real — so the imaginary part reaches the kernel.
     if (p.rootIm != kRealProgram) {
-      out << effDecor << " nt_complex_t " << name << "([[maybe_unused]] const double *f) {\n";
+      out << effDecor << " nt_complex_t " << name << "([[maybe_unused]] const " << codegen::emit_real_type()
+          << " *f) {\n";
       out << std::setprecision(17);
       for (std::size_t i = 0; i < p.ins.size(); ++i) edetail::emit_stmt(out, p.ins, i, pl);
       out << "  return nt_complex_t{";
@@ -642,9 +657,10 @@ namespace numtracer::network
       out << "};\n}\n";
       return;
     }
-    out << effDecor << " double " << name << "([[maybe_unused]] const double *f) {\n";
+    const char *realT = codegen::emit_real_type();
+    out << effDecor << " " << realT << " " << name << "([[maybe_unused]] const " << realT << " *f) {\n";
     if (p.root < 0) {
-      out << "  return 0.0;\n}\n";
+      out << "  return " << edetail::zero_literal() << ";\n}\n";
       return;
     }
     out << std::setprecision(17);
@@ -690,7 +706,7 @@ namespace numtracer::network
       else if (p.rootIm[i] == kRealProgram) {
         out << "nt_complex_t{";
         opnd(p.root[i]);
-        out << ", 0.0}";
+        out << ", " << zero_literal() << "}";
       } else {
         out << "nt_complex_t{";
         opnd(p.root[i]);
@@ -709,7 +725,8 @@ namespace numtracer::network
     // cycles 17.90e9 -> 18.25e9, a consistent 2% runtime LOSS over repeated runs (3018 -> 3080 ns/eval).
     // Interleaving stores into the arithmetic constrains the scheduler more than the shortened live
     // ranges buy back.
-    out << effDecor << " void " << name << "([[maybe_unused]] const double *f, " << elemT << " *t) {\n";
+    out << effDecor << " void " << name << "([[maybe_unused]] const " << codegen::emit_real_type() << " *f, " << elemT
+        << " *t) {\n";
     out << std::setprecision(17);
     for (std::size_t i = 0; i < p.ins.size(); ++i) edetail::emit_stmt(out, p.ins, i, pl);
     for (std::size_t i = 0; i < n; ++i)
@@ -727,7 +744,7 @@ namespace numtracer::network
     for (const FusedProg &q : ps)
       for (std::size_t i = 0; i < q.root.size(); ++i)
         if (q.rootIm[i] != kRealProgram) anyComplex = true;
-    const char *elemT = anyComplex ? "nt_complex_t" : "double";
+    const char *elemT = anyComplex ? "nt_complex_t" : codegen::emit_real_type();
     out << "using " << name << "_t = " << elemT << ";\n";
 
     for (std::size_t ci = 0; ci < ps.size(); ++ci)
@@ -735,8 +752,8 @@ namespace numtracer::network
                               decor, anyComplex, elemT);
     if (ps.size() == 1) return;
     // Wrapper, so the kernel's call site is identical whether or not the traces were chunked.
-    out << edetail::eff_decor(decor) << " void " << name << "([[maybe_unused]] const double *f, "
-        << elemT << " *t) {\n";
+    out << edetail::eff_decor(decor) << " void " << name << "([[maybe_unused]] const " << codegen::emit_real_type()
+        << " *f, " << elemT << " *t) {\n";
     for (std::size_t ci = 0; ci < ps.size(); ++ci)
       out << "  " << name << "_c" << ci << "(f, t);\n";
     out << "}\n";
@@ -785,7 +802,7 @@ namespace numtracer::network
                                 const std::string &argSig, const FillFormulas &fm, const std::string &decor)
   {
     out << std::setprecision(17);
-    out << decor << " void " << name << "(double *f, " << argSig << ") {\n";
+    out << decor << " void " << name << "(" << codegen::emit_real_type() << " *f, " << argSig << ") {\n";
     for (std::size_t i = 0; i < g.syms.size(); ++i) {
       auto [kind, a, b] = g.syms[i];
       out << "  f[" << i << "] = "

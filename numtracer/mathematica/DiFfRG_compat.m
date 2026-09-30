@@ -193,8 +193,13 @@ Options[MakeNTKernelDiFfRG] =
     ,
     "AD" -> False
     ,
-    "ctype" -> "double"
+    (* The value type the kernel is evaluated and integrated in -- "double", "float", or a complex type
+       of either. "float" makes the whole runtime path single precision (NumTracer's traces and kernel
+       body, DiFfRG's integrator); map()/get() still write double results. *)
+    "ComputeType" -> "double"
     ,
+    "ctype" -> Automatic
+    ,(* deprecated spelling of "ComputeType" *)
     "Type" -> "double"
     ,
 (* Fuse every trace into one shared CSE program (`trace_all`) instead of emitting one function per
@@ -232,6 +237,8 @@ Options[MakeNTKernelDiFfRG] =
        the symbolic Pure/RePart projection and probe. *)
     "ComplexEndProjection" -> False
   };
+
+MakeNTKernelDiFfRG::ctypedeprecated = "The option \"ctype\" is deprecated; use \"ComputeType\" -> `1` instead.";
 
 MakeNTKernelDiFfRG::noname = "\"Name\" is required (the flow name, e.g. \"ZA\").";
 
@@ -300,11 +307,18 @@ ntPatchHoistWrappers[kernelDir_String, name_String, m_Integer] :=
    NTKernel — the integrand still comes from `ntk`. Pass the constant EITHER positionally OR via the
    "Constant" option; if both are given the positional argument wins (it is spliced ahead of opts). *)
 
+(* A plain real scalar parameter (k, T, etaQ, ...), as opposed to a dressing's interpolator type. *)
+ntScalarTypeQ[t_] := MemberQ[{"double", "float"}, t];
+
 MakeNTKernelDiFfRG[ntk_NTKernel, constExpr_ /; Head[constExpr] =!= Rule && Head[constExpr] =!= NTKernel, opts : OptionsPattern[]] :=
   MakeNTKernelDiFfRG[ntk, "Constant" -> constExpr, opts];
 
 MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
-  Module[{name, nsTag, params, parameterOrder, dress, dressTys, dressTy, shareInterpIdx, scalarParams, adParams, device, decor, body, flowDir, genDir, kernelDir, genFile, kernelFile, tracesFile},
+  Module[{computeType, name, nsTag, params, parameterOrder, dress, dressTys, dressTy, shareInterpIdx, scalarParams, adParams, device, decor, body, flowDir, genDir, kernelDir, genFile, kernelFile, tracesFile},
+    computeType = OptionValue["ComputeType"];
+    If[OptionValue["ctype"] =!= Automatic,
+      Message[MakeNTKernelDiFfRG::ctypedeprecated, ToString[OptionValue["ctype"], InputForm]];
+      computeType = OptionValue["ctype"]];
     name = OptionValue["Name"];
     If[name === Automatic,
       Message[MakeNTKernelDiFfRG::noname];
@@ -334,9 +348,9 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
             "static inline"
           ];
     body = 0.; (* placeholder scaffold body — NumTracer overwrites kernel.hh below *)
-    (* auto-derive the dressing names + their common interpolator type from the non-"double" params *)
-    dress = Cases[params, a_?AssociationQ /; a["Type"] =!= "double" :> a["Name"]];
-    dressTys = DeleteDuplicates[Cases[params, a_?AssociationQ /; a["Type"] =!= "double" :> a["Type"]]];
+    (* auto-derive the dressing names + their common interpolator type from the non-scalar params *)
+    dress = Cases[params, a_?AssociationQ /; !ntScalarTypeQ[a["Type"]] :> a["Name"]];
+    dressTys = DeleteDuplicates[Cases[params, a_?AssociationQ /; !ntScalarTypeQ[a["Type"]] :> a["Type"]]];
 (* Interpolator index sharing (NumTracer's "ShareInterpolatorIndex"): a flow evaluates several
    dressings at the SAME momentum, and each lookup otherwise repeats the coordinate transform --
    a fp64 log1p for a logarithmic axis, ~200 of the ~210 fp64 instructions a lookup costs. The
@@ -376,7 +390,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
        in check_name_hiding_by_template_parameters
    (reproducible in ~20 lines: a class template whose static member takes `const auto&` params).
    The parameter list already carries each declared type, so there is nothing to infer. *)
-          Association[Cases[params, a_?AssociationQ /; a["Type"] =!= "double" :>
+          Association[Cases[params, a_?AssociationQ /; !ntScalarTypeQ[a["Type"]] :>
             (If[StringQ[a["Name"]], a["Name"], SymbolName[a["Name"]]] -> a["Type"])]]
       ];
 (* scalar "double" params (etaPiL, d1V, rhoL, ...) beyond k/p: these are forwarded by DiFfRG's
@@ -387,7 +401,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
         params
         ,
         a_?AssociationQ /;
-            a["Type"] === "double" &&
+            ntScalarTypeQ[a["Type"]] &&
               !MemberQ[
                 {"k", "p"}
                 ,
@@ -406,7 +420,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
         params
         ,
         a_?AssociationQ /;
-            a["Type"] === "double" && TrueQ[a["AD"]] &&
+            ntScalarTypeQ[a["Type"]] && TrueQ[a["AD"]] &&
               !MemberQ[
                 {"k", "p"}
                 ,
@@ -454,7 +468,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
    saying so. Scoping it makes "FlowDirectory" mean what it says for both halves of the emission. *)
     Internal`InheritedBlock[{DiFfRG`CodeTools`Directory`flowDir},
       DiFfRG`CodeTools`Directory`flowDir = flowDir;
-      ntReportDiFfRG[name, flowDir, Last @ ntCapturePrint[DiFfRG`CodeTools`MakeKernel`MakeKernel[body, "Name" -> name, "Integrator" -> OptionValue["Integrator"], "d" -> OptionValue["d"], "AD" -> OptionValue["AD"], "ctype" -> OptionValue["ctype"], "Device" -> device, "Type" -> OptionValue["Type"], "Parameters" -> params, "IntegrationVariables" -> OptionValue["IntegrationVariables"], "Coordinates" -> OptionValue["Coordinates"], "CoordinateArguments" -> OptionValue["CoordinateArguments"], "Regulator" -> OptionValue["Regulator"], "RegulatorOpts" -> OptionValue["RegulatorOpts"]]]]];
+      ntReportDiFfRG[name, flowDir, Last @ ntCapturePrint[DiFfRG`CodeTools`MakeKernel`MakeKernel[body, "Name" -> name, "Integrator" -> OptionValue["Integrator"], "d" -> OptionValue["d"], "AD" -> OptionValue["AD"], "ComputeType" -> computeType, "Device" -> device, "Type" -> OptionValue["Type"], "Parameters" -> params, "IntegrationVariables" -> OptionValue["IntegrationVariables"], "Coordinates" -> OptionValue["Coordinates"], "CoordinateArguments" -> OptionValue["CoordinateArguments"], "Regulator" -> OptionValue["Regulator"], "RegulatorOpts" -> OptionValue["RegulatorOpts"]]]]];
 (* (2) NumTracer overwrites kernel.hh + writes kernels.hh with the real, numerically-traced kernel.
 
    Guarded, because step (1) has already written a PLACEHOLDER kernel.hh whose body is literally
@@ -467,7 +481,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
    kernels. *)
     $ntLastHoistCount = 0;
     If[TrueQ @ CheckAbort[
-         MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "SymbolDefs" -> OptionValue["SymbolDefs"], "Decorator" -> decor, "DeviceTarget" -> (device === "GPU"), "Dressings" -> dress, "DressingType" -> dressTy, "ShareInterpolatorIndex" -> shareInterpIdx, "HoistLoopConstLookups" -> shareInterpIdx, "CrossTraceCSE" -> OptionValue["CrossTraceCSE"], "RealOutput" -> OptionValue["RealOutput"], "ComplexRuntimeProjection" -> OptionValue["ComplexRuntimeProjection"], "ComplexEndProjection" -> OptionValue["ComplexEndProjection"], "ScalarParams" -> scalarParams, "ADParams" -> adParams, "ParameterOrder" -> parameterOrder, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"], "MatsubaraVar" -> ntMatsubaraVar[OptionValue["MatsubaraVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]], "DecayingRegulators" -> OptionValue["DecayingRegulators"], "MatsubaraFiniteExtent" -> OptionValue["MatsubaraFiniteExtent"], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
+         MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "ComputeType" -> computeType, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "SymbolDefs" -> OptionValue["SymbolDefs"], "Decorator" -> decor, "DeviceTarget" -> (device === "GPU"), "Dressings" -> dress, "DressingType" -> dressTy, "ShareInterpolatorIndex" -> shareInterpIdx, "HoistLoopConstLookups" -> shareInterpIdx, "CrossTraceCSE" -> OptionValue["CrossTraceCSE"], "RealOutput" -> OptionValue["RealOutput"], "ComplexRuntimeProjection" -> OptionValue["ComplexRuntimeProjection"], "ComplexEndProjection" -> OptionValue["ComplexEndProjection"], "ScalarParams" -> scalarParams, "ADParams" -> adParams, "ParameterOrder" -> parameterOrder, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"], "MatsubaraVar" -> ntMatsubaraVar[OptionValue["MatsubaraVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]], "DecayingRegulators" -> OptionValue["DecayingRegulators"], "MatsubaraFiniteExtent" -> OptionValue["MatsubaraFiniteExtent"], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
          True,
          False],
       Null,

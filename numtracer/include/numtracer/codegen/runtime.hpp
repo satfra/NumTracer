@@ -61,5 +61,12 @@ namespace numtracer
     {
       return a * b + c;
     }
+
+    /// The same for single-precision kernels ("ComputeType" -> "float").
+    inline std::complex<float> fma(const std::complex<float> &a, const std::complex<float> &b,
+                                   const std::complex<float> &c)
+    {
+      return a * b + c;
+    }
   } // namespace compute
 } // namespace numtracer

@@ -11,6 +11,7 @@
 
 #include "numtracer/numeric/numeric_contract.hpp"
 #include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
+#include "numtracer/codegen/precision.hpp"
 
 #include <cmath>
 #include <sstream>
@@ -24,7 +25,7 @@ namespace numtracer::numeric {
 ///        for projector denominators `k²` and component expressions, which carry no imaginary part
 ///        and no inverse atoms). Powers are emitted as repeated multiplication.
 inline std::string mpoly_to_cpp(const MPoly &p, const std::vector<std::string> &symNames) {
-  if (p.terms.empty()) return "0.0";
+  if (p.terms.empty()) return codegen::emit_single() ? "0.f" : "0.0";
   if ((int)symNames.size() < p.nsym)
     NT_THROW(std::runtime_error, "mpoly_to_cpp: symNames shorter than the polynomial's symbol count");
   std::ostringstream os;
@@ -43,7 +44,12 @@ inline std::string mpoly_to_cpp(const MPoly &p, const std::vector<std::string> &
     if (!first) os << (v < 0 ? " - " : " + ");
     else if (v < 0) os << "-";
     const double av = v < 0 ? -v : v;
-    os << "(" << av << ")";
+    os << "(";
+    if (codegen::emit_single())
+      os << codegen::float_literal(av);
+    else
+      os << av;
+    os << ")";
     for (int k = 0; k < p.nsym; ++k)
       for (int e = 0; e < m.e[k]; ++e) os << "*" << symNames[k];
     first = false;

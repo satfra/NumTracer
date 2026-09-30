@@ -132,6 +132,16 @@ ntMkIntern[] :=
 
 cppFlat[e_] := StringReplace[FunKit`CppForm[e], {"\n" -> " ", "\r" -> " ", "\t" -> " "}];
 
+(* The real type of EMITTED code: "double", or "float" under "ComputeType" -> "float". MakeNTKernel
+   Blocks it (together with FunKit's literal precision) for one generation; every emitter string that
+   names a real type or a real literal reads it, so a float kernel carries no double that would
+   promote its arithmetic back. The generator itself always computes in double. *)
+$ntRealT = "double";
+
+ntSingleQ[] := $ntRealT === "float";
+
+ntZeroLit[] := If[ntSingleQ[], "0.f", "0.0"];
+
 (* ---- the single emission chokepoint --------------------------------------------------------
    EVERY generated file goes through here. Nothing else may call Export on generated source.
 
@@ -2654,6 +2664,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
         Flatten[
           {
             "int main(int argc, char** argv){\n",
+            If[ntSingleQ[], "  numtracer::codegen::emit_precision() = numtracer::codegen::EmitPrecision::Single;\n", ""],
             "  std::string decor = \"static inline\"; std::string hns = \"" <> nsInner <> "\";\n",
             "  for(int a=1;a<argc;++a){ std::string s=argv[a]; if(s==\"-d\"&&a+1<argc) decor=argv[++a]; else if(s==\"-n\"&&a+1<argc) hns=argv[++a]; }\n",
             "  const int nsym = " <> str[nsym] <> ";\n",
@@ -2946,8 +2957,8 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
             "  FillFormulas fm;\n",
             "  fm.var = [](int id)->std::string{\n",
             Table["    if(id==" <> str[i - 1] <> ") return \"" <> varFill[[i]] <> "\";\n", {i, 1, Length[varFill]}],
-            "    return \"0.0\"; };\n",
-            "  fm.inv = [&](int id)->std::string{ return \"1.0/(\" + mpoly_to_cpp(atomDen[(size_t)id], symNames) + \")\"; };\n",
+            "    return \"" <> ntZeroLit[] <> "\"; };\n",
+            "  fm.inv = [&](int id)->std::string{ return \"" <> If[ntSingleQ[], "1.f", "1.0"] <> "/(\" + mpoly_to_cpp(atomDen[(size_t)id], symNames) + \")\"; };\n",
 (* dressing fill (kind-2 `dress` leaves): the kernel BODY evaluates each dressing atom (where the
    regulators REG::* and the interpolator parameters are in scope) into `dr_<id>` and passes the
    VALUE to fill(); fill just stores it. So fm.dress returns the passed-in argument name. *)
@@ -2967,9 +2978,12 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                 ""
               ] <> "namespace " <> kns <> " { namespace \" << hns << \" {\\n\";\n",
             If[complexQ,
-              "  std::cout << \"#ifndef NT_TRACE_COMPLEX\\n#define NT_TRACE_COMPLEX std::complex<double>\\n#endif\\nusing nt_complex_t = NT_TRACE_COMPLEX;\\n\";\n",
+              "  std::cout << \"#ifndef NT_TRACE_COMPLEX\\n#define NT_TRACE_COMPLEX std::complex<" <> $ntRealT <> ">\\n#endif\\nusing nt_complex_t = NT_TRACE_COMPLEX;\\n\";\n",
               ""],
-            "  std::cout << \"template<int N> \" << decor << \" double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }\\n\";\n",
+(* Unqualified fma/sqrt in a float header would otherwise bind the global double ::fma/::sqrt on
+   the host, silently running that arithmetic in double. *)
+            If[ntSingleQ[], "  std::cout << \"using std::fma;\\nusing std::sqrt;\\n\";\n", ""],
+            "  std::cout << \"template<int N> \" << decor << \" " <> $ntRealT <> " powr(" <> $ntRealT <> " x){ " <> $ntRealT <> " r=" <> If[ntSingleQ[], "1.f", "1.0"] <> "; for(int i=0;i<N;++i) r*=x; return r; }\\n\";\n",
             "  emit_env_layout(std::cout, genv);\n",
             "  std::cout << \"static inline constexpr int nenv = \" << genv.syms.size() << \";\\n\";\n",
 (* The proven verdict, as a compile-time constant the kernel class picks up. Always emitted for a
@@ -3005,7 +3019,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    (there is a single body), and the kernel reads tarr[i] rather than calling tr_i. *)
             If[crossCSE,
               "  emit_cpp_fused(std::cout, fused, \"trace_all\", decor);\n",
-              "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> str[nGrp] <> ");\n" <> "    for(int i=0;i<" <> str[nGrp] <> ";++i){\n" <> "      const std::string nm = \"tr\"+std::to_string(i);\n" <> "      std::ostringstream os; emit_cpp(os, progs[i], nm, decor);\n" <> "      std::string s = os.str(); std::string body = s.substr(s.find('{'));\n" <> "      auto it = seen.find(body);\n" <> "      if(it==seen.end()){ seen.emplace(std::move(body), nm); std::cout << s; }\n" <> "      else { const std::string sig = s.substr(0, s.find(\" \"+nm+\"(\")); const std::string rt = sig.substr(sig.rfind(' ')+1);\n" <> "        std::cout << decor << \" \" << rt << \" \" << nm << \"(const double *f) { return \" << it->second << \"(f); }\\n\"; } } }\n"
+              "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> str[nGrp] <> ");\n" <> "    for(int i=0;i<" <> str[nGrp] <> ";++i){\n" <> "      const std::string nm = \"tr\"+std::to_string(i);\n" <> "      std::ostringstream os; emit_cpp(os, progs[i], nm, decor);\n" <> "      std::string s = os.str(); std::string body = s.substr(s.find('{'));\n" <> "      auto it = seen.find(body);\n" <> "      if(it==seen.end()){ seen.emplace(std::move(body), nm); std::cout << s; }\n" <> "      else { const std::string sig = s.substr(0, s.find(\" \"+nm+\"(\")); const std::string rt = sig.substr(sig.rfind(' ')+1);\n" <> "        std::cout << decor << \" \" << rt << \" \" << nm << \"(const " <> $ntRealT <> " *f) { return \" << it->second << \"(f); }\\n\"; } } }\n"
             ],
             "  std::cout << \"}} // namespace " <> kns <> "::\" << hns << \"\\n\";\n",
             "  if(ntprof) std::fprintf(stderr,\"[num] emission: %.1f s\\n\", std::chrono::duration<double>(std::chrono::steady_clock::now()-tEmit).count());\n",
@@ -3052,7 +3066,8 @@ privDefs[decor_] :=
    complex, and keeps device code real). Overloads pass a real trace straight through (im → 0). *)
 
 ntReImDefs[decor_] :=
-  StringRiffle[{decor <> " double ntRe(double x) { return x; }", "template <class T> " <> decor <> " double ntRe(const T &z) { return z.real(); }", decor <> " double ntIm(double) { return 0.0; }", "template <class T> " <> decor <> " double ntIm(const T &z) { return z.imag(); }"}, "\n"];
+  With[{r = $ntRealT},
+    StringRiffle[{decor <> " " <> r <> " ntRe(" <> r <> " x) { return x; }", "template <class T> " <> decor <> " " <> r <> " ntRe(const T &z) { return z.real(); }", decor <> " " <> r <> " ntIm(" <> r <> ") { return " <> ntZeroLit[] <> "; }", "template <class T> " <> decor <> " " <> r <> " ntIm(const T &z) { return z.imag(); }"}, "\n"]];
 
 (* The same accessors for the KERNEL, where they must be type-PRESERVING rather than double-typed.
 
@@ -3070,7 +3085,7 @@ ntReImDefs[decor_] :=
    The fallback is deliberately an UNQUALIFIED call. The kernel class sits in "KernelNamespace",
    which for a DiFfRG consumer is DiFfRG, so ordinary lookup finds DiFfRG::real / DiFfRG::imag from
    common/complex_math.hh -- which already do exactly the right thing and are the reason this is
-   four lines rather than a reimplementation:
+   a few lines rather than a reimplementation:
 
        real(autodiff::Real<N,T>)  -> identity          imag(autodiff::Real<N,T>)  -> 0
        real(cxReal<N,T>)          -> Real<N,T>         imag(cxReal<N,T>)          -> Real<N,T>
@@ -3078,14 +3093,19 @@ ntReImDefs[decor_] :=
    (cxReal = autodiff::Real<N, complex<T>>, which is what Real<N,T> * complex<double> produces --
    so the arithmetic already lands on the type these projectors take.) The branch is only ever
    INSTANTIATED for a type with no .real() member, i.e. an autodiff number, which no consumer
-   outside DiFfRG produces; a generic "numtracer_kernels" consumer never compiles that line. *)
+   outside DiFfRG produces; a generic "numtracer_kernels" consumer never compiles that line.
+
+   Trailing return types rather than a deduced `auto`: kernel() calls these before their in-class
+   definition, and g++ rejects a deduced return type used there ("invalid use of 'auto'"). *)
 
 ntReImDefsAD[decor_] :=
   StringRiffle[{
-    decor <> " double ntRe(double x) { return x; }",
-    decor <> " double ntIm(double) { return 0.0; }",
-    "template <class T> " <> decor <> " auto ntRe(const T &z) { if constexpr (requires { z.real(); }) return z.real(); else return real(z); }",
-    "template <class T> " <> decor <> " auto ntIm(const T &z) { if constexpr (requires { z.imag(); }) return z.imag(); else return imag(z); }"}, "\n"];
+    decor <> " " <> $ntRealT <> " ntRe(" <> $ntRealT <> " x) { return x; }",
+    decor <> " " <> $ntRealT <> " ntIm(" <> $ntRealT <> ") { return " <> ntZeroLit[] <> "; }",
+    "template <class T> " <> decor <> " auto ntRe(const T &z) -> decltype(z.real()) { return z.real(); }",
+    "template <class T> " <> decor <> " auto ntRe(const T &z) -> decltype(real(z)) requires (!requires { z.real(); }) { return real(z); }",
+    "template <class T> " <> decor <> " auto ntIm(const T &z) -> decltype(z.imag()) { return z.imag(); }",
+    "template <class T> " <> decor <> " auto ntIm(const T &z) -> decltype(imag(z)) requires (!requires { z.imag(); }) { return imag(z); }"}, "\n"];
 
 (* ---- the two REAL projections of a complex integrand ---------------------------------------
    Both are emitted for every complex flow; the imaginary-part probe picks between them (and the
@@ -3622,7 +3642,7 @@ ntApplyTraceComplexOverride[header_String, hdrInc_String, kns_String, sns_String
   If[TrueQ[complexQ] && kns === "DiFfRG" && sns === "DiFfRG",
     StringReplace[header,
       "#include \"" <> hdrInc <> "\"" ->
-        "#ifndef NT_TRACE_COMPLEX\n#define NT_TRACE_COMPLEX DiFfRG::complex<double>\n#endif\n#include \"" <> hdrInc <> "\"",
+        "#ifndef NT_TRACE_COMPLEX\n#define NT_TRACE_COMPLEX DiFfRG::complex<" <> $ntRealT <> ">\n#endif\n#include \"" <> hdrInc <> "\"",
       1],
     header];
 
@@ -3868,7 +3888,7 @@ ntRuntimeParamType[entry_, adNames_List, scalarNames_List, dressTy_] :=
 (* `auto` is not cosmetic: it makes the emitted function an abbreviated template, which is the only
    reason kernel()/constant() can bind autodiff::real from DiFfRG's integrator_AD twin. *)
       MemberQ[adNames, nm], "auto",
-      MemberQ[scalarNames, nm], "double",
+      MemberQ[scalarNames, nm], $ntRealT,
       AssociationQ[entry], entry["Type"],
       True, dressTy[nm]]];
 
@@ -4011,7 +4031,10 @@ Options[ntProbeSource] = {"NPoints" -> 4000, "Tol" -> 1.*^-9, "TraceArrayDecl" -
 ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, headerFile_, drTable_ : <||>, opts : OptionsPattern[]] :=
   Module[{keepHeads, keepSyms, seedOf, argComb, stub, probeFull, probeProj, probeRePart, probeParams, probePre, fnFull, fnProj, fnRePart, drDecls, drFillArgs, randDecls, callArgs, src, np, tol, distOf},
     np = OptionValue["NPoints"];
-    tol = OptionValue["Tol"];
+(* A float kernel's roundoff is ~1e-7 relative, so the double tolerance would read noise as a surviving
+   imaginary part. 1e-4 still sits orders of magnitude below a genuine Im or a dropped term, which are
+   O(1) relative. *)
+    tol = If[ntSingleQ[], Max[OptionValue["Tol"], 1.*^-4], OptionValue["Tol"]];
 (* GENERAL stubbing: replace EVERY external real-valued atom — any dressing (any arity), any
    regulator/support function, any named constant — with `ntStub(seed_head, hash(args))`, an
    INDEPENDENTLY-SEEDED pseudo-random real per head. "External" = head is not a structural math
@@ -4039,7 +4062,7 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
    probeRePart is the same idea for verdict 1, which was never checked against anything at all. *)
     probeProj = ntPureIntegrand[probeFull];
     probeRePart = ntRePartIntegrand[probeFull];
-    probeParams = (<|"Name" -> SymbolName[#], "Type" -> "double", "Const" -> True, "Reference" -> True|>)& /@ args;
+    probeParams = (<|"Name" -> SymbolName[#], "Type" -> $ntRealT, "Const" -> True, "Reference" -> True|>)& /@ args;
 (* DRESSED kernels: the generated `fill()` takes one extra `double dr_<id>` per dressing atom (the
    kernel body computes each atom from regulators/interpolators and passes the VALUE). The probe has
    none of that runtime in scope, so it must compute each atom with the SAME pseudo-random stubbing
@@ -4050,14 +4073,14 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
     drDecls =
       KeyValueMap[
         Function[{id, atom},
-          "const double dr_" <> ToString[id] <> " = " <> cppFlat[stub[atom]] <> ";"],
+          "const " <> $ntRealT <> " dr_" <> ToString[id] <> " = " <> cppFlat[stub[atom]] <> ";"],
         drTable];
     drFillArgs = ("dr_" <> ToString[#])& /@ Sort[Keys[drTable]];
     probePre =
       StringRiffle[
         Join[
           angleDecls,
-          {"double fenv[(" <> nsHome <> "::nenv) > 0 ? (" <> nsHome <> "::nenv) : 1];"},
+          {$ntRealT <> " fenv[(" <> nsHome <> "::nenv) > 0 ? (" <> nsHome <> "::nenv) : 1];"},
           drDecls,
           {nsHome <> "::fill(fenv, " <> StringRiffle[Join[SymbolName /@ fillArgs, drFillArgs], ", "] <> ");"},
           If[OptionValue["TraceArrayDecl"] === "",
@@ -4099,11 +4122,12 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
    `using namespace DiFfRG` to supply them. The kernel compiled and only its probe did not, with
    "'min' was not declared in this scope" as the whole diagnostic. They come from <algorithm>. *)
         "using std::pow; using std::sqrt; using std::sin; using std::cos; using std::tan; using std::exp; using std::log; using std::fma; using std::fabs; using std::min; using std::max;\n",
-        "static inline std::complex<double> fma(const std::complex<double>&a,const std::complex<double>&b,const std::complex<double>&c){return a*b+c;}\n",
+        With[{c = "std::complex<" <> $ntRealT <> ">"},
+          "static inline " <> c <> " fma(const " <> c <> "&a,const " <> c <> "&b,const " <> c <> "&c){return a*b+c;}\n"],
         "template<class T> using complex = std::complex<T>;\n",
 (* independently-seeded pseudo-random real in [0.4,0.9): same (seed,arg) -> same value (a dressing is
    a function), distinct (seed,arg) -> independent value, so no two dressings or arguments collide. *)
-        "static inline double ntStub(double seed, double x){ double h = std::sin(seed*0.1031 + x*0.3127 + 1.7)*43758.5453; return 0.4 + 0.5*(h - std::floor(h)); }\n",
+        "static inline " <> $ntRealT <> " ntStub(double seed, double x){ double h = std::sin(seed*0.1031 + x*0.3127 + 1.7)*43758.5453; return " <> If[ntSingleQ[], "float(0.4 + 0.5*(h - std::floor(h)))", "0.4 + 0.5*(h - std::floor(h))"] <> "; }\n",
 (* both real projections call ntRe/ntIm on the trace tokens, exactly as the kernel does *)
         ntReImDefs["static inline"], "\n",
         fnFull,
@@ -4566,7 +4590,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
             "variable, so the traits are decided entirely here"]]];
 (* [[maybe_unused]]: a frame may not reference every fill() argument (e.g. an angle or dressing atom
    that only some diagrams use), so mark each parameter to keep the emitted kernel -Wunused-clean. *)
-    fillArgSig = StringRiffle[("[[maybe_unused]] double " <> SymbolName[#])& /@ fillArgs, ", "];
+    fillArgSig = StringRiffle[("[[maybe_unused]] " <> $ntRealT <> " " <> SymbolName[#])& /@ fillArgs, ", "];
 (* walk diagrams: each one is a Lorentz trace x a colour factor x a dressing/kinematic coeff. The
    bridge distribution split each 4-gluon vertex into colour channels, so MANY diagrams share the
    SAME coeff and differ only in (colour x Lorentz). Collect per diagram {coeff, lorNet, colNet},
@@ -4975,7 +4999,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
       Message[mkGenerateKernel::emptynets, name, Length[invNets], nGrp];
       Abort[]];
     (* kinematic angle defs (kept symbolic in the dressing): emit once as named temporaries. *)
-    angleDecls = ("const double " <> SymbolName[First[#]] <> " = " <> cppFlat[Last[#]] <> ";")& /@ angleDefs;
+    angleDecls = ("const " <> $ntRealT <> " " <> SymbolName[First[#]] <> " = " <> cppFlat[Last[#]] <> ";")& /@ angleDefs;
 (* NB: deliberately NO `using std::complex;` — unqualified complex<double> resolves to the
    support namespace's `complex` alias. That indirection lets a device/CUDA support header
    substitute a device-safe complex (std::complex arithmetic lowers to gcc _Complex builtins
@@ -4986,12 +5010,12 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
       Module[{coreBlock},
         coreBlock =
           {
-            "double fenv[(" <> nsHome <> "::nenv) > 0 ? (" <> nsHome <> "::nenv) : 1];",
+            $ntRealT <> " fenv[(" <> nsHome <> "::nenv) > 0 ? (" <> nsHome <> "::nenv) : 1];",
             Sequence @@
               If[hasDr,
                 KeyValueMap[
                   Function[{id, atom},
-                    "const double dr_" <> ToString[id] <> " = " <> cppFlat[atom] <> ";"],
+                    "const " <> $ntRealT <> " dr_" <> ToString[id] <> " = " <> cppFlat[atom] <> ";"],
                   $drTable],
                 {}],
             With[{
@@ -5088,7 +5112,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
           ]
         ];
       ntAssertADTyped[runtimeParams, adNames];
-      kernelParams = Join[mkParam[#, "double"]& /@ sigArgs, runtimeParams, mkParam[#, "double"]& /@ hoistSyms];
+      kernelParams = Join[mkParam[#, $ntRealT]& /@ sigArgs, runtimeParams, mkParam[#, $ntRealT]& /@ hoistSyms];
 (* The loop-independent `constant` is called by DiFfRG as constant(pos..., k, scalars..., dressings...),
    where pos is the FULL coordinate tuple of the flow's grid (quadrature_integrator.hh builds
    full_args = tuple_cat(coordinates.forward(idx), m_args)). Matching only `p` and `k` by name works
@@ -5096,7 +5120,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    DROPS all three coordinates, and a constant body referring to them then fails to compile with
    "identifier S0 is undefined". "CoordinateArgs" carries the real coordinate names; `args` already
    lists coordinates before k, so filtering preserves the order DiFfRG passes them in. *)
-      constParams = Join[mkParam[#, "double"]& /@ Select[args, constArgQ], runtimeParams, mkParam[#, "double"]& /@ hoistSyms];
+      constParams = Join[mkParam[#, $ntRealT]& /@ Select[args, constArgQ], runtimeParams, mkParam[#, $ntRealT]& /@ hoistSyms];
 (* the host-side evaluator for the hoisted k-only lookups. The DiFfRG wrapper (patched by
    DiFfRG_compat.m) calls it once per map()/get() invocation and appends its results to the
    integrator call, in hoistSyms order. The lookups are written as plain `h(x)` calls: a DiFfRG
@@ -5110,17 +5134,17 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
           None,
           Module[{hkParams, vals},
             hkParams = Join[
-              mkParam[#, "double"]& /@ Select[args, # === Global`k&],
+              mkParam[#, $ntRealT]& /@ Select[args, # === Global`k&],
               runtimeParams];
             vals = (SymbolName[Head[#]] <> "(" <> cppFlat[#[[1]]] <> ")")& /@ hoistCalls;
-            "static device::array<double, " <> ToString[Length[hoistCalls]] <> "> ntHoisted(" <>
+            "static device::array<" <> $ntRealT <> ", " <> ToString[Length[hoistCalls]] <> "> ntHoisted(" <>
               StringRiffle[FunKit`MakeParameterString /@ hkParams, ", "] <> ")\n{\n  " <>
               StringRiffle[ntSupportUsings[sns], "\n  "] <> "\n  return {{" <>
               StringRiffle[vals, ",\n    "] <> "}};\n}"]];
 (* dressed kernels: fill() takes one `double dr_<id>` per dressing atom — the kernel body computes
    the atom's value (regulators / interpolators in scope there) and passes it. Matches fm.dress. *)
       If[!FreeQ[invNets, _ntDressedCore],
-        fillArgSig = fillArgSig <> StringJoin[(", [[maybe_unused]] double dr_" <> ToString[#])& /@ Sort[Keys[$drTable]]]
+        fillArgSig = fillArgSig <> StringJoin[(", [[maybe_unused]] " <> $ntRealT <> " dr_" <> ToString[#])& /@ Sort[Keys[$drTable]]]
       ]];
 (* LOUD GUARD: the integrand must be numeric-valued before it is lowered to C++. A DEGENERATE input
    — most often a basis whose Gram is singular at the chosen kinematics, so its inverse metric (and
@@ -5588,7 +5612,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    the fundamental symbols and calls the traces. Options are forwarded to the generator
    (see Options[mkGenerateKernel] for the set). *)
 
-Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "ParameterOrder" -> Automatic, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "ComplexRuntimeProjection" -> False, "ComplexEndProjection" -> False, "RealOutput" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None, "DecayingRegulators" -> Automatic, "MatsubaraFiniteExtent" -> Automatic};
+Options[MakeNTKernel] = {"ComputeType" -> "double", "Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "ParameterOrder" -> Automatic, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "ComplexRuntimeProjection" -> False, "ComplexEndProjection" -> False, "RealOutput" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None, "DecayingRegulators" -> Automatic, "MatsubaraFiniteExtent" -> Automatic};
 
 MakeNTKernel::nfiles = "MakeNTKernel needs three output files: MakeNTKernel[ntk, genFile, kernelFile, tracesFile].";
 
@@ -5621,6 +5645,20 @@ ntOptName[nm_String] := nm;
 ntOptName[nm_Symbol] := SymbolName[nm];
 ntOptName[nm_] := ToString[nm];
 
+(* "ComputeType" picks the precision the EMITTED kernel runs in ("double" or "float", or a complex type
+   of either, as for DiFfRG's MakeKernel); derivation and the generator stay in double. It is scoped to
+   this one generation: the emitter strings read $ntRealT, and FunKit prints float literals. *)
+MakeNTKernel::ctype = "\"ComputeType\" -> `1` is neither a double nor a float type.";
+
+ntRealTypeOf[t_String] :=
+  Which[
+    StringContainsQ[t, "float"], "float",
+    StringContainsQ[t, "double"], "double",
+    True, Message[MakeNTKernel::ctype, t]; Abort[]];
+
 MakeNTKernel[ntk : NTKernel[_], genFile_, kernelFile_, tracesFile_, opts : OptionsPattern[]] := (
   ntAssertKnownOptions[Flatten[{opts}]];
-  mkGenerateKernel[ntk, genFile, kernelFile, tracesFile, Sequence @@ FilterRules[Join[{opts}, Options[MakeNTKernel]], Options[mkGenerateKernel]]]);
+  With[{realT = ntRealTypeOf[OptionValue[MakeNTKernel, {opts}, "ComputeType"]]},
+    Block[{$ntRealT = realT,
+           FunKit`Private`$codePrecision = If[realT === "float", "single", FunKit`Private`$codePrecision]},
+      mkGenerateKernel[ntk, genFile, kernelFile, tracesFile, Sequence @@ FilterRules[Join[{opts}, Options[MakeNTKernel]], Options[mkGenerateKernel]]]]]);
