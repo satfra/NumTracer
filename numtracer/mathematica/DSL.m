@@ -49,99 +49,128 @@ ntProfReport[prefix_String] :=
     ntLog[prefix, #1, ": ", #2[[1]], " calls, ", #2[[2]], " s incl, ", #2[[3]], " s excl"] &,
     ReverseSortBy[$ntProf, #[[2]] &]];
 
+(* ---- head registry ------------------------------------------------------------
+
+   ONE record per tensor head (a factor that takes part in the contraction, vs. a scalar
+   coefficient). Every head classification below is derived from this list at load time, so a new
+   head is registered here and nowhere else. Keys:
+     "Form"      (held) the head with named argument patterns; the accessors are defined on it
+     "Sector"    "Lorentz" | "Dirac" | "Adjoint" | "Fundamental". Lorentz, Dirac and the SU(N) groups
+                 contract in disjoint index spaces. The SU(N) heads (Adjoint, Fundamental) carry their
+                 rank N as the FIRST argument, so several groups coexist in one network
+     "Labels"    (held, in Form's names) the contraction index labels                -> labelsOf
+     "Spinor"    (held) the subset of Labels in the spinor index space (default {})  -> spinorLabelsHead
+     "Momentum"  the first argument is the momentum the head carries (the source of runtime Var
+                 leaves); the value is the head's sign under q -> -q                 -> momentumOf
+     "Inv"       the momentum needs a 1/q^2 env slot (a projector with a full denominator)
+     "InvS"      the momentum needs a SPATIAL 1/|q⃗|^2 env slot (finite-T electric/magnetic projectors)
+     "Tensor"    the tensorQ pattern, where narrower than the bare head
+     "Rewritten" NumTrace expands the head away (expandFundEps), so it is not a codegen colour head
+   The order is the order of the derived Alternatives. *)
+$ntHeads = {
+  <|"Form" :> ntMetric[mu_, nu_], "Sector" -> "Lorentz", "Labels" :> {mu, nu}|>,
+  (* ntVec[q, i_Integer] is the scalar component q_i (0-based, 0 = temporal), resolved by the frame
+     like ntSP, so it is NOT a tensor. *)
+  <|"Form" :> ntVec[q_, mu_], "Sector" -> "Lorentz", "Labels" :> {mu}, "Momentum" -> -1,
+    "Tensor" -> ntVec[_, Except[_Integer]]|>,
+  <|"Form" :> ntTransProj[q_, mu_, nu_], "Sector" -> "Lorentz", "Labels" :> {mu, nu}, "Momentum" -> 1,
+    "Inv" -> True|>,
+  <|"Form" :> ntLongProj[q_, mu_, nu_], "Sector" -> "Lorentz", "Labels" :> {mu, nu}, "Momentum" -> 1,
+    "Inv" -> True|>,
+  (* P_E = P_T − P_M uses both 1/q² and 1/|q⃗|² *)
+  <|"Form" :> ntElectricProj[q_, mu_, nu_], "Sector" -> "Lorentz", "Labels" :> {mu, nu}, "Momentum" -> 1,
+    "Inv" -> True, "InvS" -> True|>,
+  <|"Form" :> ntMagneticProj[q_, mu_, nu_], "Sector" -> "Lorentz", "Labels" :> {mu, nu}, "Momentum" -> 1,
+    "InvS" -> True|>,
+  <|"Form" :> ntSUNf[n_, a_, b_, c_], "Sector" -> "Adjoint", "Labels" :> {a, b, c}|>,
+  <|"Form" :> ntSUNDeltaAdj[n_, a_, b_], "Sector" -> "Adjoint", "Labels" :> {a, b}|>,
+  <|"Form" :> ntGamma[mu_, din_, dout_], "Sector" -> "Dirac", "Labels" :> {mu, din, dout},
+    "Spinor" :> {din, dout}|>,
+  <|"Form" :> ntGamma5[din_, dout_], "Sector" -> "Dirac", "Labels" :> {din, dout}, "Spinor" :> {din, dout}|>,
+  <|"Form" :> ntC[din_, dout_], "Sector" -> "Dirac", "Labels" :> {din, dout}, "Spinor" :> {din, dout}|>,
+  (* ntSigma's OPEN Lorentz labels are its FREE legs (gluon ids); slashed legs carry a momentum, not
+     an open id. The spinor axes din,dout are always open. *)
+  <|"Form" :> ntSigma[legA_, legB_, din_, dout_], "Sector" -> "Dirac",
+    "Labels" :> Join[Cases[{legA, legB}, {"free", mu_} :> mu], {din, dout}], "Spinor" :> {din, dout}|>,
+  <|"Form" :> ntDeltaDirac[din_, dout_], "Sector" -> "Dirac", "Labels" :> {din, dout},
+    "Spinor" :> {din, dout}|>,
+  <|"Form" :> ntSUNT[n_, a_, i_, j_], "Sector" -> "Fundamental", "Labels" :> {a, i, j}|>,
+  <|"Form" :> ntSUNDeltaFund[n_, i_, j_], "Sector" -> "Fundamental", "Labels" :> {i, j}|>,
+  (* the Lorentz Levi-Civita ε_{μνρσ} *)
+  <|"Form" :> ntEpsilon[a_, b_, c_, d_], "Sector" -> "Lorentz", "Labels" :> {a, b, c, d}|>,
+  (* per-component-dressed δ (see their ::usage): classified exactly like the plain δ; the dressing
+     is folded numerically by sun_value_dressed *)
+  <|"Form" :> ntSUNDiagFund[n_, i_, j_, spec_], "Sector" -> "Fundamental", "Labels" :> {i, j}|>,
+  <|"Form" :> ntSUNDiagAdj[n_, a_, b_, spec_], "Sector" -> "Adjoint", "Labels" :> {a, b}|>,
+  (* SU(N) fundamental Levi-Civita: N indices, all of them contraction labels *)
+  <|"Form" :> ntEpsFund[n_, idx___], "Sector" -> "Fundamental", "Labels" :> {idx}, "Rewritten" -> True|>,
+  (* ntDressedNum[options, din, dout]: a dressed propagator numerator kept EAGER (symbolic dressing
+     collection). `options` is a tensor-FREE list of {coeffExpr, spec} (spec = {"ident"} |
+     {"slash",vlc}), so it exposes only its spinor labels; the dressings fold in C++ (one DPoly trace)
+     instead of distributing the numerator into 2^D diagrams. *)
+  <|"Form" :> ntDressedNum[opts_, din_, dout_], "Sector" -> "Dirac", "Labels" :> {din, dout},
+    "Spinor" :> {din, dout}|>,
+  (* ntDiracSlot[options, din, dout, legs]: a collected Dirac slot, a coefficient-weighted sum of
+     Dirac structures sharing the spinor pair (din,dout) AND the same set of open Lorentz legs `legs`
+     (k=0: a propagator numerator, k>=1: a vertex). `options` is a list of {coeffExpr,
+     structureProduct} whose free Lorentz ids are exactly `legs`, so the surrounding net closes them
+     for every structure: it exposes din,dout AND every open leg as contraction labels. *)
+  <|"Form" :> ntDiracSlot[opts_, din_, dout_, legs_], "Sector" -> "Dirac",
+    "Labels" :> Join[legs, {din, dout}], "Spinor" :> {din, dout}|>
+};
+
+ntHeadSym[rec_] := Replace[Extract[rec, Key["Form"], Hold], Hold[h_Symbol[___]] :> h];
+ntTensorPatOf[rec_] := Lookup[rec, "Tensor", Blank[ntHeadSym[rec]]];
+ntSectorHeads[sectors_List] := Select[$ntHeads, MemberQ[sectors, #["Sector"]] &];
+ntSectorPat[sectors_List] := Alternatives @@ (ntTensorPatOf /@ ntSectorHeads[sectors]);
+
+(* accessor[Form] := rec[key], with the held key value as the body *)
+ntDefineAccessor[accessor_Symbol, rec_, key_String] :=
+  Replace[{Extract[rec, Key["Form"], Hold], Extract[rec, Key[key], Hold]},
+    {Hold[lhs_], Hold[rhs_]} :> (accessor[lhs] := rhs)];
+
+$ntTensorPat      = Alternatives @@ (ntTensorPatOf /@ $ntHeads);
+$ntAdjointPat     = ntSectorPat[{"Adjoint"}];
+$ntFundamentalPat = ntSectorPat[{"Fundamental"}];
+$ntSUNHeadPat     = ntSectorPat[{"Adjoint", "Fundamental"}];
+(* by bare head, so a component carrying an integer component ntVec[q, i] is not constant either *)
+$ntNonSUNHeadPat  = Alternatives @@ (Blank @* ntHeadSym /@ ntSectorHeads[{"Lorentz", "Dirac"}]);
+
 (* ---- head classification ---------------------------------------------------- *)
 
-(* A factor that participates in the tensor contraction (vs. a scalar coefficient). ntEpsilon (the
-   Lorentz Levi-Civita ε_{μνρσ}) carries four Lorentz labels.
-   ntVec[q, mu] with a SYMBOLIC label is a tensor leg; ntVec[q, i_Integer] is the scalar component q_i
-   (0-based, 0 = temporal), resolved by the frame like ntSP, so it is NOT a tensor. *)
-tensorQ[_ntMetric | ntVec[_, Except[_Integer]] | _ntTransProj | _ntLongProj |
-        _ntElectricProj | _ntMagneticProj | _ntSUNf | _ntSUNDeltaAdj |
-        _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac | _ntSUNT | _ntSUNDeltaFund | _ntEpsilon |
-        _ntSUNDiagFund | _ntSUNDiagAdj | _ntEpsFund | _ntDressedNum | _ntDiracSlot] = True;
+With[{p = $ntTensorPat}, tensorQ[p] = True];
 tensorQ[_] = False;
 
-(* The SU(N) group heads carry their rank N as the FIRST argument, so several groups coexist in one
-   network. Lorentz, Dirac and the SU(N) groups contract in disjoint index spaces.
-   ntSUNDiag{Fund,Adj} (a per-component-dressed δ, see their ::usage) classify exactly like the
-   matching plain δ; the dressing is folded numerically by sun_value_dressed. *)
-adjointSUNQ[_ntSUNf | _ntSUNDeltaAdj | _ntSUNDiagAdj] = True;  (* group-adjoint heads (bridge with Lorentz) *)
+With[{p = $ntAdjointPat}, adjointSUNQ[p] = True];          (* group-adjoint heads (bridge with Lorentz) *)
 adjointSUNQ[_] = False;
-fundamentalSUNQ[_ntSUNT | _ntSUNDeltaFund | _ntSUNDiagFund | _ntEpsFund] = True;   (* group-fundamental heads (quark-line) *)
+With[{p = $ntFundamentalPat}, fundamentalSUNQ[p] = True];  (* group-fundamental heads (quark-line) *)
 fundamentalSUNQ[_] = False;
 
 (* The SU(N) rank a group head builds against: its leading argument. *)
 sunRankOf[h_] := First[h];
 
-(* The contraction index labels carried by a tensor factor (momentum arg dropped). *)
-labelsOf[ntMetric[mu_, nu_]]         := {mu, nu};
-labelsOf[ntVec[_, mu_]]              := {mu};
-labelsOf[ntTransProj[_, mu_, nu_]]   := {mu, nu};
-labelsOf[ntLongProj[_, mu_, nu_]]    := {mu, nu};
-labelsOf[ntElectricProj[_, mu_, nu_]] := {mu, nu};
-labelsOf[ntMagneticProj[_, mu_, nu_]] := {mu, nu};
-labelsOf[ntSUNf[_, a_, b_, c_]]      := {a, b, c};
-labelsOf[ntSUNDeltaAdj[_, a_, b_]]   := {a, b};
-labelsOf[ntGamma[mu_, din_, dout_]]  := {mu, din, dout};
-labelsOf[ntGamma5[din_, dout_]]      := {din, dout};
-labelsOf[ntC[din_, dout_]]           := {din, dout};
-(* ntSigma's OPEN Lorentz labels are its FREE legs (gluon ids); slashed legs carry a momentum, not an
-   open id. The spinor axes din,dout are always open. *)
-labelsOf[ntSigma[legA_, legB_, din_, dout_]] :=
-  Join[Cases[{legA, legB}, {"free", mu_} :> mu], {din, dout}];
-labelsOf[ntDeltaDirac[din_, dout_]]  := {din, dout};
-labelsOf[ntSUNT[_, a_, i_, j_]]      := {a, i, j};
-labelsOf[ntSUNDeltaFund[_, i_, j_]]  := {i, j};
-labelsOf[ntSUNDiagFund[_, i_, j_, _]] := {i, j};  (* per-component-dressed fundamental δ *)
-labelsOf[ntSUNDiagAdj[_, a_, b_, _]]  := {a, b};  (* per-component-dressed adjoint δ *)
-labelsOf[ntEpsilon[a_, b_, c_, d_]]  := {a, b, c, d};
-(* SU(N) fundamental Levi-Civita: N indices, all of them contraction labels. *)
-labelsOf[h_ntEpsFund] := Rest[List @@ h];
-(* ntDressedNum[options, din, dout] — a dressed propagator numerator kept EAGER (symbolic dressing
-   collection). `options` is a tensor-FREE list of {coeffExpr, spec} (spec = {"ident"} | {"slash",vlc})
-   so it exposes only its spinor in/out labels; the dressing collection is folded in C++ (one DPoly
-   trace) instead of distributing the numerator into 2^D diagrams. *)
-labelsOf[ntDressedNum[_, din_, dout_]] := {din, dout};
-(* ntDiracSlot[options, din, dout, legs] — a collected Dirac slot (general form): a
-   coefficient-weighted sum of Dirac structures sharing spinor in/out (din,dout) AND the SAME SET of
-   open Lorentz legs `legs` (any count k>=0; k=0 = a propagator numerator, k>=1 = a vertex). `options`
-   is a list of {coeffExpr, structureProduct}; the structure's free Lorentz ids are exactly `legs`, so
-   the surrounding net closes them for every structure choice. It therefore exposes din,dout AND every
-   open leg as real contraction labels. *)
-labelsOf[ntDiracSlot[_, din_, dout_, legs_]] := Join[legs, {din, dout}];
+(* labelsOf: the contraction index labels of a tensor factor (momentum arg dropped).
+   spinorLabelsHead: its spinor (Dirac) axis labels, which get a disjoint id range so the engine never
+   contracts a spinor axis against a Lorentz/colour axis sharing an id.
+   momentumOf: the momentum it carries, or None.
+   needsInvQ / needsInvSQ: whether that momentum needs a 1/q^2 / spatial 1/|q⃗|^2 env slot. *)
+Scan[Function[rec,
+    ntDefineAccessor[labelsOf, rec, "Labels"];
+    If[KeyExistsQ[rec, "Spinor"], ntDefineAccessor[spinorLabelsHead, rec, "Spinor"]];
+    If[KeyExistsQ[rec, "Momentum"],
+      Replace[Extract[rec, Key["Form"], Hold],
+        Hold[form : _[Verbatim[Pattern][mom_Symbol, _], ___]] :> (momentumOf[form] := mom)]];
+    With[{h = ntHeadSym[rec]},
+      If[TrueQ[rec["Inv"]], needsInvQ[h[__]] = True];
+      If[TrueQ[rec["InvS"]], needsInvSQ[h[__]] = True]]],
+  $ntHeads];
+spinorLabelsHead[_] := {};
+momentumOf[_]       := None;
+needsInvQ[_]        = False;
+needsInvSQ[_]       = False;
 
-(* Spinor (Dirac) axis labels of a head — the subset of labelsOf that lives in the
-   spinor index space. Used to give spinor axes a disjoint id range so the engine
-   never contracts a spinor axis against a Lorentz/colour axis sharing an id. *)
-spinorLabelsHead[ntGamma[_, din_, dout_]] := {din, dout};
-spinorLabelsHead[ntGamma5[din_, dout_]]   := {din, dout};
-spinorLabelsHead[ntC[din_, dout_]]        := {din, dout};
-spinorLabelsHead[ntSigma[_, _, din_, dout_]] := {din, dout};
-spinorLabelsHead[ntDeltaDirac[din_, dout_]] := {din, dout};
-spinorLabelsHead[ntDressedNum[_, din_, dout_]] := {din, dout};
-spinorLabelsHead[ntDiracSlot[_, din_, dout_, _]] := {din, dout};
-spinorLabelsHead[_]                       := {};
 (* All spinor labels anywhere under a (sub)expression. *)
 allSpinorLabels[e_] := DeleteDuplicates @ Flatten @ Cases[e, h_?tensorQ :> spinorLabelsHead[h], {0, Infinity}];
-
-(* The momentum a factor carries (the source of runtime Var leaves), or None. *)
-momentumOf[ntVec[q_, _]]             := q;
-momentumOf[ntTransProj[q_, _, _]]    := q;
-momentumOf[ntLongProj[q_, _, _]]     := q;
-momentumOf[ntElectricProj[q_, _, _]] := q;
-momentumOf[ntMagneticProj[q_, _, _]] := q;
-momentumOf[_]                        := None;
-
-(* Whether a momentum needs a 1/q^2 env slot (it sits inside a projector with a full denominator). *)
-needsInvQ[ntTransProj[__]]    = True;
-needsInvQ[ntLongProj[__]]     = True;
-needsInvQ[ntElectricProj[__]] = True;  (* electric P_E = P_T − P_M uses 1/q² (and 1/|q⃗|², see needsInvSQ) *)
-needsInvQ[_]                  = False;
-
-(* Whether a momentum needs a SPATIAL 1/|q⃗|² env slot (finite-T electric/magnetic projectors). *)
-needsInvSQ[ntElectricProj[__]] = True;
-needsInvSQ[ntMagneticProj[__]] = True;
-needsInvSQ[_]                  = False;
 
 (* ---- self-trace normalization ----------------------------------------------- *)
 
@@ -173,10 +202,7 @@ splitSelfTraces[factors_List] := Module[{res = {}, conns = {}},
 (* ---- free indices & scalar test (work through Plus/Times, for eager summation) ---- *)
 
 (* Whether a (sub)expression carries no tensor head — a pure scalar coefficient. *)
-scalarQ[e_] := FreeQ[e, _ntMetric | ntVec[_, Except[_Integer]] | _ntTransProj | _ntLongProj |
-                       _ntElectricProj | _ntMagneticProj | _ntSUNf | _ntSUNDeltaAdj |
-                       _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac | _ntSUNT | _ntSUNDeltaFund | _ntEpsilon |
-                       _ntSUNDiagFund | _ntSUNDiagAdj | _ntEpsFund | _ntDressedNum | _ntDiracSlot];
+With[{p = $ntTensorPat}, scalarQ[e_] := FreeQ[e, p]];
 
 (* The free (uncontracted) index labels of a tensor (sub)expression. A product sums
    indices that appear twice (free = appear once); a sum's summands share free indices
@@ -235,9 +261,9 @@ orderFactors[fs_List] := Module[{fi = freeIdx /@ fs, byLabel, touched, rem, out,
    colour structure with a Lorentz one (e.g. a 4-gluon vertex's f.f ⊗ metric.metric); add(...)-ing it
    fuses colour and Lorentz axes into one tensor whose entry count explodes. So DISTRIBUTE it: each
    term is sector-disjoint again, at a cost linear in the (few) structures. *)
-sectorBridgeQ[p_] := (! FreeQ[p, _ntSUNf | _ntSUNDeltaAdj | _ntSUNDiagAdj]) &&
-                     (! FreeQ[p, _ntMetric | ntVec[_, Except[_Integer]] | _ntTransProj | _ntLongProj |
-                                 _ntElectricProj | _ntMagneticProj]);
+(* The Lorentz side excludes ntEpsilon: an ε-carrying colour sum stays eager. *)
+With[{adj = $ntAdjointPat, lor = DeleteCases[ntSectorPat[{"Lorentz"}], Verbatim[_ntEpsilon]]},
+  sectorBridgeQ[p_] := (! FreeQ[p, adj]) && (! FreeQ[p, lor])];
 
 (* The scalar (non-tensor) coefficient of a single summand. *)
 scalarCoeffOf[t_] := Times @@ Select[If[Head[t] === Times, List @@ t, {t}], scalarQ];
@@ -573,8 +599,8 @@ spatialVecFrame[net_, frame_] := Association[
    i.e. a Plus of ntSUNDeltaFund products with numeric coefficients, which lands on the
    constant-colour branch-list path (compileColourSum in CodegenNets.m).
    Applied BEFORE expandBridges/checkLabels so the object those validate is the one that compiles.
-   ntEpsFund is deliberately NOT registered in the codegen colour tables (ctHeads / colourFacStr /
-   labelDimAssoc), so a survivor of this rewrite fails (MakeNTKernel::colleak) instead of emitting. *)
+   ntEpsFund is "Rewritten" in $ntHeads and so NOT in the codegen colour tables (ctHeads / colourFacStr /
+   labelDimAssoc): a survivor of this rewrite fails (MakeNTKernel::colleak) instead of emitting. *)
 
 (* The dimension of the index space an epsilon head lives in. *)
 epsDimOf[ntEpsFund[n_, __]] := n;
@@ -716,15 +742,18 @@ negMomQ[q_] := Module[{vars = Sort[Variables[q]], c},
 canonSlashPairs[vlc_List] :=
   Replace[vlc, {c_, q_} /; negMomQ[q] :> {-c, Expand[-q]}, {1}];
 
+(* One rule per momentum-carrying head: q -> -q flips the head by its registered sign. *)
+$ntMomentumSignRules = Function[rec,
+    With[{h = ntHeadSym[rec], s = rec["Momentum"],
+          k = Replace[Extract[rec, Key["Form"], Hold], Hold[_[args___]] :> Length[Hold[args]]] - 1},
+      h[q_, rest : Repeated[_, {k}]] /; negMomQ[q] :> s h[Expand[-q], rest]]] /@
+  Select[$ntHeads, KeyExistsQ[#, "Momentum"] &];
+
 canonicalizeMomentumSigns[net_] :=
   If[ntEnvFlag["NT_NO_SIGN_CANON"],
     net,
     net /. {
-      ntVec[q_, l_] /; negMomQ[q] :> -ntVec[Expand[-q], l],
-      ntTransProj[q_, a_, b_] /; negMomQ[q] :> ntTransProj[Expand[-q], a, b],
-      ntLongProj[q_, a_, b_] /; negMomQ[q] :> ntLongProj[Expand[-q], a, b],
-      ntElectricProj[q_, a_, b_] /; negMomQ[q] :> ntElectricProj[Expand[-q], a, b],
-      ntMagneticProj[q_, a_, b_] /; negMomQ[q] :> ntMagneticProj[Expand[-q], a, b],
+      Sequence @@ $ntMomentumSignRules,
       (* sigma slash legs carry {coeff, q} pairs directly (not ntVec factors) — linear likewise *)
       ntSigma[{"slash", vlcA_List}, legB_, d1_, d2_] /; AnyTrue[vlcA, negMomQ[Last[#]]&] :>
         ntSigma[{"slash", canonSlashPairs[vlcA]}, legB, d1, d2],
@@ -782,7 +811,7 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
      group matrices). Every group head's leading argument N is checked up front, so an
      undefined symbol aborts with a clear message rather than being baked into the kernel. *)
   badRanks = DeleteDuplicates @ Select[
-    Cases[net, h : (_ntSUNf | _ntSUNDeltaAdj | _ntSUNT | _ntSUNDeltaFund | _ntSUNDiagFund | _ntSUNDiagAdj | _ntEpsFund) :> sunRankOf[h], Infinity],
+    Cases[net, h : $ntSUNHeadPat :> sunRankOf[h], Infinity],
     ! (IntegerQ[#] && # >= 1) &];
   If[badRanks =!= {},
     Message[NumTrace::sunrank, badRanks]; Abort[]];
@@ -891,15 +920,12 @@ analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
                        Times @@ Select[factors, scalarQ]],
     "Ids"        -> ids,
     (* "Constant" means "a constant SU(N) component": such a component is handed to compileColour,
-       which understands only group heads. So EVERY non-SU(N) tensor head belongs in this list, not
-       just the momentum-carrying ones: a momentum-free Dirac δ-loop or closed metric loop would
+       which understands only group heads. So EVERY non-SU(N) tensor head makes a component
+       non-constant, not just the momentum-carrying ones: a momentum-free Dirac δ-loop or closed metric loop would
        otherwise be emitted as raw Mathematica. The Dirac case relies on compileDirac restoring
        tr(1) = 4 for token-free loops (CodegenNets.m). *)
     "Components" -> (<|"Factors" -> ntProfTimed["orderFactors", orderFactors[#]],
-                       "Constant" -> FreeQ[#, _ntVec | _ntTransProj | _ntLongProj |
-                                              _ntElectricProj | _ntMagneticProj | _ntDressedNum | _ntDiracSlot |
-                                              _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac |
-                                              _ntMetric | _ntEpsilon]|> &
+                       "Constant" -> FreeQ[#, $ntNonSUNHeadPat]|> &
                      /@ ntProfTimed["connectedComponents", connectedComponents[tensorF]])
   |>
 ];

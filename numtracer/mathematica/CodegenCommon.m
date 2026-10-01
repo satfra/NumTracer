@@ -193,7 +193,7 @@ MakeNTKernel::eagernn = "compileLorentz: an eagerly-summed structure has a NON-N
 
 MakeNTKernel::tleak = "compileLorentz: un-lowered TENSOR structure reached the scalar fallthrough — it would be CForm'd into C++ as a bare scalar with its indices silently dropped (this is what caused the ZAAqbq metric leak). Every tensor head must be handled by lorentzNetStr or one of the Power/Times/Plus branches. Offending structure:\n`1`";
 
-MakeNTKernel::colleak = "compileColour: a factor of a constant SU(N) component is not one of the six group heads (ntSUNf/ntSUNDeltaAdj/ntSUNT/ntSUNDeltaFund/ntSUNDiag{Fund,Adj}) and would be emitted as raw Mathematica. A Plus means a colour/flavour sum missed compileColourSum; any other head means the \"Constant\" head list in DSL.m analyseDiagram is out of date. Offending factor:\n`1`";
+MakeNTKernel::colleak = "compileColour: a factor of a constant SU(N) component is not one of the six group heads (ntSUNf/ntSUNDeltaAdj/ntSUNT/ntSUNDeltaFund/ntSUNDiag{Fund,Adj}) and would be emitted as raw Mathematica. A Plus means a colour/flavour sum missed compileColourSum; any other head means it is missing from the head registry ($ntHeads in DSL.m). Offending factor:\n`1`";
 
 (* NB: no backquoted code fragments in this string — a backquoted word is a StringForm SLOT, so
    quoting an identifier that way makes the message itself fail to format (StringForm::sfr). *)

@@ -132,7 +132,8 @@ compileLorentzBody[e_, ids_, env_, nonzeroCompMask_] := Which[
 
 (* ---- colour factor patterns (used by splitColourGroups and compileColour) -------------------- *)
 
-ctHeads = {_ntSUNf, _ntSUNDeltaAdj, _ntSUNT, _ntSUNDeltaFund, _ntSUNDiagFund, _ntSUNDiagAdj};
+(* the SU(N) heads of $ntHeads that reach codegen *)
+ctHeads = Blank @* ntHeadSym /@ Select[ntSectorHeads[{"Adjoint", "Fundamental"}], ! TrueQ[#["Rewritten"]] &];
 $ctHeadPat = Alternatives @@ ctHeads;
 
 colourEntangledQ[e_] := !FreeQ[e, $ctHeadPat];
@@ -647,7 +648,7 @@ $ntDressResolve = Identity;
    Shared by compileDirac (closed loops), diracSlotStrBody (an open chain inside a collected slot) and
    dressedSlotStrBody. Every slash momentum is a literal ntVec momentum, hence an env key; a missing
    one aborts rather than print a Missing[...] into the generator. *)
-$diracHeadPat = _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot;
+$diracHeadPat = ntSectorPat[{"Dirac"}];
 
 compileDirac::slottransposed = "a transposed token reached the collected-slot emitter, which cannot represent one (orderOpenChain never marks a transpose). Token:\n`1`";
 
