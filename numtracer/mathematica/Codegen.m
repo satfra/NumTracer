@@ -471,8 +471,9 @@ compileLorentzBody[e_, ids_, env_, nonzeroCompMask_] := Which[
    emitted as several (sunNet, lorentzNet) entries that the per-diagram combination already sums. *)
 
 ctHeads = {_ntSUNf, _ntSUNDeltaAdj, _ntSUNT, _ntSUNDeltaFund, _ntSUNDiagFund, _ntSUNDiagAdj};
+$ctHeadPat = Alternatives @@ ctHeads;
 
-colourEntangledQ[e_] := !FreeQ[e, Alternatives @@ ctHeads];
+colourEntangledQ[e_] := !FreeQ[e, $ctHeadPat];
 
 (* A group head OR an integer power of one. Splitting a term into "colour" and "the Lorentz/Dirac
    rest" is a LEVEL-1 Cases/DeleteCases over the factor list, so it matches only what is a BARE
@@ -483,7 +484,7 @@ colourEntangledQ[e_] := !FreeQ[e, Alternatives @@ ctHeads];
    it just has to be COLLECTED here first. (The four-quark Fierz gate reached exactly this: the
    epsilon-pair expansion produces delta products, and a closed flavour loop squares one of them.) *)
 
-ctFac = Alternatives[Alternatives @@ ctHeads, Power[Alternatives @@ ctHeads, _Integer?Positive]];
+ctFac = Alternatives[$ctHeadPat, Power[$ctHeadPat, _Integer?Positive]];
 
 mergeColNet["SUNNet{}", b_] := b;
 
@@ -1016,11 +1017,20 @@ foldDiracSigma[factors_List] := Module[{commPlus, recognized},
         (so the net count tracks the colour graph, not the branch×ordering explosion); the generator
         sums each group's branches at runtime. *)
 
+(* a Plus that mixes colour with Dirac structure: expanded into branches *)
+scgEntangledQ[x_] := Head[x] === Plus && (colourEntangledQ[x] || !FreeQ[x, _ntGamma | _ntGamma5 | _ntC | _ntDeltaDirac]);
+
 splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
-  Module[{factors = foldDiracSigma[factors0], entangledQ, needExpand, keepAll, distributed, terms, branchNets, groups},
-    entangledQ[x_] := Head[x] === Plus && (colourEntangledQ[x] || !FreeQ[x, _ntGamma | _ntGamma5 | _ntC | _ntDeltaDirac]);
-    needExpand = Select[factors, entangledQ];
-    keepAll = Select[factors, !entangledQ[#]&];
+  Module[{factors = foldDiracSigma[factors0], needExpand, keepAll, keepCol, keepRest, keepColLeakQ, keepDiracQ,
+          distributed, terms, branchNets, groups},
+    needExpand = Select[factors, scgEntangledQ];
+    keepAll = Select[factors, !scgEntangledQ[#]&];
+    (* keepAll is a factor of EVERY branch: split it into colour and remainder, and test the remainder,
+       once per call rather than once per branch *)
+    keepCol = Cases[keepAll, ctFac];
+    keepRest = DeleteCases[keepAll, ctFac];
+    keepColLeakQ = !FreeQ[keepRest, $ctHeadPat];
+    keepDiracQ = !FreeQ[keepRest, $diracHeadPat];
     distributed = Expand[Times @@ needExpand];(* small: product of the entangled Pluses only *)
     terms =
       If[Head[distributed] === Plus,
@@ -1029,25 +1039,20 @@ splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
     (* per branch -> {colourProduct, list-of-{bodyOrCore,scal,restStr}} *)
     branchNets =
       Function[term,
-          Module[{termFactors, colProd, rest},
-            termFactors =
-              Join[
-                If[Head[term] === Times,
-                  List @@ term,
-                  {term}],
-                keepAll];
-            colProd = Times @@ Cases[termFactors, ctFac];
-            rest = DeleteCases[termFactors, ctFac];(* gammas + Lorentz + numeric coeff (no colour) *)
+          Module[{termFactors = If[Head[term] === Times, List @@ term, {term}], termRest, colProd, rest},
+            colProd = Times @@ Join[Cases[termFactors, ctFac], keepCol];
+            termRest = DeleteCases[termFactors, ctFac];
+            rest = Join[termRest, keepRest];(* gammas + Lorentz + numeric coeff (no colour) *)
 (* Level-1 DeleteCases only strips BARE group-head factors. Anything that buries one (a Power, or
    a Plus that entangledQ did not expand) leaves colour in the remainder, which then reaches the
    Lorentz-only lorentzNetStr and is CForm'd into the .cpp. Fail here, where the offender is still
    identifiable, rather than at the emission chokepoint three layers away. *)
-            If[!FreeQ[rest, Alternatives @@ ctHeads],
-              Message[MakeNTKernel::colrest, Short[DeleteDuplicates @ Cases[rest, Alternatives @@ ctHeads, {0, Infinity}], 6], Short[rest, 8]];
+            If[keepColLeakQ || !FreeQ[termRest, $ctHeadPat],
+              Message[MakeNTKernel::colrest, Short[DeleteDuplicates @ Cases[rest, $ctHeadPat, {0, Infinity}], 6], Short[rest, 8]];
               Abort[]];
             {
               colProd,
-              If[!FreeQ[rest, _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot],
+              If[keepDiracQ || !FreeQ[termRest, $diracHeadPat],
                 {compileDirac[rest, ids, env, nonzeroCompMask]},
                 (* gamma chain: {core, scal, projectorRest} *)
                 ({#[[1]], #[[2]], ""}&) /@ chunkLorentz[Times @@ rest, ids, env, nonzeroCompMask]]}]
@@ -1151,7 +1156,7 @@ compileColour[e_, ids_] := Module[
    not Power[head,k], so an un-expanded power leaks Mathematica syntax into the generator.
    Restricted to a BARE group head: the old `! scalarQ[b]` guard also admitted Power[Plus[..],k]
    and Power[Times[..],k], whose repetition duplicates labels rather than closing a self-trace. *)
-    parts = parts /. Power[b_, k_Integer?Positive] /; MatchQ[b, Alternatives @@ ctHeads] :> Sequence @@ ConstantArray[b, k];
+    parts = parts /. Power[b_, k_Integer?Positive] /; MatchQ[b, $ctHeadPat] :> Sequence @@ ConstantArray[b, k];
     sc = Select[parts, scalarQ];
     tn = Select[parts, !scalarQ[#]&];
     {"SUNNet{" <> StringRiffle[colourFacStr[#, ids]& /@ tn, ", "] <> "}", Times @@ sc}];
