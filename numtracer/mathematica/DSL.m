@@ -25,6 +25,12 @@ ntEnvFlag[name_String] :=
   With[{v = Environment[name]},
     StringQ[v] && MemberQ[{"1", "true", "yes", "on"}, ToLowerCase[StringTrim[v]]]];
 
+(* A positive-integer environment variable, or 0 for "unset / unusable" (0 is also the manifest's
+   spelling of "no cap"). Parsed as digits, never evaluated. *)
+ntEnvPosInt[name_String] :=
+  With[{v = Environment[name]},
+    If[StringQ[v] && StringMatchQ[StringTrim[v], DigitCharacter ..], FromDigits[StringTrim[v]], 0]];
+
 (* ---- [prof] accumulators -----------------------------------------------------
    ntProfTimed[key, expr] evaluates expr. While $ntProfOn is True it also adds the wall time to
    $ntProf[key] = {calls, inclusive s, exclusive s}: a key already on the stack (recursion) is timed at

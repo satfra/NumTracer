@@ -164,7 +164,7 @@ $ntLeakHeads = Hold[
     splitColourGroups, compileDirac, chunkLorentz, lorentzNetStr, lorentzElemStr,
     diracSlotStr, dressedSlotStr];
 
-$ntCppLeakPatterns :=
+$ntCppLeakPatterns =
   Join[
     List @@ Map[Function[ntLeakSym, SymbolName[Unevaluated[ntLeakSym]] <> "[", HoldFirst], $ntLeakHeads],
   {
@@ -629,10 +629,10 @@ ntAvailMemGB[] := Quiet @
    that keeps a future monster flow from thrashing instead of failing loudly. NT_GEN_JOBS pins the count
    outright. Delayed (:=) so the memory reading is taken at compile time, not at package load. *)
 
-ntCompileJobs[] := With[{e = Environment["NT_GEN_JOBS"], avail = ntAvailMemGB[]},
+ntCompileJobs[] := With[{e = ntEnvPosInt["NT_GEN_JOBS"], avail = ntAvailMemGB[]},
     Which[
-      StringQ[e] && IntegerQ[Quiet @ ToExpression[e]] && ToExpression[e] > 0,
-        ToExpression[e],
+      e > 0,
+        e,
       IntegerQ[$ProcessorCount],
         Max[
           2,
@@ -675,6 +675,12 @@ $ntCompileJobs := ntCompileJobs[];
    33601/33618 table would pay for an index vector and save nothing. That guard is why no
    opt-out is needed — the dedup is applied only where it demonstrably pays. *)
 
+(* Split a list of C++ element strings into consecutive runs of ~$ntDefChunk characters, counting `sep`
+   separator characters per element. Cumulative chars / chunk size is nondecreasing, so equal keys form
+   contiguous runs. *)
+ntSplitByChars[xs_List, sep_Integer] :=
+  SplitBy[Transpose[{xs, Ceiling[Accumulate[(StringLength /@ xs) + sep] / $ntDefChunk]}], Last][[All, All, 1]];
+
 ntChunkDef[name_String, ret_String, elems_List] :=
   Module[{u, tot},
     u = DeleteDuplicates[elems];
@@ -700,7 +706,7 @@ ntChunkDef[name_String, ret_String, elems_List] :=
              another unit, so it needs its own forward declaration (ntChunkDef only declares the
              _c helpers it generates, never its own entry point). *)
           xs = ntIntStrs[pos];
-          xchunks = SplitBy[Transpose[{xs, Ceiling[Accumulate[(StringLength /@ xs) + 1] / $ntDefChunk]}], Last][[All, All, 1]];
+          xchunks = ntSplitByChars[xs, 1];
           xnc = Length[xchunks];
           xdefs = MapIndexed["void " <> name <> "_x" <> ToString[#2[[1]] - 1] <> "(std::vector<int>& o){ static const int a[] = {" <> StringRiffle[#1, ","] <> "}; o.insert(o.end(), a, a + " <> ToString[Length[#1]] <> "); }"&, xchunks];
           xdecl = StringJoin[Table["void " <> name <> "_x" <> ToString[k - 1] <> "(std::vector<int>&);\n", {k, xnc}]];
@@ -713,7 +719,7 @@ ntChunkDef[name_String, ret_String, elems_List] :=
 
       True,
         Module[
-          {intElems, cs, chunks, nChunks, defs},
+          {intElems, chunks, nChunks, defs},
 (* Is this a flat table of integer literals? If so the generic path below emits `static const int
    a[] = {...}` + one insert instead of one `o.push_back(...); ` per element — the SAME dense form
    the index run further down already uses. The boilerplate it drops is ~14 characters per element,
@@ -724,9 +730,7 @@ ntChunkDef[name_String, ret_String, elems_List] :=
    from a few hundred distinct indices, so the check is free where it matters and still exact. The
    `ret` gate keeps it off every non-int table (DiracNet/NetVal/DSlotOpt/...). *)
           intElems = ret === "std::vector<int>" && AllTrue[u, StringMatchQ[#, ("-" | "") ~~ DigitCharacter ..]&];
-          (* cumulative chars / chunk size is nondecreasing, so equal keys form contiguous runs *)
-          cs = Ceiling[Accumulate[(StringLength /@ elems) + 2] / $ntDefChunk];
-          chunks = SplitBy[Transpose[{elems, cs}], Last][[All, All, 1]];
+          chunks = ntSplitByChars[elems, 2];
           nChunks = Length[chunks];
           defs =
             If[intElems,
@@ -751,7 +755,7 @@ ntBigTableFns[name_String, ret_String, elems_List] :=
   If[elems === {},
     {"static " <> ret <> " " <> name <> "(){ return {}; }\n", name <> "()"},
     Module[{chunks, nChunks},
-      chunks = SplitBy[Transpose[{elems, Ceiling[Accumulate[(StringLength /@ elems) + 2] / $ntDefChunk]}], Last][[All, All, 1]];
+      chunks = ntSplitByChars[elems, 2];
       nChunks = Length[chunks];
 (* Each chunk is a FLAT braced-init returned by its own function, not one push_back per element.
    The push_back form costs ~14 characters of boilerplate per element, which on the flat index
@@ -1637,9 +1641,14 @@ polyFrameSpec[frame_] := Module[{defs = <||>, vals, rules = {}, polyFrame},
    the TWO-TERM l0² + l1² (divThroughPolyAtoms' case) instead of an angle-product polynomial.
    Requires the frame to parametrize the spatial part polar-wise (dirs unit-norm), the same
    assumption the full unit-loop branch makes about all four components. *)
+(* a frame component that is magSym times a magSym-free coefficient *)
+magPropQ[c_, magSym_] := Simplify[c - Coefficient[c, magSym] magSym] === 0;
+(* all four components of an (already PowerExpand-ed) frame vector are magSym-proportional *)
+fullLoopQ[cc_, magSym_] := AllTrue[Range[4], magPropQ[cc[[#]], magSym]&];
+
 unitLoopSpatialQ[comps_, magSym_] := Module[{cc = PowerExpand[comps]},
   FreeQ[cc[[1]], magSym] &&
-  AllTrue[Range[2, 4], (Simplify[cc[[#]] - Coefficient[cc[[#]], magSym] magSym] === 0)&] &&
+  AllTrue[Range[2, 4], magPropQ[cc[[#]], magSym]&] &&
   AnyTrue[Range[2, 4], (Coefficient[cc[[#]], magSym] =!= 0)&]];
 
 unitLoopMixedOkQ[frame_, magSym_] :=
@@ -1647,11 +1656,9 @@ unitLoopMixedOkQ[frame_, magSym_] :=
     (* at least one momentum is a magSym-proportional loop — either FULLY (all four components,
        the vacuum case) or SPATIALLY (finite T: an independent temporal l0 rides along) — and NO
        momentum mixes magSym with other coordinates inside a component *)
-    Module[{cc = PowerExpand[Values[frame]], fullQ},
-      fullQ = Function[comps,
-        AllTrue[Range[4], (Simplify[comps[[#]] - Coefficient[comps[[#]], magSym] magSym] === 0)&]];
-      AnyTrue[cc, (fullQ[#] || unitLoopSpatialQ[#, magSym])&] &&
-      AllTrue[cc, (fullQ[#] || unitLoopSpatialQ[#, magSym] || FreeQ[#, magSym])&]];
+    With[{cc = PowerExpand[Values[frame]]},
+      AnyTrue[cc, (fullLoopQ[#, magSym] || unitLoopSpatialQ[#, magSym])&] &&
+      AllTrue[cc, (fullLoopQ[#, magSym] || unitLoopSpatialQ[#, magSym] || FreeQ[#, magSym])&]];
 
 (* SHARED DIRECTIONS (2026-09-24). Loop tags that are the same vector up to the temporal slot -- a
    finite-T frame's l1 and its fermionic partner lf1 = l1 + (pi T, 0) from frameShiftedLoop, or any
@@ -1662,9 +1669,7 @@ unitLoopMixedOkQ[frame_, magSym_] :=
    U5..U7, p, T} with U5..U7 == U2..U4 numerically. Keys are now matched on their direction list, so
    the second tag reuses the first one's symbols and group. `dirSyms` memoises by (kind, directions). *)
 unitLoopMixedFrameSpec[frame_, magSym_] := Module[
-    {loopQ, svKeys, loopKeys, spatKeys, extFrame, pf, defs, groups = {}, n = 0, nf, nfS, dirSeen = <||>, dirSyms},
-    loopQ[comps_] := Module[{cc = PowerExpand[comps]},
-      AllTrue[Range[4], (Simplify[cc[[#]] - Coefficient[cc[[#]], magSym] magSym] === 0)&]];
+    {svKeys, loopKeys, spatKeys, extFrame, pf, defs, groups = {}, n = 0, nf, nfS, dirSeen = <||>, dirSyms},
     (* direction list -> list of ntU$ symbols (0 where the direction vanishes); one unit group per
        DISTINCT direction list, minted on first sight and reused by every later key that matches *)
     dirSyms[kind_, dirs_List] :=
@@ -1687,7 +1692,7 @@ unitLoopMixedFrameSpec[frame_, magSym_] := Module[
     (* spatial vectors are derived from their parent at the end, never classified — see
        spatialVecKeysOf. Held out of loopKeys/spatKeys/extFrame so they mint nothing of their own. *)
     svKeys   = spatialVecKeysOf[frame];
-    loopKeys = Select[Keys[frame], !MemberQ[svKeys, #] && loopQ[frame[#]]&];
+    loopKeys = Select[Keys[frame], !MemberQ[svKeys, #] && fullLoopQ[PowerExpand[frame[#]], magSym]&];
     spatKeys = Select[Keys[frame],
       (!MemberQ[svKeys, #] && !MemberQ[loopKeys, #] && unitLoopSpatialQ[frame[#], magSym])&];
     (* externals — AND the spatial loops' temporal components — go through polyFrameSpec's
@@ -1737,7 +1742,7 @@ unitLoopOkQ[frame_, pSym_, magSym_] := AllTrue[
     Values[frame],
     Function[comps,
       Module[{cc = PowerExpand[comps]},
-        SubsetQ[{pSym}, Variables[cc]] || AllTrue[Range[4], (Simplify[cc[[#]] - Coefficient[cc[[#]], magSym] magSym] === 0)&]
+        SubsetQ[{pSym}, Variables[cc]] || fullLoopQ[cc, magSym]
       ]]];
 
 numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
@@ -2078,7 +2083,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                                    ConstantArray[dcInt[chain], n],
                                    tb[[1]],
                                    tb[[2]]}]]],
-                          StringMatchQ[nv, "DiracNet" ~~ ___],(* gamma branch: DiracNet + projector rest *)
+                          StringStartsQ[nv, "DiracNet"],(* gamma branch: DiracNet + projector rest *)
                             {{dsInt[nv]}, {lsInt[lsStr]}, ntPackCx[{scal}], {dcInt["std::vector<DChainTok>{}"]}, {dlInt[{}]}, {drInt[{}]}},
                           True,(* gamma-free branch: whole net is the rest *)
                             {{dsInt["DiracNet{}"]}, {lsInt[nv]}, ntPackCx[{scal}], {dcInt["std::vector<DChainTok>{}"]}, {dlInt[{}]}, {drInt[{}]}}]]],
@@ -2101,7 +2106,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
           {"static std::vector<SUNNet> ntColNets(){ return {}; }\n", {}},
           Module[{envDecl, chunks},
             envDecl = StringJoin["SUNEnv sun" <> # <> "(" <> # <> "); "& /@ DeleteDuplicates @ Flatten @ StringCases[uCol, "sun" ~~ r : DigitCharacter.. ~~ "." :> r]];
-            chunks = SplitBy[Transpose[{uCol, Ceiling[Accumulate[(StringLength /@ uCol) + 2] / $ntDefChunk]}], Last][[All, All, 1]];
+            chunks = ntSplitByChars[uCol, 2];
             {StringJoin[
                MapIndexed["void ntColNets_c" <> ToString[#2[[1]] - 1] <> "(std::vector<SUNNet>& o);\n"&, chunks],
                "static std::vector<SUNNet> ntColNets(){ std::vector<SUNNet> o; o.reserve(" <> ToString[Length[uCol]] <> "); " <> StringJoin[Table["ntColNets_c" <> ToString[k - 1] <> "(o); ", {k, Length[chunks]}]] <> "return o; }\n"],
@@ -3178,17 +3183,13 @@ ntRelativePath[from_String, to_String] := Module[{f, t, common, rel},
    list, decorator, main-TU -O level, whether a probe is required). One writer per file, so parallel
    numtrace jobs never race. Paths are basenames relative to "gen_dir", relative to the flow dir. *)
 
-(* A positive-integer environment variable, or 0 for "unset / unusable". Only used for the thread
-   caps below, where 0 is the manifest's spelling of "no cap — take the build's -jN". *)
-ntEnvPosInt[nm_String] := With[{v = Environment[nm]},
-  If[StringQ[v],
-    With[{n = Quiet @ ToExpression[v]}, If[IntegerQ[n] && n > 0, n, 0]],
-    0]];
 
-ntWriteManifest[flowDir_String, name_String, ns_String, genFile_String, tracesFile_String,
-    unitFiles_List, decor_String, mainOpt_String, complexQ_, probeFile_,
-    deviceTarget_ : Automatic] := Module[
-  {genDir = DirectoryName[genFile], manifest},
+ntWriteManifest[flowDir_String, spec_Association] := Module[
+  {name = spec["Class"], ns = spec["Namespace"], genFile = spec["Generator"], tracesFile = spec["Traces"],
+   unitFiles = spec["Units"], decor = spec["Decorator"], mainOpt = spec["MainOpt"],
+   complexQ = spec["Complex"], probeFile = spec["Probe"], deviceTarget = spec["DeviceTarget"],
+   genDir, manifest},
+  genDir = DirectoryName[genFile];
   manifest = <|
     (* the flow's identity is its directory (flows/ZA4), not the kernel class name (ZA4_kernel) *)
     "name"          -> FileNameTake[StringTrim[flowDir, "/"]],
@@ -3622,9 +3623,9 @@ mkGenerateKernel::scalarleak = "Diagram `1`: a non-numeric factor `2` reached th
 
 (* ---- runtime-parameter typing ----------------------------------------------------------------
    A parameter name is spelled as a Symbol by a hand-written flow file and as a String by
-   DiFfRG_compat (which reads it out of a DiFfRG parameter Association). Every list that gets
-   MemberQ'd against another must therefore be normalised the same way first; ntParamName is that
-   one normalisation, so the three call sites cannot drift apart. *)
+   DiFfRG_compat (which reads it out of a DiFfRG parameter Association), and option names may be
+   either too. Every list that gets MemberQ'd against another must therefore be normalised the same
+   way first; ntParamName is that one normalisation. *)
 ntParamName[nm_String] := nm;
 ntParamName[nm_Symbol] := SymbolName[nm];
 ntParamName[nm_] := ToString[nm];
@@ -3997,7 +3998,8 @@ ntRunProbe[srcFile_String, tracesDir_String, verdictFile_ : None, macro_ : None]
   Module[{cxx = resolveGenCxx[], bin, rc, out, parsed, oflag},
     (* the SOURCE is a committed build input in gen/; the binary and logs are scratch and stay out of
        the source tree (offline, CMake builds the probe in the build dir instead). *)
-    bin = FileNameJoin[{$TemporaryDirectory, FileBaseName[srcFile]}];
+    (* unique per invocation: two sessions generating the same namespace must not share a binary *)
+    bin = FileNameJoin[{$TemporaryDirectory, FileBaseName[srcFile] <> "_" <> StringReplace[CreateUUID[], "-" -> ""]}];
     rc = Run[cxx <> " -std=c++20 -O1 -w -I '" <> tracesDir <> "' '" <> srcFile <> "' -o '" <> bin <> "' 2> '" <> bin <> ".cerr'"];
     If[rc =!= 0,
       Message[ntRunProbe::probefail, "compile rc=" <> ToString[rc] <> "\n" <> ntLogHead[bin <> ".cerr"]]; Abort[]];
@@ -4012,6 +4014,7 @@ ntRunProbe[srcFile_String, tracesDir_String, verdictFile_ : None, macro_ : None]
     ntLog["[probe] over ", Round[parsed[[8]]], " pts:  max|Im|=", ScientificForm[parsed[[1]], 3], "  max|full-proj|=", ScientificForm[parsed[[2]], 3], "  max|Re|=", ScientificForm[parsed[[3]], 3], "  rel|Im|=", ScientificForm[parsed[[4]], 3], "  rel|full-proj|=", ScientificForm[parsed[[5]], 3], "  worst rel|RePart-Re|=", ScientificForm[parsed[[6]], 3], " (", Round[parsed[[7]]], " outlier pt(s))"];
     If[StringQ[verdictFile] && !FileExistsQ[verdictFile],
       Message[ntRunProbe::probefail, "no verdict header written at " <> verdictFile]; Abort[]];
+    Quiet[DeleteFile /@ Select[{bin, bin <> ".cerr", bin <> ".out", bin <> ".rerr"}, FileExistsQ]];
     Switch[Round[parsed[[9]]], 2, "Pure", 1, "RePart", _, "Complex"]];
 
 (* ---- group-diagonal dressing fold: SUNPoly via the validated C++ engine ---------------------
@@ -4178,7 +4181,12 @@ ntkPruneSpec[diagData_, groups_, complexQ_, offline_, pruneRequested_, realProbe
    function it now returns an Association instead, validated by ntStageResult, and the caller binds
    the fields; that is the direction the rest is moving. A local you cannot find an assignment for in
    THIS scope is assigned in an inner one, and that is the hazard, not a convention. *)
+(* Block: the package globals assigned below ($RecursionLimit, the cache-key stamp, the dressing resolver,
+   the canonicalisation rules, the complex-projection mode) are scoped to this one generation. *)
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
+  Block[{$RecursionLimit = $RecursionLimit, $ctCtx = $ctCtx, $ntDressResolve = $ntDressResolve,
+         $ntCanonIdsSrc = $ntCanonIdsSrc, $ntCanonRules = $ntCanonRules,
+         $ntComplexRuntimeProjection = $ntComplexRuntimeProjection},
   Module[{name, ns, dress, scalarParams, adParams, parameterOrder, adNames, scalarParamNames, args, sigArgs, frame, env, nonzeroCompMask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, preamble, integrand, kernelParams, runtimeParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, complexQ, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, realOut, endProject, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, realOnlyG = {}, pruneG = {}, probeVerdict = None, genPass,
 (* hoistCalls/hoistSyms/hoistFnStr were NOT declared here at all — they were assigned unqualified
    and so became NumTracer`Private` globals that survive ACROSS generations. Every path assigns
@@ -4685,17 +4693,13 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
         dressPat = Alternatives @@ (If[StringQ[#], Symbol["Global`" <> #], #]& /@ dress);
         hoistCalls =
           DeleteDuplicates @
-            Cases[integrand, (d : dressPat)[a_] /; FreeQ[a, Alternatives @@ loopSyms], {0, Infinity}];
+            With[{loopPat = Alternatives @@ loopSyms},
+              Cases[integrand, (d : dressPat)[a_] /; FreeQ[a, loopPat], {0, Infinity}]];
         If[hoistCalls =!= {},
           hoistSyms = Table[Symbol["Global`nthk" <> ToString[i - 1]], {i, Length[hoistCalls]}];
           integrand = integrand /. Thread[hoistCalls -> hoistSyms];
           ntLog["[khoist] hoisted ", Length[hoistCalls],
             " loop-constant dressing lookup(s) to host-evaluated kernel parameters"]]]];
-(* consumed by DiFfRG_compat.m to decide whether (and with how many values) to patch the
-   generated CT_map/CT_get wrappers after this call returns. Lives in the shared Private`
-   context: the NumTracer` context itself is Protect-ed at package load (NumTracer.m), so an
-   exported-context handoff symbol would silently fail to assign (Set::wrsym). *)
-    $ntLastHoistCount = Length[hoistCalls];
 (* Same Private`-context handoff, for the same reason: ntProjectIntegrand runs several call layers
    down (the kernel body lowering -> ntPureIntegrand/ntRePartIntegrand) and threading an option through those
    would touch every one. Assigned UNCONDITIONALLY so a generation cannot inherit the previous
@@ -4916,8 +4920,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
         True,
           Module[{terms, feT, tlT},
             terms = If[Head[integrand] === Plus, List @@ integrand, {integrand}];
-            feT = Select[terms, ntFiniteExtentQ[#, ms0, hs0] &];
-            tlT = Select[terms, ! ntFiniteExtentQ[#, ms0, hs0] &];
+            {feT, tlT} = Lookup[GroupBy[terms, TrueQ[ntFiniteExtentQ[#, ms0, hs0]] &], {True, False}, {}];
             mFiniteExtentBody = (tlT === {}) && (feT =!= {});
             mSplit = (feT =!= {}) && (tlT =!= {});
             If[mSplit, feExpr = Total[feT]; tailExpr = Total[tlT]];
@@ -5213,13 +5216,19 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    unit TU and must stay.
    The PCH MUST be built with the unit TUs' exact flag set (-O0 -fno-exceptions -fno-rtti + hoDef);
    clang rejects a PCH whose flags disagree with the consumer's. *)
-        pchOut = bin <> ".pch";
-        pchCmd =
-          If[StringContainsQ[cxx, "clang"],
-            "(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 -O0 -fno-exceptions -fno-rtti" <> hoDef <> "-I '" <> incDir <> "' -x c++-header '" <> pchFile <> "' -o '" <> pchOut <> "') > '" <> clog <> "' 2>&1",
-            None];
-        pchArg = If[pchCmd === None, "", " -DNT_GEN_PCH -include-pch '" <> pchOut <> "'"];
-        pcmd = "printf '%s\\0' " <> StringRiffle[("\"" <> # <> "\"")& /@ Join[{"(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 " <> mainOpt <> hoDef <> "-pthread -I '" <> incDir <> "' -c '" <> genFile <> "' -o '" <> mainObj <> "')"}, Table["(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 -O0 -fno-exceptions -fno-rtti" <> hoDef <> pchArg <> " -I '" <> incDir <> "' -c '" <> unitFiles[[u]] <> "' -o '" <> unitObjs[[u]] <> "')", {u, 1, Length[unitFiles]}]], " "] <> " | xargs -0 -P " <> ToString[$ntCompileJobs] <> " -I CMD bash -c CMD >> '" <> clog <> "' 2>&1";
+        (* ccPre: every compile shares it; unitFlags: the -O0 unit TUs and the PCH must use the SAME set *)
+        With[{ccPre = "(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 ",
+              unitFlags = "-O0 -fno-exceptions -fno-rtti" <> hoDef},
+          pchOut = bin <> ".pch";
+          pchCmd =
+            If[StringContainsQ[cxx, "clang"],
+              ccPre <> unitFlags <> "-I '" <> incDir <> "' -x c++-header '" <> pchFile <> "' -o '" <> pchOut <> "') > '" <> clog <> "' 2>&1",
+              None];
+          pchArg = If[pchCmd === None, "", " -DNT_GEN_PCH -include-pch '" <> pchOut <> "'"];
+          pcmd = "printf '%s\\0' " <> StringRiffle[("\"" <> # <> "\"")& /@ Join[
+              {ccPre <> mainOpt <> hoDef <> "-pthread -I '" <> incDir <> "' -c '" <> genFile <> "' -o '" <> mainObj <> "')"},
+              Table[ccPre <> unitFlags <> pchArg <> " -I '" <> incDir <> "' -c '" <> unitFiles[[u]] <> "' -o '" <> unitObjs[[u]] <> "')", {u, 1, Length[unitFiles]}]], " "] <>
+            " | xargs -0 -P " <> ToString[$ntCompileJobs] <> " -I CMD bash -c CMD >> '" <> clog <> "' 2>&1"];
         lcmd = cxx <> " -pthread '" <> mainObj <> "' " <> StringRiffle[("'" <> # <> "'")& /@ unitObjs, " "] <> libArg <> " -o '" <> bin <> "' >> '" <> clog <> "' 2>&1";
 (* Content-addressed compile cache: the generator source is a deterministic function of the flow,
    and the compile dominates the run ~11:1 on medium flows (measured 2026-08-08 across za3_147 /
@@ -5321,10 +5330,13 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
     (* per-flow numtrace manifest + switch. Written LAST, so a flow that aborted part-way leaves no
        manifest claiming to be buildable. Offline it says 0 (the numtrace target still owes the
        kernels); online everything is already done, so it says 1 and the target skips the flow. *)
-    Module[{mf = ntWriteManifest[DirectoryName[kernelFile], name, ns, genFile, headerFile, unitFiles, decor, mainOptForManifest, complexQ, probeFile, OptionValue["DeviceTarget"]]},
+    Module[{mf = ntWriteManifest[DirectoryName[kernelFile],
+        <|"Class" -> name, "Namespace" -> ns, "Generator" -> genFile, "Traces" -> headerFile, "Units" -> unitFiles,
+          "Decorator" -> decor, "MainOpt" -> mainOptForManifest, "Complex" -> complexQ, "Probe" -> probeFile,
+          "DeviceTarget" -> OptionValue["DeviceTarget"]|>]},
       If[!offline, ntMarkGenerated[mf]];
       Print["wrote manifest: ", mf, If[offline, " (generated: 0 — run `make numtrace`)", " (generated: 1)"]]];
-    kernelFile];
+    <|"KernelFile" -> kernelFile, "HoistCount" -> Length[hoistCalls]|>]];
 
 (* ---- MakeNTKernel: the public kernel emitter. --------------------------------------
    MakeNTKernel[ntk, genFile, kernelFile, tracesFile] emits the numeric matrix-product kernel:
@@ -5355,16 +5367,10 @@ MakeNTKernel[ntk : NTKernel[_], file_, opts : OptionsPattern[]] := (
 MakeNTKernel::optname = "Unknown option name(s) `1`. MakeNTKernel accepts: `2`. An unrecognised name is NOT applied — OptionsPattern[] matches any rule, so it would otherwise be swallowed silently and the setting would simply not take effect (this is what happened to \"Backend\" -> \"Dense\" after that option was removed). Check the spelling, or drop the option.";
 
 ntAssertKnownOptions[opts_List] :=
-  With[{unknown = Complement[Cases[opts, (nm_ -> _) | (nm_ :> _) :> ntOptName[nm]], ntOptName /@ Keys[Options[MakeNTKernel]]]},
+  With[{unknown = Complement[Cases[opts, (nm_ -> _) | (nm_ :> _) :> ntParamName[nm]], ntParamName /@ Keys[Options[MakeNTKernel]]]},
     If[unknown =!= {},
-      Message[MakeNTKernel::optname, unknown, Sort[ntOptName /@ Keys[Options[MakeNTKernel]]]];
+      Message[MakeNTKernel::optname, unknown, Sort[ntParamName /@ Keys[Options[MakeNTKernel]]]];
       Abort[]]];
-
-(* Options may be spelled as Strings or Symbols; normalise before comparing, exactly as the
-   parameter-name handling does (see ntParamName). *)
-ntOptName[nm_String] := nm;
-ntOptName[nm_Symbol] := SymbolName[nm];
-ntOptName[nm_] := ToString[nm];
 
 (* "ComputeType" picks the precision the EMITTED kernel runs in ("double" or "float", or a complex type
    of either, as for DiFfRG's MakeKernel); derivation and the generator stay in double. It is scoped to
@@ -5377,7 +5383,12 @@ ntRealTypeOf[t_String] :=
     StringContainsQ[t, "double"], "double",
     True, Message[MakeNTKernel::ctype, t]; Abort[]];
 
-MakeNTKernel[ntk : NTKernel[_], genFile_, kernelFile_, tracesFile_, opts : OptionsPattern[]] := (
+MakeNTKernel[ntk : NTKernel[_], genFile_, kernelFile_, tracesFile_, opts : OptionsPattern[]] :=
+  ntMakeNTKernel[ntk, genFile, kernelFile, tracesFile, opts]["KernelFile"];
+
+(* MakeNTKernel's body, returning <|"KernelFile", "HoistCount"|>: MakeNTKernelDiFfRG needs the number
+   of hoisted loop-constant lookups to patch its wrapper TUs. *)
+ntMakeNTKernel[ntk : NTKernel[_], genFile_, kernelFile_, tracesFile_, opts : OptionsPattern[MakeNTKernel]] := (
   ntAssertKnownOptions[Flatten[{opts}]];
   With[{realT = ntRealTypeOf[OptionValue[MakeNTKernel, {opts}, "ComputeType"]]},
     Block[{$ntRealT = realT,

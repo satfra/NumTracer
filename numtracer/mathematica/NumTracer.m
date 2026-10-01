@@ -148,9 +148,7 @@ SetNumTracerThreads[n_Integer?Positive] := SetNumTracerThreads[n, n];
 
 SetNumTracerThreads[] := GetNumTracerThreads[];
 
-GetNumTracerThreads[] := Module[{a = Environment["NT_GEN_MAXW"], b = Environment["NT_GEN_MAXW_B"]},
-   {If[a === $Failed, Automatic, ToExpression[a]],
-    If[b === $Failed, Automatic, ToExpression[b]]}];
+GetNumTracerThreads[] := Replace[ntEnvPosInt /@ {"NT_GEN_MAXW", "NT_GEN_MAXW_B"}, 0 -> Automatic, {1}];
 
 
 (* ---- load the implementation files, LOUDLY -------------------------------------------------
