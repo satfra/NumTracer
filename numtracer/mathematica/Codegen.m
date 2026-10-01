@@ -1888,24 +1888,51 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
          unit: two committed reference kernels are generated this way and graded against the
          deduped ones (tests/refshim/compare_lambda3d_small.cpp, compare_zaaqbq1_small.cpp). *)
 
+(* One net's sub-terms -> {trace keys, dress ids, summed scalars}, one entry per distinct
+   (trace, dress channel) key in first-appearance order (I3: PositionIndex), zero sums dropped.
+   A packed numeric scalar column takes the vectorised path: singletons are copied, pairs are added
+   elementwise (identical to Total of two), larger groups use Total. Anything else (a symbolic
+   scalar) keeps the per-group path and its `!= 0` filter. *)
+ntMergeNetTerms[ck_, tks_, drs_, scs_] := Module[{g = Values[PositionIndex[ck]], f, sums, len, keep},
+  f = g[[All, 1]];
+  If[Developer`PackedArrayQ[scs],
+    len = Length /@ g;
+    sums = scs[[f]];
+    With[{p2 = Flatten @ Position[len, 2, {1}]},
+      If[p2 =!= {}, sums[[p2]] = scs[[g[[p2, 1]]]] + scs[[g[[p2, 2]]]]]];
+    With[{pk = Flatten @ Position[UnitStep[len - 3], 1, {1}]},
+      If[pk =!= {}, sums[[pk]] = Total[scs[[#]]] & /@ g[[pk]]]];
+    (* numeric, not structural: a packed machine sum cancels to 0. + 0. I, which =!= 0 would keep *)
+    keep = Unitize[Abs[sums]];
+    {Pick[tks[[f]], keep, 1], Pick[drs[[f]], keep, 1], Pick[sums, keep, 1]},
+    sums = Total[scs[[#]]] & /@ g;
+    keep = If[TrueQ[# != 0], 1, 0] & /@ sums;
+    {Pick[tks[[f]], keep, 1], Pick[drs[[f]], keep, 1], Pick[sums, keep, 1]}]];
+
+ntGenDedupJoin::bigkey = "The packed sub-term key range `1` exceeds 2^62; the dedup join stays exact but runs on unpacked bignum columns (slow). Consider re-ranking the key columns to dense ids.";
+
 ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleIds_, dressMonoIds_,
                diracNetPool_, lorNetPool_, dressChainPool_, slotTuplePool_, dressMonoPool_,
                hasDressed_, noDedup_] :=
-  Module[{lens, constCol, dsI, uDs, lsI, uLs, dcI, uDc, dlI, uDl, drI, uDr,
+  Module[{lens, dsI, uDs, lsI, uLs, dcI, uDc, dlI, uDl, drI, uDr,
           nLs, nDc, nDl, nDr, traceKeyPacked, traceDressKeyPacked, traceKeyFlat, distinctTraceKeys,
-          subKeysLen, netTerms, refCount, distinctSubs, subIdxOf, nSub, nReused},
+          subKeysLen, merged, foldKeys, foldLens, netTraceRows, netDressRows, netScalarRows,
+          refCount, distinctSubs, subIdxOf, nSub, nReused},
 (* The five key columns arrived already interned (see the expansion above), so the join opens with
    the ids and the pools in hand: no DeleteDuplicates, no Lookup, nothing hashed here at all. This is
    what the stage used to spend most of its time on — 5 columns x 12.7 M elements x 2 passes. *)
     lens = Length /@ diracNetIds;
-    constCol = ConstantArray[0, #]& /@ lens;
 
     {dsI, uDs} = {diracNetIds, diracNetPool};
     {lsI, uLs} = {lorNetIds, lorNetPool};
-    {dcI, uDc} = If[hasDressed, {dressChainIds, dressChainPool}, {constCol, {""}}];
-    {dlI, uDl} = If[hasDressed, {slotTupleIds, slotTuplePool},   {constCol, {""}}];
+    (* a non-dressed flow has no chain/slot column: the scalar 0 broadcasts in the listable pack *)
+    {dcI, uDc} = If[hasDressed, {dressChainIds, dressChainPool}, {0, {""}}];
+    {dlI, uDl} = If[hasDressed, {slotTupleIds, slotTuplePool},   {0, {""}}];
     {drI, uDr} = {dressMonoIds, dressMonoPool};
     {nLs, nDc, nDl, nDr} = Max[1, Length[#]]& /@ {uLs, uDc, uDl, uDr};   (* I2 *)
+    (* past 2^63 the packed keys become bignums: still exact, but the columns unpack and slow down *)
+    If[Max[1, Length[uDs]] nLs nDc nDl nDr >= 2^62,
+      Message[ntGenDedupJoin::bigkey, Max[1, Length[uDs]] nLs nDc nDl nDr]];
 
 (* I2: mixed-radix pack of the traceKey, then of the (traceKey, dressChannel) pair the per-net merge
    groups on. Listable arithmetic over the ragged integer columns — no Map. *)
@@ -1923,49 +1950,43 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
 (* Per net: merge the sub-terms that share a trace AND a dress channel, summing scalars; drop the zero
    sums. Do this BEFORE counting references — a (trace, channel) occurring twice inside ONE net collapses
    to a single reference here, so its raw occurrence count would overstate its reuse, and a channel whose
-   scalars cancel is not referenced at all and must not be contracted.
-   I3: PositionIndex, not GatherBy — same grouping in the same order, in one call, and the per-group
-   Map then runs over GROUPS rather than over sub-terms. *)
-    netTerms =
-      MapThread[
-        Function[{ck, tks, drs, scs},
-          Select[
-            Function[g, {tks[[First[g]]], drs[[First[g]]], Total[scs[[g]]]}] /@ Values[PositionIndex[ck]],
-            (* numeric, not structural: a packed machine sum cancels to 0. + 0. I, which =!= 0 would keep *)
-            #[[3]] != 0&]],
-        {traceDressKeyPacked, traceKeyPacked, drI, subScalars}];
+   scalars cancel is not referenced at all and must not be contracted. Each net yields three columns
+   {trace key, dress id, summed scalar} (ntMergeNetTerms). *)
+    merged = MapThread[ntMergeNetTerms, {traceDressKeyPacked, traceKeyPacked, drI, subScalars}];
+    If[$NumTracerVerbose, ntLog["[mem] dedup join: per-net merge done: MemoryInUse=", Round[MemoryInUse[]/2.^20], " MB  RSS=", Round[ntWolframRssMB[]], " MB"]];
+    foldKeys = Join @@ merged[[All, 1]];
+    foldLens = Length /@ merged[[All, 1]];
 (* I3: order the distinct traces by DESCENDING reference count, so a memory-capped run still caches
    the traces that repay caching most, and the singletons (refCount 1 — computing one costs the same
    whether or not it is cached, so caching it is pure RAM for no saving) land at the end where the
    default cap excludes them. ReverseSort on an Association is stable, which is what keeps ties in
    first-appearance order. *)
-    If[$NumTracerVerbose, ntLog["[mem] dedup join: per-net merge (netTerms) done: MemoryInUse=", Round[MemoryInUse[]/2.^20], " MB  RSS=", Round[ntWolframRssMB[]], " MB"]];
-    (* First /@ #, not #[[All,1]] — the latter errors on a net whose terms all cancelled to {} *)
-    refCount = Counts[Flatten[Map[First /@ #&, netTerms], 1]];
+    refCount = Counts[foldKeys];
     distinctSubs = Keys[ReverseSort[refCount]];
     subIdxOf = AssociationThread[distinctSubs -> Range[0, Length[distinctSubs] - 1]];
     nSub = Length[distinctSubs];
-    nReused = Count[Values[refCount], c_ /; c >= 2];(* == the length of the sorted prefix worth caching *)
-(* I2/I4: decode the surviving packed keys back into their four string columns — only nSub of them, so
-   this is the one place the strings are touched again and it costs nothing next to the join. Under
-   NT_GEN_NO_DEDUP the grouping id is an occurrence index, so the pack is read off the flat column. *)
+    nReused = Total[UnitStep[Values[refCount] - 2]];(* #refCount >= 2 == the length of the sorted prefix worth caching *)
+(* I2/I4: decode the surviving packed keys back into their four pool entries, listable over all nSub
+   keys at once. Under NT_GEN_NO_DEDUP the grouping id is an occurrence index, so the pack is read off
+   the flat column. *)
     distinctTraceKeys = If[traceKeyFlat === None, distinctSubs, traceKeyFlat[[distinctSubs + 1]]];
     distinctSubs =
-      Function[k,
-        Module[{a = k, diracIdx, lorIdx, chainIdx, slotIdx},
-          slotIdx  = Mod[a, nDl]; a = Quotient[a, nDl];
-          chainIdx = Mod[a, nDc]; a = Quotient[a, nDc];
-          lorIdx   = Mod[a, nLs]; diracIdx = Quotient[a, nLs];
-          {uDs[[diracIdx + 1]], uLs[[lorIdx + 1]], uDc[[chainIdx + 1]], uDl[[slotIdx + 1]]}]] /@
-        distinctTraceKeys;
-(* the fold entries keep the dress-atom multiset itself (downstream builds the DMono table from it),
-   so decode that column here too — again only over the surviving terms. *)
-    netTerms = Map[Function[nt, {subIdxOf[nt[[1]]], uDr[[nt[[2]] + 1]], nt[[3]]}] /@ #&, netTerms];
+      Module[{a = distinctTraceKeys, diracIdx, lorIdx, chainIdx, slotIdx},
+        slotIdx  = Mod[a, nDl]; a = Quotient[a, nDl];
+        chainIdx = Mod[a, nDc]; a = Quotient[a, nDc];
+        lorIdx   = Mod[a, nLs]; diracIdx = Quotient[a, nLs];
+        Transpose[{uDs[[diracIdx + 1]], uLs[[lorIdx + 1]], uDc[[chainIdx + 1]], uDl[[slotIdx + 1]]}]];
+(* the fold entries, per net: distinct-trace index, the dress-atom multiset itself (downstream builds
+   the DMono table from it) and the scalar *)
+    netTraceRows  = TakeList[Lookup[subIdxOf, foldKeys], foldLens];
+    netDressRows  = TakeList[uDr[[(Join @@ merged[[All, 2]]) + 1]], foldLens];
+    netScalarRows = merged[[All, 3]];
 
     If[$NumTracerVerbose, ntLog["[mem] dedup join: decode done: MemoryInUse=", Round[MemoryInUse[]/2.^20], " MB  RSS=", Round[ntWolframRssMB[]], " MB"]];
     ntStageResult["ntGenDedupJoin",
-      {"subKeysLen", "netTerms", "refCount", "distinctSubs", "subIdxOf", "nSub", "nReused"},
-      <|"subKeysLen" -> subKeysLen, "netTerms" -> netTerms, "refCount" -> refCount,
+      {"subKeysLen", "netTraceRows", "netDressRows", "netScalarRows", "refCount", "distinctSubs", "subIdxOf", "nSub", "nReused"},
+      <|"subKeysLen" -> subKeysLen, "netTraceRows" -> netTraceRows, "netDressRows" -> netDressRows,
+        "netScalarRows" -> netScalarRows, "refCount" -> refCount,
         "distinctSubs" -> distinctSubs, "subIdxOf" -> subIdxOf, "nSub" -> nSub,
         "nReused" -> nReused|>]];
 
@@ -2008,7 +2029,7 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
    flow / unknown". When it is >= 0 the generator proves Matsubara evenness while it contracts (see
    the ntMEven thread below) and emits the verdict as a constant in the traces header. *)
 emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kns_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False, mIdx_:-1] :=
-  Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], str, tmpl, pre, unitPre, unitInc, nUnits, units, decl, diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeysLen, netTerms, dsInt, dsGet, lsInt, lsGet, dcInt, dcGet, dlInt, dlGet, drInt, drGet, scCache, slotCombo, dPoolCse, lPoolCse, refCount, distinctSubs, subIdxOf, nSub, nReused, sdnDefs, slnDefs, sdchDefs, sdslDefs, sdnCDecl, slnCDecl, sdchCDecl, sdslCDecl, tableBag, emitBigTable,
+  Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], str, tmpl, pre, unitPre, unitInc, nUnits, units, decl, diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeysLen, netTraceRows, netDressRows, netScalarRows, dsInt, dsGet, lsInt, lsGet, dcInt, dcGet, dlInt, dlGet, drInt, drGet, scCache, slotCombo, dPoolCse, lPoolCse, refCount, distinctSubs, subIdxOf, nSub, nReused, sdnDefs, slnDefs, sdchDefs, sdslDefs, sdnCDecl, slnCDecl, sdchCDecl, sdslCDecl, tableBag, emitBigTable,
     chpDefs, chpCDecl, optpDefs, optpCDecl, sdchrDefs, sdchrCDecl, sdslrDefs, sdslrCDecl, dressAtomIds, colMainDecls, colChunkDefs},
     str[x_] := ToString[x];
 (* The four big index/scalar tables and the colour/group tables are emitted as TOP-LEVEL chunk
@@ -2379,7 +2400,9 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
             diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, dressAtomIds,
             dPoolCse, lPoolCse, dcGet[], dlGet[], drGet[], hasDressed, ntNoDedup]},
         subKeysLen   = joined["subKeysLen"];
-        netTerms     = joined["netTerms"];
+        netTraceRows  = joined["netTraceRows"];
+        netDressRows  = joined["netDressRows"];
+        netScalarRows = joined["netScalarRows"];
         refCount     = joined["refCount"];
         distinctSubs = joined["distinctSubs"];
         subIdxOf     = joined["subIdxOf"];
@@ -2404,9 +2427,9 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
       " reused (cached), ",
       nSub - nReused,
       " singletons; per-net folds total ",
-      Total[Length /@ netTerms],
+      Total[Length /@ netTraceRows],
       " (longest ",
-      Max[Append[Length /@ netTerms, 0]],
+      Max[Append[Length /@ netTraceRows, 0]],
       ")",
       If[ntNoDedup,
         " [NT_GEN_NO_DEDUP]",
@@ -2570,26 +2593,17 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    alone leaves ~1 MB, since the rows differ while their entries repeat). The runtime rebuild
    below is O(nets) and reproduces sidx/dsc EXACTLY as before, so fold_nets is untouched. *)
             With[{
-              idxRows =
-                Function[nt,
-                    nt[[All, 1]]
-                  ] /@ netTerms,
-              (* LEVER (b): the per-sub-term dressing monomials (position 2), row-deduped like sidx *)
-              drRows =
-                Function[nt,
-                    nt[[All, 2]]
-                  ] /@ netTerms,
-              scaRows =
-                Function[nt,
-                    nt[[All, 3]]
-                  ] /@ netTerms},
+              idxRows = netTraceRows,
+              (* the per-sub-term dressing monomials, row-deduped like sidx *)
+              drRows = netDressRows,
+              scaRows = netScalarRows},
               With[{distinctIdxRows = DeleteDuplicates[idxRows], distinctScalars = DeleteDuplicates[Flatten[scaRows]], distinctDressMonos = DeleteDuplicates[Flatten[drRows, 1]]},
                 With[{idxPos = AssociationThread[distinctIdxRows -> Range[Length[distinctIdxRows]] - 1], valPos = AssociationThread[distinctScalars -> Range[Length[distinctScalars]] - 1], drValPos = AssociationThread[distinctDressMonos -> Range[Length[distinctDressMonos]] - 1]},
                   With[{scaIdxRows = Map[valPos, scaRows, {2}], drIdxRows = Map[drValPos, drRows, {2}]},
                     With[{distinctScalarRows = DeleteDuplicates[scaIdxRows], distinctDressRows = DeleteDuplicates[drIdxRows]},
                       With[{scaPos = AssociationThread[distinctScalarRows -> Range[Length[distinctScalarRows]] - 1], drRowPos = AssociationThread[distinctDressRows -> Range[Length[distinctDressRows]] - 1]},
                         StringJoin[
-                          "  const size_t NNET = " <> str[Length[netTerms]] <> ";\n",
+                          "  const size_t NNET = " <> str[Length[netTraceRows]] <> ";\n",
 (* the four big index/scalar tables move to top-level chunk functions (see ntBigTableFns): together
    with colnets they are what makes main() large enough to break the compiler. *)
                           emitBigTable["ntSidxU", "std::vector<std::vector<int>>", ntIntRow /@ distinctIdxRows,
