@@ -1751,7 +1751,7 @@ unitLoopMixedFrameSpec[frame_, magSym_] := Module[
    component p0 and the loop an independent l0 (neither ∝ magSym) — so we must fall back to the
    general polyFrameSpec. *)
 
-unitLoopOkQ[frame_, pSym_, magSym_] := AllTrue[
+unitLoopOkQ[frame_, pSym_, magSym_] := !ntEnvFlag["NT_NO_UNIT_GROUPS"] && AllTrue[
     Values[frame],
     Function[comps,
       Module[{cc = PowerExpand[comps]},
@@ -2852,46 +2852,16 @@ inline\n#define KOKKOS_FUNCTION\n#define __host__\n#define __device__\n";
 privDefs[decor_] :=
   StringRiffle[(decor <> " auto " <> # <> "(const auto &k2, const auto &p2) { return REG::" <> # <> "(k2, p2); }")& /@ {"RB", "RF", "RBdot", "RFdot", "dq2RB", "dq2RF"}, "\n"];
 
-(* per-trace real/imag accessors for the "RePart" re/im split, as emitted into the PROBE (the kernel
-   uses the type-preserving ntReImDefsAD below): a kernel whose VALUE is real but which
-   has a COMPLEX trace is assembled as Σ[Re(c)·tr.real() − Im(c)·tr.imag()] — PURE double arithmetic, so
-   no complex type survives into the kernel (avoids mixing the trace's std::complex with the support
-   complex, and keeps device code real). Overloads pass a real trace straight through (im → 0). *)
+(* Real/imag accessors, emitted into the kernel class and into the probe. In the "RePart" assembly they
+   are applied to trace tokens (double or nt_complex_t); under "ComplexEndProjection" to the whole
+   integrand, which on an autodiff-active kernel is an autodiff type. They are therefore
+   type-PRESERVING: a hard `-> double` would not compile on autodiff::Real (no .real()) and would drop
+   the derivative where it did. The fallback is an UNQUALIFIED real(z)/imag(z), so for a DiFfRG
+   consumer ordinary lookup finds DiFfRG::real/imag (common/complex_math.hh); it is instantiated only
+   for a type without .real(). Trailing return types because kernel() calls these before their
+   in-class definition, where g++ rejects a deduced `auto`. *)
 
-ntReImDefs[decor_] :=
-  With[{r = $ntRealT},
-    StringRiffle[{decor <> " " <> r <> " ntRe(" <> r <> " x) { return x; }", "template <class T> " <> decor <> " " <> r <> " ntRe(const T &z) { return z.real(); }", decor <> " " <> r <> " ntIm(" <> r <> ") { return " <> ntZeroLit[] <> "; }", "template <class T> " <> decor <> " " <> r <> " ntIm(const T &z) { return z.imag(); }"}, "\n"]];
-
-(* The same accessors for the KERNEL, where they must be type-PRESERVING rather than double-typed.
-
-   Two different jobs share these names. In the "RePart" assembly above they are applied to the
-   TRACE tokens, which are double or nt_complex_t, and `-> double` is right. Under
-   "ComplexEndProjection" they are applied to the whole assembled integrand instead -- and if the
-   kernel is also autodiff-active ("AD" -> True, i.e. ADParams non-empty) that expression is an
-   autodiff type, not a double. Hard-typing then costs twice over: `z.real()` does not exist on
-   autodiff::Real at all (the build fails inside the generated kernel with
-   `Real<1UL, double> has no member "real"`, twenty minutes after a generation that reported
-   success), and even where it does exist, narrowing the return to double would DISCARD THE
-   DERIVATIVE silently. That combination -- AD together with an endpoint projection -- was
-   unusable before this.
-
-   The fallback is deliberately an UNQUALIFIED call. The kernel class sits in "KernelNamespace",
-   which for a DiFfRG consumer is DiFfRG, so ordinary lookup finds DiFfRG::real / DiFfRG::imag from
-   common/complex_math.hh -- which already do exactly the right thing and are the reason this is
-   a few lines rather than a reimplementation:
-
-       real(autodiff::Real<N,T>)  -> identity          imag(autodiff::Real<N,T>)  -> 0
-       real(cxReal<N,T>)          -> Real<N,T>         imag(cxReal<N,T>)          -> Real<N,T>
-
-   (cxReal = autodiff::Real<N, complex<T>>, which is what Real<N,T> * complex<double> produces --
-   so the arithmetic already lands on the type these projectors take.) The branch is only ever
-   INSTANTIATED for a type with no .real() member, i.e. an autodiff number, which no consumer
-   outside DiFfRG produces; a generic "numtracer_kernels" consumer never compiles that line.
-
-   Trailing return types rather than a deduced `auto`: kernel() calls these before their in-class
-   definition, and g++ rejects a deduced return type used there ("invalid use of 'auto'"). *)
-
-ntReImDefsAD[decor_] :=
+ntReImAccessors[decor_] :=
   StringRiffle[{
     decor <> " " <> $ntRealT <> " ntRe(" <> $ntRealT <> " x) { return x; }",
     decor <> " " <> $ntRealT <> " ntIm(" <> $ntRealT <> ") { return " <> ntZeroLit[] <> "; }",
@@ -3874,10 +3844,12 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
     fnProj = FunKit`MakeCppFunction[probeProj, "Name" -> "probe_proj", "Prefix" -> "static inline", "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> probeParams, "Body" -> probePre];
     fnRePart = FunKit`MakeCppFunction[probeRePart, "Name" -> "probe_repart", "Prefix" -> "static inline", "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> probeParams, "Body" -> probePre];]},
       ntLog["[prof] ntProbeSource: 3 body lowerings: ", ntT, " s"]];
+    (* the frame's angle arguments are named cos<n> (a cosine, [-1,1]) and phi<n> (an azimuth); match
+       the WHOLE name, so cosh…, phiField and the like are sampled as ordinary positive scalars *)
     distOf[a_] := Which[
-        StringContainsQ[SymbolName[a], "cos"],
+        StringMatchQ[SymbolName[a], "cos" ~~ DigitCharacter ...],
           "Uc",
-        StringContainsQ[SymbolName[a], "phi"],
+        StringMatchQ[SymbolName[a], "phi" ~~ DigitCharacter ...],
           "Uph",
         True,
           "U"];
@@ -3914,7 +3886,7 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
           "static inline float ntStub(double seed, double x){ return float(0.65 + 0.25*std::sin(seed*0.1031 + x*0.3127 + 1.7)); }\n",
           "static inline double ntStub(double seed, double x){ double h = std::sin(seed*0.1031 + x*0.3127 + 1.7)*43758.5453; return 0.4 + 0.5*(h - std::floor(h)); }\n"],
 (* both real projections call ntRe/ntIm on the trace tokens, exactly as the kernel does *)
-        ntReImDefs["static inline"], "\n",
+        ntReImAccessors["static inline"], "\n",
         fnFull,
         "\n",
         fnProj,
@@ -4309,8 +4281,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                               scalars, no unit constraint. Always correct, never compact.
 
    The ORDER is the specification: each test is strictly narrower than the next, so the first that
-   qualifies is the most compact one available. NT_NO_UNIT_GROUPS disables the mixed unit-loop branch
-   only (unitLoopMixedOkQ), which is how tests/gen/gen_lambda3d_small_numeric.wls builds its control. *)
+   qualifies is the most compact one available. NT_NO_UNIT_GROUPS disables both unit-loop branches, so
+   the general polyFrameSpec is used; tests/gen/gen_lambda3d_small_numeric.wls builds its control that way. *)
         {pf, ad, ug} =
           Which[
             uc =!= Automatic,
@@ -5077,7 +5049,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                 {}],
               {kernelFn, constFn},
               If[hoistFnStr === None, {}, {hoistFnStr}]],
-            decor, regTemplate, regAlias, If[complexQ, {ntReImDefsAD[decor]}, {}]];
+            decor, regTemplate, regAlias, If[complexQ, {ntReImAccessors[decor]}, {}]];
           hdrInc = FileNameTake[headerFile];
           header =
             ntApplyTraceComplexOverride[
