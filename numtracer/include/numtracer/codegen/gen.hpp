@@ -521,7 +521,7 @@ namespace numtracer::network
     ///
     /// HOW DEVICE-NESS IS DECIDED — and why it is no longer a string sniff. This used to test the
     /// decorator for a literal `__device__` and call that "the CONTRACT". It was silently broken:
-    /// `ntKokkosDecor` (Codegen.m) rewrites `__host__ __device__ inline` to `KOKKOS_INLINE_FUNCTION`
+    /// `ntKokkosDecor` (CodegenKernel.m) rewrites `__host__ __device__ inline` to `KOKKOS_INLINE_FUNCTION`
     /// BEFORE emission, and DiFfRG_compat.m hands the Kokkos spelling directly for a GPU target — so
     /// no production decorator has ever contained `__device__` and the gate NEVER fired, on any real
     /// flow, with no diagnostic (measured 2026-08-08: QCD_Nf2/no_mesons ZA4 has 75 trace functions,
@@ -530,7 +530,7 @@ namespace numtracer::network
     ///
     /// Sniffing for `KOKKOS_` instead would be wrong in the other direction: those macros expand to
     /// plain `inline` on a host-only Kokkos build, where all-inline is correct. So the target is now
-    /// stated EXPLICITLY by the caller via `NT_GEN_DEVICE=1` (Codegen.m sets it from the same
+    /// stated EXPLICITLY by the caller via `NT_GEN_DEVICE=1` (CodegenBuild.m sets it from the same
     /// condition that picks the decorator). The `__device__` test is kept only as a back-compat
     /// fallback for callers still passing the raw CUDA spelling.
     ///
@@ -564,7 +564,7 @@ namespace numtracer::network
     /// that claim has never been reproduced. Re-measure it before moving the default.
 
     /// Is this generation targeting device code? Authoritative signal is `NT_GEN_DEVICE` (set by
-    /// Codegen.m from the same condition that chooses the decorator); the raw-CUDA spelling is
+    /// CodegenBuild.m from the same condition that chooses the decorator); the raw-CUDA spelling is
     /// honoured as a fallback. Read once per process: emission must be consistent across every
     /// function in a run.
     inline bool device_target(const std::string &decor)

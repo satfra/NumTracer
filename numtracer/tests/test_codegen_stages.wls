@@ -19,7 +19,7 @@
       a Hold attribute — which its own comment used to invite.
 
    3. ntStageResult refuses a malformed stage record. It is the structural counter to the bug class
-      recorded at the head of mkGenerateKernel: a value assigned in an inner scope and read in an
+      recorded at ntPruneSpec in CodegenKernel.m: a value assigned in an inner scope and read in an
       outer one silently stays an unassigned symbol, and `FreeQ[<unassigned>, Complex]` is
       vacuously True, so "PruneRealTraces" emitted a wrong kernel with no diagnostic.
 
@@ -30,7 +30,7 @@ Get[FileNameJoin[{$repo, "numtracer", "mathematica", "NumTracer.m"}]];
 
 Begin["NumTracer`Private`"];
 
-(* 23 fixed checks + one per leak head. Derived, not hardcoded: the head list is meant to GROW as
+(* 31 fixed checks + one per leak head. Derived, not hardcoded: the head list is meant to GROW as
    new dispatchers appear, and a literal count would turn every such addition into a spurious
    failure — which is how a counted-check guard gets "fixed" by deleting it. Still catches what it
    is for: an Abort escaping mid-file leaves nRan short of this. *)

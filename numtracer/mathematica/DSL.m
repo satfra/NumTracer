@@ -770,7 +770,7 @@ buildEnv[momenta_List, invMomenta_List, invSMomenta_List] := Module[{env = <||>,
   inv = base;
   Do[env[q]["Inv"] = inv++, {q, invMomenta}];      (* full 1/q² slots *)
   Do[env[q]["InvS"] = inv++, {q, invSMomenta}];    (* spatial 1/|q⃗|² slots (finite-T E/M projectors) *)
-  {env, inv}  (* inv is now the total env size NEnv *)
+  {env, inv}  (* inv = total env size NEnv *)
 ];
 
 (* Per-momentum component mask: bit i set <=> component i is structurally nonzero in the frame. *)

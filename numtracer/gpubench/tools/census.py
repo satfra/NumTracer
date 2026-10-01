@@ -212,7 +212,7 @@ def main() -> int:
     neg = [r for r in rows if r["fill_powr_negative"]]
     if neg:
         print(f"\n!! negative powr<N> in fill(): {[r['flow'] for r in neg]} "
-              f"— the emitted powr has no N<0 branch and returns 1.0 (Codegen.m:2537)")
+              f"— the emitted powr has no N<0 branch and returns 1.0 (the powr emission in CodegenGenerator.m)")
 
     if args.csv:
         args.csv.parent.mkdir(parents=True, exist_ok=True)

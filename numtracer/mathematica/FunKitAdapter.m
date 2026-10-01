@@ -140,7 +140,7 @@ mean, or pass \"FlavourGroup\" -> Nf explicitly.";
    epsAdjCol at Nc=3 look legal, so the refusal names that mistake. *)
 FromFunKit::epsadj ="Adjoint Levi-Civita at SU(`1`) with `2` indices. NumTracer supports the \
 adjoint epsilon ONLY at rank 2, where eps^abc coincides exactly with the structure constant f^abc \
-(T^a = sigma^a/2, f = -2i tr([T^a,T^b]T^c); see sun_net.hpp:225) and is rewritten to ntSUNf[2,...]. \
+(T^a = sigma^a/2, f = -2i tr([T^a,T^b]T^c); see build_oracle in sun_net.hpp) and is rewritten to ntSUNf[2,...]. \
 That identification is SU(2)-SPECIFIC and does NOT generalise. At SU(`1`) the adjoint epsilon \
 carries `3` indices, not `2` — ShowFormTracerDefinitions[] shows epsAdjCol[a,b,c] only as a generic \
 three-index illustration, and taking that arity literally at rank > 2 is the likely mistake here. \

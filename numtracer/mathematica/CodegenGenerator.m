@@ -129,8 +129,9 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
 
 (* ---- emitNumericGenerator: STAGE MAP ----------------------------------------------------------
    Emits the build-time generator PROGRAM — a main TU, N net-builder unit TUs, and the decl header
-   they share. Returns {pre, units, decl, main}. The program it emits is what actually contracts the
-   traces and PRINTS the committed straight-line kernel header; nothing here contracts anything.
+   they share. Returns {pre, units, decl, main, nSub} (nSub = distinct sub-terms, for the compile
+   log). The program it emits is what actually contracts the traces and PRINTS the committed
+   straight-line kernel header; nothing here contracts anything.
 
    emitNumericGenerator is the driver; the stages, in order:
 
@@ -820,7 +821,15 @@ ntGenMainEmission[varFill_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDres
    Fused (crossCSE): ONE trace_all(f, t[]) instead of nGrp trN(); the kernel reads tarr[i]. *)
         If[crossCSE,
           "  emit_cpp_fused(std::cout, fused, \"trace_all\", decor);\n",
-          "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> ToString[nGrp] <> ");\n" <> "    for(int i=0;i<" <> ToString[nGrp] <> ";++i){\n" <> "      const std::string nm = \"tr\"+std::to_string(i);\n" <> "      std::ostringstream os; emit_cpp(os, progs[i], nm, decor);\n" <> "      std::string s = os.str(); std::string body = s.substr(s.find('{'));\n" <> "      auto it = seen.find(body);\n" <> "      if(it==seen.end()){ seen.emplace(std::move(body), nm); std::cout << s; }\n" <> "      else { const std::string sig = s.substr(0, s.find(\" \"+nm+\"(\")); const std::string rt = sig.substr(sig.rfind(' ')+1);\n" <> "        std::cout << decor << \" \" << rt << \" \" << nm << \"(const " <> $ntRealT <> " *f) { return \" << it->second << \"(f); }\\n\"; } } }\n"
+          "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> ToString[nGrp] <> ");\n" <>
+          "    for(int i=0;i<" <> ToString[nGrp] <> ";++i){\n" <>
+          "      const std::string nm = \"tr\"+std::to_string(i);\n" <>
+          "      std::ostringstream os; emit_cpp(os, progs[i], nm, decor);\n" <>
+          "      std::string s = os.str(); std::string body = s.substr(s.find('{'));\n" <>
+          "      auto it = seen.find(body);\n" <>
+          "      if(it==seen.end()){ seen.emplace(std::move(body), nm); std::cout << s; }\n" <>
+          "      else { const std::string sig = s.substr(0, s.find(\" \"+nm+\"(\")); const std::string rt = sig.substr(sig.rfind(' ')+1);\n" <>
+          "        std::cout << decor << \" \" << rt << \" \" << nm << \"(const " <> $ntRealT <> " *f) { return \" << it->second << \"(f); }\\n\"; } } }\n"
         ],
         "  std::cout << \"}} // namespace " <> kernelNs <> "::\" << hns << \"\\n\";\n",
         "  if(ntprof) std::fprintf(stderr,\"[num] emission: %.1f s\\n\", std::chrono::duration<double>(std::chrono::steady_clock::now()-tEmit).count());\n",
@@ -847,10 +856,6 @@ emitNumericGenerator[coreNets_, restScalars_, colourNets_, groups_, ncomp_, nsIn
           hasDressed, noDedup];];
     ntLog["[prof] sub-term dedup join: ", ntT, " s"];
     sub = None;   (* the per-sub-term columns are dead after the join *)
-(* Published for the later COMPILE step (CodegenKernel.m), which logs it next to the main-TU
-   optimisation level. Set HERE, at the hand-off, so a stale value from a previous flow never leaks
-   into the next one. *)
-    $ntGenNSub = joined["nSub"];
     ntGenLogDedup[joined, noDedup];
     unitSrc = ntGenUnitSources[joined["distinctSubs"], joined["nSub"], hasDressed, cse["Defs"], cse["Decls"],
                 col["ChunkDefs"], preambles["UnitPre"]];
@@ -869,4 +874,4 @@ emitNumericGenerator[coreNets_, restScalars_, colourNets_, groups_, ncomp_, nsIn
             phaseB["Text"],
             ntGenMainEmission[ncomp["varFill"], nsInner, kernelNs, fillArgSig, complexQ, hasDressed, crossCSE, mIdx, Length[groups]]["Text"]]];];
     ntLog["[prof] main() data tables: ", ntT, " s"];
-    {preambles["Pre"], unitSrc["Units"], unitSrc["Decl"], main}];
+    {preambles["Pre"], unitSrc["Units"], unitSrc["Decl"], main, joined["nSub"]}];

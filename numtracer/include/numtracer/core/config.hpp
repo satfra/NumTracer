@@ -27,7 +27,7 @@
 
 // ---- exception-optional failure guard ------------------------------------------------------
 // The library's internal misuse guards throw by default. The build-time net-builder generator
-// TUs, however, are compiled with `-fno-exceptions` (see mathematica/Codegen.m): emitting the
+// TUs, however, are compiled with `-fno-exceptions` (see mathematica/CodegenBuild.m): emitting the
 // exception-cleanup landing pads for their tens of thousands of destructible temporaries is what
 // dominates their -O0 compile — turning exceptions off cut a representative unit from 15.3 s to
 // 1.3 s. Under `-fno-exceptions` a bare `throw` is ill-formed, so guards route through NT_THROW,

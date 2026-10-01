@@ -207,6 +207,8 @@ unitLoopOkQ[frame_, pSym_, magSym_] := !ntEnvFlag["NT_NO_UNIT_GROUPS"] && AllTru
    MPoly-builder C++, and the C++ fill formula for each symbol (a kernel argument, or a derived
    symbol like sin1 = sqrt(1-cos1^2)). Composite momenta resolve by component arithmetic via
    resolveComponents. *)
+numericComponents::nonpoly = "Non-polynomial momentum components (a fractional power of a symbol remains): `1`";
+
 numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
     {compExpr, usyms, nsym, mpcpp, compCpp, varFill, vfill, idx, units},
     (* 4 components per momentum Base (polynomial in the user symbols). *)
@@ -215,7 +217,7 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
        sin symbol); a numeric irrational coefficient like Sqrt[3]/2 is a valid coefficient *)
     With[{bad = DeleteDuplicates @ Cases[Values[compExpr], Power[b_, _Rational] /; !NumericQ[b], Infinity]},
       If[bad =!= {},
-        Print["numericComponents: non-polynomial components (fractional power of a symbol remains): ", bad];
+        Message[numericComponents::nonpoly, bad];
         Abort[]]];
     usyms = Sort @ DeleteDuplicates @ Flatten[Variables /@ Values[compExpr]];
     nsym = Length[usyms];

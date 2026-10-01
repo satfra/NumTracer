@@ -233,6 +233,8 @@ ntRunProbe[srcFile_String, tracesDir_String, verdictFile_ : None, macro_ : None]
    probe), returning per net a list of terms {coeffRe, coeffIm, {dr, ...}} (a flat list of dressing
    ids, repetition = power). Reuses the numeric engine verbatim, so the per-component colour weights
    are byte-identical to the typed-out SU(N) tables — no Mathematica reimplementation of the algebra. *)
+ntFoldDiagColourNets::fail = "Diagonal colour-dressing helper `1` failed (rc=`2`):\n`3`";
+
 ntFoldDiagColourNets[colnetStrs_, includeDir_] :=
   Module[{cxx = resolveGenCxx[], src, cppFile, bin, rc, out, lines, res = {}, cur = Null, num},
     num[s_] := ToExpression[StringReplace[s, {"e+" -> "*^", "e-" -> "*^-", "e" -> "*^"}]];
@@ -259,16 +261,17 @@ ntFoldDiagColourNets[colnetStrs_, includeDir_] :=
        libNumTracer.a. This helper links nothing, so it needs the bodies inline (cheap: the TU is tiny). *)
     rc = Run[cxx <> " -std=c++20 -O1 -w -DNUMTRACER_HEADER_ONLY=1 -I '" <> includeDir <> "' '" <> cppFile <> "' -o '" <> bin <> "' 2> '" <> bin <> ".cerr'"];
     If[rc =!= 0,
-      Print["[diagpoly] compile failed (rc=", rc, "):\n", ntLogHead[bin <> ".cerr"]];
+      Message[ntFoldDiagColourNets::fail, "compile", rc, ntLogHead[bin <> ".cerr"]];
       Abort[]];
     (* Check the run, not just the compile: a crashed helper would otherwise yield res = {} and a
        confusing length mismatch downstream. Delete first so a stale file is never read as output. *)
     Quiet @ DeleteFile[bin <> ".out"];
     rc = Run["'" <> bin <> "' > '" <> bin <> ".out'"];
     If[rc =!= 0 || !FileExistsQ[bin <> ".out"],
-      Print["[diagpoly] helper run failed (rc=", rc, "):\n", ntLogHead[bin <> ".cerr"]];
+      Message[ntFoldDiagColourNets::fail, "run", rc, ntLogHead[bin <> ".cerr"]];
       Abort[]];
     out = Import[bin <> ".out", "Text"];
+    Quiet[DeleteFile /@ Select[{cppFile, bin, bin <> ".cerr", bin <> ".out"}, FileExistsQ]];
     lines = Select[StringSplit[StringTrim[out], "\n"], # =!= ""&];
     Do[
       Module[{tk = StringSplit[ln]},

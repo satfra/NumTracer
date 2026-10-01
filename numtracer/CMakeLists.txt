@@ -153,7 +153,14 @@ if(NUMTRACER_INSTALL_MATHEMATICA)
       install(FILES mathematica/NumTracer.m
                     mathematica/DSL.m
                     mathematica/Frames.m
-                    mathematica/Codegen.m
+                    mathematica/CodegenCommon.m
+                    mathematica/CodegenNets.m
+                    mathematica/CodegenFrames.m
+                    mathematica/CodegenRealProjection.m
+                    mathematica/CodegenBuild.m
+                    mathematica/CodegenProbe.m
+                    mathematica/CodegenGenerator.m
+                    mathematica/CodegenKernel.m
                     mathematica/FunKitAdapter.m
                     mathematica/DiFfRG_compat.m
                     mathematica/PacletInfo.m
@@ -184,7 +191,7 @@ option(NUMTRACER_BUILD_TESTS "Build the NumTracer tests and benchmarks" ${NT_IS_
 if(NUMTRACER_BUILD_TESTS)
   # The tests compile committed machine-generated kernels (tests/gen/, tests/refshim/). NumTracer's own
   # emitter now marks the unused-by-construction bits [[maybe_unused]] (see codegen/gen.hpp and
-  # mathematica/Codegen.m), so freshly regenerated NumTracer kernels are -Wunused clean. This fallback
+  # mathematica/CodegenKernel.m), so freshly regenerated NumTracer kernels are -Wunused clean. This fallback
   # covers the two remaining sources that are NOT fixable at build time: committed NumTracer kernels not
   # yet regenerated against the current emitter, and the FormTracer/FunKit-emitted oracle kernels
   # (external — we don't own their emitter). Silence just these two warnings for the internal test/bench

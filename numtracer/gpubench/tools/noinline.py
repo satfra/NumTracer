@@ -5,7 +5,7 @@ gen.hpp's eff_decor() already implements this: on a device target, a trace funct
 NT_GEN_NOINLINE_MIN (default 500) SSA instructions is emitted KOKKOS_FUNCTION +
 __attribute__((noinline)) instead of KOKKOS_INLINE_FUNCTION. It is dead in both production codes —
 `grep -c noinline` is 0 across all 16 flows — because the kernels predate the ntDeviceEnvPrefix fix
-in Codegen.m, so NT_GEN_DEVICE never reached the generator.
+in Codegen*.m, so NT_GEN_DEVICE never reached the generator.
 
 This script reproduces the gate's output on a vendored header so its effect can be measured per
 architecture without a Wolfram regeneration. The threshold is a parameter precisely because 500 was

@@ -92,7 +92,7 @@ namespace numtracer::network
   /// slots are the chain neighbours, exactly as for γ5.
   ///
   /// A `C` reaching the engine means the front end chose to KEEP it rather than fold it away; see
-  /// the charge-conjugation rewrite in `Codegen.m`. Both are legal — the folded form is production,
+  /// the charge-conjugation rewrite in `CodegenNets.m`. Both are legal — the folded form is production,
   /// the token form is the oracle they are graded against.
   inline DFac dc() { return {DFac::C, -1, {}, -1, false, {}}; }
 

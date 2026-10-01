@@ -1472,7 +1472,7 @@ namespace numtracer::numeric
     ///
     /// The left-to-right accumulation is deliberate and is NOT a quadratic hazard, despite looking
     /// like one. Under lever (b) the generator expands each structure×dressing combination into its
-    /// own SINGLE-option sub-term at codegen time (`Codegen.m`, `sdsl[k].push_back(DSlot{optp[oi]})`),
+    /// own SINGLE-option sub-term at codegen time (`CodegenGenerator.m`, `sdsl[k].push_back(DSlot{optp[oi]})`),
     /// so every production call has exactly one combination and this loop body runs once. Folding the
     /// sum as a balanced tree instead would reassociate the like-term coefficient sums (≤ 1 ulp) and
     /// so could shift the emitted kernel's literals — a real cost for a case no caller reaches. Every

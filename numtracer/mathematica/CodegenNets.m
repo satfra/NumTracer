@@ -179,9 +179,9 @@ mergeColNet[a_, b_] :=
    $diagDrIntern (diag-dressing expressions, ids in the sun<n>.diag… vectors) and $drIntern (scalar
    dressing atoms, ids in the fm.dress table and the fill() dr_<id> arguments) are ntMkIntern intern
    closures. They are dynamically bound rather than passed because their callers (colourFacStr, the
-   dressed/collected slot builders) sit below the memoised net builders. mkGenerateKernel Blocks both
-   to fresh interners for one generation and harvests the tables after the net build; outside a
-   generation, interning aborts. *)
+   dressed/collected slot builders) sit below the memoised net builders. mkGenerateKernel's Block
+   scopes both to one generation, ntResetGeneration assigns fresh interners, and the tables are
+   harvested after the net build; outside a generation, interning aborts. *)
 
 ntNoIntern::nogen = "A `1` was interned outside a kernel generation (only mkGenerateKernel binds the dressing interners).";
 
@@ -236,14 +236,14 @@ drDecompose[coeff_] := Module[{
       {f, factors}];
     {N[num, 17], Sort[ids]}];
 
-(* Chunk a Lorentz polynomial into several inv nets of <= $ntInvChunk top-level terms each, so no
+(* Chunk a Lorentz polynomial into several Lorentz nets of <= $ntLorChunk top-level terms each, so no
    single generated net-builder function becomes a giant nested add() that blows up the g++ -O0
    compile (a quark box with the full quark-gluon vertex basis can be tens of thousands of nodes in
    ONE net). Returns a list of {lorentzNetString, scalar}; the per-diagram combination sums the
    chunks (same colour + coeff) into one trace, so chunking is transparent. Zero -> dropped; a pure
    number -> a constant net (konst). *)
 
-$ntInvChunk = 150;
+$ntLorChunk = 150;
 
 chunkLorentz[lorExpr_, ids_, env_, nonzeroCompMask_] := Which[
     lorExpr === 0,
@@ -256,7 +256,7 @@ chunkLorentz[lorExpr_, ids_, env_, nonzeroCompMask_] := Which[
           If[Head[lorExpr] === Plus,
             List @@ lorExpr,
             {lorExpr}]},
-        (compileLorentz[Total[#], ids, env, nonzeroCompMask]& /@ Partition[terms, UpTo[$ntInvChunk]])]];
+        (compileLorentz[Total[#], ids, env, nonzeroCompMask]& /@ Partition[terms, UpTo[$ntLorChunk]])]];
 
 (* ---- σ^{μν} folding: keep the bare γ-commutator as ONE token -----------------------------------
    The quark-gluon-vertex tensor σ^{μν}=(i/2)[γ^μ,γ^ν] arrives from FunKit as a bare 2-term
@@ -648,7 +648,7 @@ orderDiracLoopsBody[facs_] := If[Length[facs] <= 1,
         (orderDiracFacs[facs[[Sort[#]]]])& /@ comps]]];
 
 (* frame resolver for dressed-numerator option coefficients (ntSP/ntVec[q,i] -> components). Set in
-   mkGenerateKernel to the diagram's resolveScale; Identity when the dressed path is inactive. *)
+   ntResetGeneration to ntResolveFrame against the generation's frame; Identity outside a generation. *)
 
 $ntDressResolve = Identity;
 

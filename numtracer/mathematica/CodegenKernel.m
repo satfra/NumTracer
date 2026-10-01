@@ -172,12 +172,12 @@ ntApplyTraceComplexOverride[header_String, tracesInclude_String, kernelNs_String
       1],
     header];
 
-(* ---- mkGenerateKernel options (MakeNTKernel forwards its own; see Options[MakeNTKernel]). By default
-   the emitted code is self-contained against NumTracer's headers; the namespace/include options
-   point it at a consumer's support API instead. *)
+(* ---- kernel options: the ONE list of defaults. Options[MakeNTKernel] is this plus "ComputeType";
+   MakeNTKernel forwards its options here. By default the emitted code is self-contained against
+   NumTracer's headers; the namespace/include options point it at a consumer's support API instead. *)
 Options[mkGenerateKernel] =
   {
-    "Name" -> "nt_inv_kernel",
+    "Name" -> "nt_kernel",
     "Namespace" -> Automatic,
     "Dressings" -> {},
     "ScalarParams" -> {},
@@ -253,10 +253,10 @@ Options[mkGenerateKernel] =
    `constant(p, k, dressings...)` like DiFfRG MakeKernel's constExpr. A plain Mathematica expression
    (ZA[p] -> ZA(p)), not an NTKernel. *)
     "Constant" -> 0.,
-    (* True: emit the generator + probe sources and a numtrace.json switch set to 0, but compile and run
-       nothing; the `numtrace` CMake target does that as a build step. NT_OFFLINE overrides. *)
+(* True: emit the generator + probe sources and a numtrace.json switch set to 0, but compile and run
+   nothing; the `numtrace` CMake target does that as a build step. NT_OFFLINE overrides. *)
     "Offline" -> False,
-    (* coordinate argument NAMES of this flow's grid; see constArgQ *)
+(* coordinate argument NAMES of this flow's grid; see the "ConstArgQ" key built in ntGenOptions *)
     "CoordinateArgs" -> Automatic
   };
 
@@ -558,6 +558,8 @@ ntFrameSpec[k_, components_, userSymDefs_] :=
    generator to prove evenness of the TRACES. -1 is not an error: a purely SCALAR integrand has no
    momentum components, yet still depends on the frequency through its coefficient (denominators,
    regulator arguments). The lookup therefore spans the frame's symbols AND the fill arguments. *)
+mkGenerateKernel::matsubaravar = "\"MatsubaraVar\" -> `1` names neither a frame symbol nor a kernel fill argument, so no evenness check was run and no Matsubara trait will be emitted. The frame's symbols are: `2`, the fill arguments are: `3`. (The integration-variable name DiFfRG uses, e.g. \"f\", is often NOT the frame symbol, e.g. \"f0\" — this option wants the frame symbol.)";
+
 ntMatsubaraSymbol[mv_, usyms_, fillArgs_] :=
   Module[{matsubaraSym, mVarIdx},
     matsubaraSym =
@@ -568,12 +570,7 @@ ntMatsubaraSymbol[mv_, usyms_, fillArgs_] :=
 (* A name that matches nothing is reported loudly, not turned into a quiet None: otherwise the
    caller gets a valid kernel without the requested optimisation and no way to tell. *)
     If[matsubaraSym === $Failed,
-      Print["[NumTracer] WARNING: \"MatsubaraVar\" -> ", mv,
-        " names neither a frame symbol nor a kernel fill argument, so no evenness check was run ",
-        "and no Matsubara trait will be emitted. The frame's symbols are: ", usyms,
-        ", the fill arguments are: ", fillArgs,
-        ". (The integration-variable name DiFfRG uses, e.g. \"f\", is often NOT the frame symbol, ",
-        "e.g. \"f0\" — this option wants the frame symbol.)"];
+      Message[mkGenerateKernel::matsubaravar, mv, usyms, fillArgs];
       matsubaraSym = None];
     mVarIdx =
       If[matsubaraSym === None,
@@ -1262,8 +1259,8 @@ ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, 
    in parallel (see emitNumericGenerator). The main `#include`s the decl. *)
 ntEmitGeneratorSources[coreNets_, restScalars_, colourNets_, groups_, ncomp_, fillArgSig_, complexQ_,
                        realOnlyG_, mVarIdx_, o_, genFile_] :=
-  Module[{genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles},
-    With[{ntT = First @ AbsoluteTiming[{genPre, genUnits, genDecl, genMain} = emitNumericGenerator[coreNets, restScalars, colourNets, groups, ncomp, o["Namespace"], fillArgSig, o["KernelNamespace"], complexQ, realOnlyG, o["CrossTraceCSE"], mVarIdx];]},
+  Module[{genPre, genUnits, genDecl, genMain, nSub, declFile, pchFile, unitFiles},
+    With[{ntT = First @ AbsoluteTiming[{genPre, genUnits, genDecl, genMain, nSub} = emitNumericGenerator[coreNets, restScalars, colourNets, groups, ncomp, o["Namespace"], fillArgSig, o["KernelNamespace"], complexQ, realOnlyG, o["CrossTraceCSE"], mVarIdx];]},
       ntLog["[prof] emitNumericGenerator: ", ntT, " s"]];
     declFile = StringReplace[genFile, ".cpp" -> "_nets.hh"];
 (* Precompiled-header source for the -O0 net-builder units. Deliberately a SUPERSET of what any
@@ -1293,8 +1290,8 @@ ntEmitGeneratorSources[coreNets_, restScalars_, colourNets_, groups_, ncomp_, fi
         Round[(Total[StringLength /@ genUnits] + StringLength[genDecl] + StringLength[genMain]) / 1000000.],
         " MB): ", ntT, " s"]];
     Print["wrote generator: ", genFile, " (+ ", Length[genUnits], " net units + decl header)"];
-    ntStageResult["ntEmitGeneratorSources", {"DeclFile", "PchFile", "UnitFiles"},
-      <|"DeclFile" -> declFile, "PchFile" -> pchFile, "UnitFiles" -> unitFiles|>]];
+    ntStageResult["ntEmitGeneratorSources", {"DeclFile", "PchFile", "UnitFiles", "NSub"},
+      <|"DeclFile" -> declFile, "PchFile" -> pchFile, "UnitFiles" -> unitFiles, "NSub" -> nSub|>]];
 
 mkGenerateKernel::genfail = "Generator compile/run failed: `1`";
 
@@ -1326,7 +1323,7 @@ ntCompileGenerator[genFile_, src_, o_, incDir_] :=
         "header-only (libNumTracer.a not found)"]];
     mainObj = bin <> "_main.o";
     unitObjs = Table[bin <> "_u" <> ToString[u - 1] <> ".o", {u, 1, Length[unitFiles]}];
-    ntLog["[time]   generator main TU: ", mainOpt, " (nSub = ", $ntGenNSub, "; NT_GEN_MAIN_OPT=-O0 is a large win on SMALL flows, but see the note above)"];
+    ntLog["[time]   generator main TU: ", mainOpt, " (nSub = ", src["NSub"], "; NT_GEN_MAIN_OPT=-O0 is a large win on SMALL flows, but see the \"MainOpt\" note in ntGenOptions)"];
 (* RAM-bounded parallel compile: at most $ntCompileJobs compiles at once (xargs -P), each capped at
    ~17 GB virtual (ulimit -v). Compiler output goes to `clog` (compile truncates, link appends) so
    genfail can quote the actual diagnostic.
@@ -1484,7 +1481,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
   Block[{$RecursionLimit = $RecursionLimit, $ctCtx = $ctCtx, $ntDressResolve = $ntDressResolve,
          $ntCanonIdsSrc = $ntCanonIdsSrc, $ntCanonRules = $ntCanonRules,
          $ntComplexRuntimeProjection = $ntComplexRuntimeProjection,
-         $diagDrIntern = $diagDrIntern, $drIntern = $drIntern},
+         $diagDrIntern = $diagDrIntern, $drIntern = $drIntern,
+         $ctCache = <||>, $dsCache = <||>, $odCache = <||>, $dslCache = <||>},
   Module[{o, fr, ms, complexQ, nets, incDir, dd, grp, hoist, integrand, prune, nGrp, tarrDecl,
           hasDr, pre, sig, part, header, gen, probe},
     Needs["FunKit`"];
@@ -1553,9 +1551,9 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
    MakeNTKernel[ntk, genFile, kernelFile, tracesFile] emits the numeric matrix-product kernel:
    a build-time generator program (genFile, + net-builder units + decl header), run to produce the
    committed straight-line traces header (tracesFile), and the kernel header (kernelFile) that fills
-   the fundamental symbols and calls the traces. Options are forwarded to the generator
-   (see Options[mkGenerateKernel] for the set). *)
-Options[MakeNTKernel] = {"ComputeType" -> "double", "Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "ParameterOrder" -> Automatic, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "ComplexRuntimeProjection" -> False, "ComplexEndProjection" -> False, "RealOutput" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None, "DecayingRegulators" -> Automatic, "MatsubaraFiniteExtent" -> Automatic};
+   the fundamental symbols and calls the traces. Options are forwarded to mkGenerateKernel, whose
+   Options list documents them. *)
+Options[MakeNTKernel] = Prepend[Options[mkGenerateKernel], "ComputeType" -> "double"];
 
 MakeNTKernel::nfiles = "MakeNTKernel needs three output files: MakeNTKernel[ntk, genFile, kernelFile, tracesFile].";
 

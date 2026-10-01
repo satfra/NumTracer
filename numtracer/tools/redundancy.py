@@ -13,7 +13,7 @@ nets, so most of those contractions recompute something already computed. This c
 DISTINCT traces there are — the ceiling on what the sub-term dedup can save — and how often each is
 reused, which is what the trace-cache policy is built on.
 
-The key is (dnet, lnet, dch, dsl), matching what Codegen.m keys the dedup on. An earlier version of
+The key is (dnet, lnet, dch, dsl), matching what CodegenGenerator.m keys the dedup on. An earlier version of
 this script keyed on (dch, dsl, lnet) only, omitting dnet; that undercounts distinct traces and so
 overstates both the redundancy factor and the max reuse.
 

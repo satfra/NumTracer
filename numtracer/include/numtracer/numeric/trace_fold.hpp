@@ -5,7 +5,7 @@
 /// The generator's cost is one trace contraction per `(net, sub-term)`, but the same
 /// `(dnet, lnet, dch, dsl)` tuple recurs across nets and colour branches, so most of those
 /// contractions recompute a trace that was already computed. Measured on dense flows: 30,807
-/// contractions for 6,041 distinct traces (5.1x), and 246,456 for 32,784 (7.5x). Codegen.m therefore
+/// contractions for 6,041 distinct traces (5.1x), and 246,456 for 32,784 (7.5x). CodegenGenerator.m therefore
 /// emits a table of the distinct traces and, per net, the indices into it; this header contracts and
 /// folds that table. Two independent wins:
 ///
@@ -105,11 +105,11 @@ namespace numtracer::numeric
 
   /// @brief PHASE A — contract traces `[0, nCache)` once each, in parallel over a flat work list.
   ///
-  /// `nCache` is how many of the distinct traces are cached. Codegen.m orders the traces by
+  /// `nCache` is how many of the distinct traces are cached. CodegenGenerator.m orders the traces by
   /// *descending reference count*, so a cap keeps the traces that repay caching most; traces at index
   /// `>= nCache` are recomputed on demand in phase B (see @ref fold_net). Two reasons to cap:
   ///  - a trace referenced exactly once costs the same either way, so caching it is pure RAM for no
-  ///    saving — Codegen.m's default `nCache` therefore excludes the singletons;
+  ///    saving — CodegenGenerator.m's default `nCache` therefore excludes the singletons;
   ///  - `NT_GEN_MEMO_MAX` trims it further when memory is tight (the RAM lever: the dense flows are
   ///    memory-bound before they are compute-bound).
   ///
@@ -294,7 +294,7 @@ namespace numtracer::numeric
 
   /// @brief PHASE B, driver — fold every net, in parallel over the nets.
   ///
-  /// TEST-ONLY. Codegen.m no longer emits a call to this: production goes through
+  /// TEST-ONLY. CodegenGenerator.m no longer emits a call to this: production goes through
   /// @ref fold_groups_streaming, which folds each group on demand and drains straight to the sink so
   /// no net polynomial outlives its group. This one materialises them all, which is exactly why it
   /// makes a good reference — `tests/test_trace_fold.cpp` diffs the streaming fold against it and
@@ -302,7 +302,7 @@ namespace numtracer::numeric
   ///
   /// Still net-parallel (unlike phase A), but that is fine here: the contraction is done, so a net's
   /// fold is proportional to its term count rather than to thousands of matrix products, and the
-  /// merge in Codegen.m has already collapsed each net's repeated traces into one scalar apiece.
+  /// merge in CodegenGenerator.m has already collapsed each net's repeated traces into one scalar apiece.
   template <class P, class TraceFn>
   std::vector<P> fold_nets(int nsym, const std::vector<std::vector<int>> &traceIdx,
                            const std::vector<std::vector<Cx>> &subScale, const std::vector<P> &traceTable,
@@ -344,7 +344,7 @@ namespace numtracer::numeric
   ///        without running a generator; @ref check_group_partition is the reporting wrapper.
   ///
   /// @ref fold_groups_streaming folds each group's members on demand, so it is only equivalent to
-  /// `fold_nets` + an eager group loop if `groups` PARTITIONS the nets — which Codegen.m guarantees by
+  /// `fold_nets` + an eager group loop if `groups` PARTITIONS the nets — which CodegenKernel.m (ntGroupTraces) guarantees by
   /// construction (`Complement`/`GatherBy` over all net indices). A duplicate would mean silently
   /// folding a net twice; a gap would mean silently dropping one from the kernel. Both are cheap to
   /// detect here and expensive to debug downstream.

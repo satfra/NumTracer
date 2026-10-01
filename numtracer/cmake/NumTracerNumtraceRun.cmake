@@ -83,7 +83,7 @@ if(MODE STREQUAL "run")
   endif()
 
   # ---- device target ----------------------------------------------------------------------------
-  # The offline twin of Codegen.m's ntDeviceEnvPrefix. It enables gen.hpp's size-gated `__noinline__`,
+  # The offline twin of CodegenBuild.m's ntDeviceEnvPrefix. It enables gen.hpp's size-gated `__noinline__`,
   # which is device-only (the host has no register cliff and its emission stays byte-identical). This
   # is the whole reason the manifest carries a "device" field: nothing of the emitting Wolfram
   # kernel's environment survives the trip into a `cmake -P` build step, so a fact not written down
