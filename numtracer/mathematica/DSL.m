@@ -71,10 +71,10 @@ tensorQ[_] = False;
    flavour/isospin SU(Nf), and any further group coexist in one network at the right rank.
    Lorentz, Dirac, and the SU(N) groups contract in disjoint index spaces (matched by shared
    label), so the label sets are treated uniformly while the builders stay distinct. *)
-(* ntSUNDiag{Fund,Adj}[N, i, j, spec, scale] — a group δ that carries a PER-COMPONENT dressing.
-   `spec` is a rules list {c -> name, ..., Default -> defName} of 1-based component indices to
-   distinctly-named scalar dressing symbols (evaluated at the kinematic `scale`); unnamed components
-   collapse to Default when given, else drop. They classify exactly like the matching plain δ
+(* ntSUNDiag{Fund,Adj}[N, i, j, spec] — a group δ that carries a PER-COMPONENT dressing.
+   `spec` is a rules list {c -> expr, ..., Default -> defExpr} of 1-based component indices to scalar
+   dressing expressions (each already evaluated at its own kinematics); unnamed components collapse
+   to Default when given, else drop. They classify exactly like the matching plain δ
    (fundamental / adjoint) for index bookkeeping; the per-component dressing is folded numerically
    by sun_value_dressed at codegen time. *)
 adjointSUNQ[_ntSUNf | _ntSUNDeltaAdj | _ntSUNDiagAdj] = True;  (* group-adjoint heads (bridge with Lorentz) *)
@@ -167,7 +167,7 @@ needsInvSQ[_]                  = False;
    never split. That is safe only because a self-trace within one summand of an eager sum has never
    been produced by a flow; labelCensus's Plus branch would flag the resulting free-index mismatch if
    it were. Left as-is deliberately: relabelling inside a summand would have to keep every summand's
-   free-index set aligned (the et::add precondition), which this factor-local rewrite cannot see. *)
+   free-index set aligned (the eager add(...) precondition), which this factor-local rewrite cannot see. *)
 splitSelfTraces[factors_List] := Module[{res = {}, conns = {}},
   Function[f, If[! tensorQ[f], AppendTo[res, f],
     (* The connecting identity reuses the SAME group rank N as the head it closes: an
@@ -196,7 +196,7 @@ scalarQ[e_] := FreeQ[e, _ntMetric | ntVec[_, Except[_Integer]] | _ntTransProj | 
 (* The free (uncontracted) index labels of a tensor (sub)expression. A product sums
    indices that appear twice (free = appear once); a sum's summands share free indices
    (a vertex's legs); a bare head exposes all its labels. Used to group components and
-   to align et::add operands. *)
+   to align eager add(...) operands. *)
 freeIdx[e_] := Which[
   tensorQ[e],        labelsOf[e],
   Head[e] === Plus,  freeIdx[First[List @@ e]],
@@ -246,11 +246,11 @@ orderFactors[fs_List] := Module[{fi = freeIdx /@ fs, byLabel, touched, rem, out,
 
 (* ---- sector-bridge expansion (keep colour and Lorentz contractions separate) ---- *)
 
-(* Eager summation (et::add) is a win only when a structure-sum lives in ONE sector — a sum of
+(* Eager summation (an add(...) net) is a win only when a structure-sum lives in ONE sector — a sum of
    Lorentz structures with a single colour factor pulled out (e.g. a 3-gluon vertex) stays one
    small Lorentz tensor. A SECTOR-BRIDGING sum is different: its colour sum is *correlated* with
    its Lorentz sum (each term pairs one colour structure with one Lorentz structure, e.g. a
-   4-gluon vertex's f.f ⊗ metric.metric). et::add-ing those fuses the colour (dim N^2-1) and
+   4-gluon vertex's f.f ⊗ metric.metric). add(...)-ing those fuses the colour (dim N^2-1) and
    Lorentz (dim 4) axes into one ETensor whose entry count (and type) explodes — building it alone
    times out. The cure: DISTRIBUTE such a sum, so each term is colour/Lorentz index-disjoint again
    — colour folds to a constant, Lorentz stays small. That is linear in the (few) structures, not
@@ -262,8 +262,8 @@ sectorBridgeQ[p_] := (! FreeQ[p, _ntSUNf | _ntSUNDeltaAdj | _ntSUNDiagAdj]) &&
 (* The scalar (non-tensor) coefficient of a single summand. *)
 scalarCoeffOf[t_] := Times @@ Select[If[Head[t] === Times, List @@ t, {t}], scalarQ];
 (* A TENSOR-structure sum whose per-summand scalar coefficients are not all numeric must be
-   DISTRIBUTED too: the et engine's eager add (et::add) can only fold NUMERIC per-structure
-   scalars (it scales each structure by a compile-time Lit). A fermion propagator numerator
+   DISTRIBUTED too: the eager add(...) net can only carry NUMERIC per-structure scalars (each
+   summand is scaled by a numeric literal). A fermion propagator numerator
    Mq*deltaDirac + (.. dressings ..)*(gamma.vec) carries runtime dressing coefficients, so
    each Dirac structure must become its own diagram with that dressing as a scalar coeff.
    (Pure-scalar dressing sums — no tensor head — are left intact as coefficients.) *)
@@ -274,8 +274,8 @@ dressedStructureSumQ[p_Plus] := (! scalarQ[p]) && AnyTrue[List @@ p, ! NumericQ[
    slot (rewriteDressedNums), so the diagram folds to ONE DPoly trace carrying its dressings as
    `dress` env leaves instead of exploding into 2^D diagrams. A colour↔Lorentz sectorBridge sum still
    distributes (sectors must split), and a non-Dirac dressed sum (no shared spinor indices) still
-   distributes (the collection only handles the Dirac numerator case here). Default: $ntDressCollect
-   False = today's full distribution. *)
+   distributes (the collection only handles the Dirac numerator case here). NumTrace and FromFunKit
+   set $ntDressCollect from their "DressingCollection" option, which defaults to True. *)
 $ntDressCollect = False;
 (* The OPEN (free) spinor labels of a summand: spinor indices appearing an odd number of times. *)
 openSpinorOf[t_] := Cases[Tally[Flatten[Cases[t, h_?tensorQ :> spinorLabelsHead[h], {0, Infinity}]]],
@@ -530,16 +530,8 @@ collectibleDiracSumQ[p_Plus] := ntPlusMemo["cds", collectibleDiracSumQRaw, p];
 dressedNumDecompose[p_Plus]  := ntPlusMemo["dnd", dressedNumDecomposeRaw, p];
 diracSlotDecompose[p_Plus]   := ntPlusMemo["sd", diracSlotDecomposeRaw, p];
 
-(* `redistDiagram` used to live here, with its private helpers `expandDiracSlot` and
-   `expandDressedNum` (the latter defined further up): it re-distributed one COLLECTED diagram back to the non-collected form so the
-   two paths could be compared. Its docstring said it was "used by the small-D gate in NumTrace" —
-   that gate is gone, and with it the only caller of the whole cluster. The collected and distributed
-   paths are still compared, but by regenerating a flow under a hatch and grading the two kernels
-   (tests/gen/gen_lambda3d_small_numeric.wls), which exercises the real emission rather than a
-   Mathematica-side re-expansion. `diracSlotDecompose` above is separate and live. *)
-
 (* Distribute every colour<->Lorentz-bridging sum into its surrounding product (only that
-   sum; single-sector sums are left intact for et::add). Turns a bridging diagram into a
+   sum; single-sector sums are left intact as an eager add(...)). Turns a bridging diagram into a
    small linear sum of sector-separable diagrams. Explicit recursion (not a //. rule over
    Orderless Times, which backtracks catastrophically on a large net). *)
 expandBridges[e_Plus] := Plus @@ (expandBridges /@ (List @@ e));
@@ -914,9 +906,8 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
   args   = OptionValue["Args"];
   dress  = OptionValue["Dressings"];
   (* symbolic dressing collection: keep dressed Dirac numerators eager (one DPoly trace) instead of
-     distributing into 2^D diagrams. Default False = today's behaviour. Set here so expandBridges
-     (distributeQ) and analyseDiagram (rewriteDressedNums) both see it; each NumTrace call sets it
-     from its option (default False), so it never leaks across kernels. *)
+     distributing into 2^D diagrams. Set here so expandBridges (distributeQ) and analyseDiagram
+     (rewriteDressedNums) both see it; each NumTrace call sets it from its option (default True). *)
   $ntDressCollect = TrueQ[OptionValue["DressingCollection"]];
 
   (* SU(N) ranks must be compile-time integers (they pick the correct-dimension typed-out
@@ -955,7 +946,7 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
   frame = Join[frame, spatialVecFrame[net2, frame]];
 
   (* the top-level sum is the (linear) sum of DIAGRAMS; keep single-sector vertex sums eager
-     via et::add, but distribute colour<->Lorentz-bridging sums so the two sectors never fuse
+     as an eager add(...), but distribute colour<->Lorentz-bridging sums so the two sectors never fuse
      into one giant ETensor. *)
   With[{ntT = First@AbsoluteTiming[
   diagrams = With[{ex = expandBridges[net2]}, If[Head[ex] === Plus, List @@ ex, {ex}]];]},
@@ -1041,7 +1032,7 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
 
 (* One diagram -> {pure-scalar coeff, axis-id map, tensor components}. Components keep
    their factors un-expanded (heads, Plus-vertices, Times-structures); the recursive
-   et compiler in Codegen turns Plus -> et::add, Times -> contract_all. *)
+   net builder in Codegen (compileLorentz) turns Plus -> add(...), Times -> contract(...). *)
 analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
   factors = ntProfTimed["rewriteDressedNums", rewriteDressedNums @
     ntProfTimed["splitSelfTraces", splitSelfTraces[If[Head[diagram] === Times, List @@ diagram, {diagram}]]]];
@@ -1117,7 +1108,7 @@ analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
    A Plus factor needs care and is why the old whole-net Cases[...,Infinity] count was
    useless: an eager vertex sum's summands LEGITIMATELY repeat the same free labels. A Plus
    is counted ONCE, via the free set its summands must agree on — that agreement is itself
-   the et::add alignment precondition freeIdx[_Plus] assumes without checking. A summand's
+   the eager add(...) alignment precondition freeIdx[_Plus] assumes without checking. A summand's
    internal dummies are private and must not appear anywhere else. *)
 
 NumTrace::flavleak = "a fundamental-flavour Kronecker delta survived BOTH contractFlavour passes \
@@ -1133,7 +1124,7 @@ NumTrace::badlabel = "Diagram `1`: index label `2` occurs `3` times (expected 1 
 2 = contracted). The et engine contracts axes by matching id, so `3` axes sharing this label \
 are silently mis-paired into a wrong number. Offending diagram:\n`4`";
 NumTrace::plusfree = "Diagram `1`: the summands of an eager (un-distributed) sum expose \
-DIFFERENT free indices `2` — et::add cannot align them. Offending sum:\n`3`";
+DIFFERENT free indices `2` — the eager add(...) cannot align them. Offending sum:\n`3`";
 NumTrace::privclash = "Diagram `1`: label(s) `2` are private dummies of one factor but also \
 occur outside it — a dummy-name collision between two independently generated objects. \
 Offending diagram:\n`3`";

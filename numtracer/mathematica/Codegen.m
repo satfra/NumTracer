@@ -14,15 +14,10 @@
 (* Generation goes through the numeric matrix-product backend (`lorentzNetStr`/`compileLorentz` + the
    generator below); generated kernels are validated against FormTracer (FORM) oracles in the
    test suite. *)
-(* ============================================================================ *)
-(* ==== INVARIANT-BASIS path: contract in scalar-product symbols, not frame  === *)
-(* ==== components. The Lorentz trace of each diagram is emitted as an `et::inv` *)
-(* ==== network into a build-time GENERATOR (gen_<name>_inv.cpp); the generator *)
-(* ==== runs reduce->cancel->lower at codegen time (heap reclaimed, ~FORM op    *)
-(* ==== count) and prints a committed straight-line `<name>_inv_kernels.hh`.    *)
-(* ==== The kernel just fills the few fundamental symbols and calls trN(f).     *)
-(* ==== This closes the A3 runtime gap that the frame-component basis cannot.   *)
-(* ============================================================================ *)
+(* Files of one generation: the build-time generator program (gen_<ns>.cpp, its gen_<ns>_u<k>.cpp
+   units, the _nets.hh declarations and the _pch.hh header), the straight-line traces header it
+   prints when run (<Name>_kernels.hh), and the kernel header the consumer includes (<Name>_kernel.hh),
+   which fills the fundamental symbols and calls the generated traces. *)
 (* Verbose-diagnostics gate. The profiling / CSE / probe / timing traces below ([prof], [cse],
    [probe], [diagpoly], [time]) are emitted through ntLog and stay SILENT unless this flag is set —
    so a normal generation run is quiet. Genuine "[NumTracer] ERROR" aborts and the "wrote:"/
@@ -226,10 +221,9 @@ $ntCppLeakPatterns :=
    thousands of characters wide. *)
 ntExportCpp[file_, text_] := (
 (* THE SCAN RUNS UNCONDITIONALLY. It is bound here and only its TIMING is logged — the scan must not
-   sit inside the ntLog[] call. ntLog is an ordinary function today, so its arguments always
-   evaluate and putting the scan there happened to work; but its whole point is to be silent when
-   not verbose, so the natural "optimisation" of giving it a Hold attribute would delete this guard
-   from every non-verbose run and leave a green suite. Keep load-bearing work outside ntLog. *)
+   sit inside the ntLog[] call. ntLog is HoldAll, so its arguments evaluate only when verbose: a scan
+   placed there would silently not run in every non-verbose generation. Keep load-bearing work
+   outside ntLog. *)
     With[{ntT =
         First @
           AbsoluteTiming[
@@ -251,13 +245,6 @@ ntExportCpp[file_, text_] := (
     Module[{st = OpenWrite[file, CharacterEncoding -> "UTF8"]},
       WriteString[st, text];
       Close[st]]);
-
-(* A `dressMonomials` helper used to live here: it split a dressing/kinematic coefficient into a
-   sum of {numericCoeff, {atomExpr...}} monomials by expanding the whole expression. It was
-   superseded by drDecompose below, which performs the same split but INTERNS each atom through
-   drAtomId — and nothing called dressMonomials after that. drDecompose's own comment still
-   points back at it ("Mirrors dressMonomials but interns atoms"), which is the surviving
-   description of the decomposition. *)
 
 (* ---- Lorentz-factor emission ------------------------------------------------------------------
    Each tensor head becomes a call to one of the generator's wrapper templates
@@ -350,7 +337,7 @@ ntStageResult[label_String, keys_List, a_Association] :=
       Message[ntStageResult::unbound, label, First[bad], a[First[bad]]]; Abort[]];
     a];
 
-MakeNTKernel::eagernn = "compileLorentz: an eagerly-summed structure has a NON-NUMERIC per-structure scalar coefficient, which et::add cannot fold (it scales each structure by a compile-time Lit). The sum should have been distributed by expandBridges (DSL.m) or collected into an ntDressedNum. Offending sum:\n`1`";
+MakeNTKernel::eagernn = "compileLorentz: an eagerly-summed structure has a NON-NUMERIC per-structure scalar coefficient, which the emitted add(...) cannot carry (each summand is scaled by a numeric literal). The sum should have been distributed by expandBridges (DSL.m) or collected into an ntDressedNum. Offending sum:\n`1`";
 
 MakeNTKernel::tleak = "compileLorentz: un-lowered TENSOR structure reached the scalar fallthrough — it would be CForm'd into C++ as a bare scalar with its indices silently dropped (this is what caused the ZAAqbq metric leak). Every tensor head must be handled by lorentzNetStr or one of the Power/Times/Plus branches. Offending structure:\n`1`";
 
@@ -569,7 +556,7 @@ drAtomId[atom_] := Module[{key = atom},
 
 (* Decompose a (frame-resolved) dressed-structure coefficient into {Cx numeric, {drAtomId…}}: numbers
    fold into the complex coefficient; a positive-integer power b^n expands to n atom copies; every other
-   non-numeric factor is one atom (interned via drAtomId). Mirrors dressMonomials but interns atoms. *)
+   non-numeric factor is one atom (interned via drAtomId). *)
 
 drDecompose[coeff_] := Module[{
     factors =
@@ -620,9 +607,8 @@ $ntUnitChars = 250000;
 $ntUnitCap = 512;
 
 (* per-job RAM estimate (GB) used to bound the parallel compile. With defs chunked, a unit's peak RSS
-   is a few hundred MB, so this is deliberately conservative headroom. (NT_GEN_JOB_MEM used to
-   override it; nothing set it, and NT_GEN_JOBS already pins the job count outright, which is the
-   knob anyone tuning this actually reaches for.) *)
+   is a few hundred MB, so this is deliberately conservative headroom. NT_GEN_JOBS pins the job
+   count outright. *)
 
 $ntGenJobMemGB = 1.5;
 
@@ -687,9 +673,7 @@ $ntCompileJobs := ntCompileJobs[];
    Both paths reproduce the vector element-for-element; only the SOURCE TEXT shrinks. `sdslR0` is
    the control that keeps this honest: the guard below rejects it on its own merits, because a
    33601/33618 table would pay for an index vector and save nothing. That guard is why no
-   opt-out is needed — the dedup is applied only where it demonstrably pays. (An
-   NT_GEN_NO_TABLE_DEDUP hatch that forced the un-deduped emission used to sit here; nothing
-   referenced it, and the guard already covers the case it existed for.) *)
+   opt-out is needed — the dedup is applied only where it demonstrably pays. *)
 
 ntChunkDef[name_String, ret_String, elems_List] :=
   Module[{u, tot},
@@ -794,7 +778,7 @@ ntChunkDefs[prefix_String, ret_String, elemLists_List] := If[elemLists === {},
 
 (* C++ compiler for the build-time generator. The emitted generator is ordinary numeric C++, so
    either g++ or clang++ compiles it with the same flags (-std=c++20 -ftemplate-depth=4000
-   -O2/-O0 -fno-exceptions -fno-rtti -pthread -I -c -o). Resolution order: the NT_GEN_CXX env
+   -O1/-O0 -fno-exceptions -fno-rtti -pthread -I -c -o). Resolution order: the NT_GEN_CXX env
    override (verbatim), else PREFER clang++ when present (it compiles the -O0 net-builder units
    ~2.5x faster than g++ — u33 5.8 s -> 2.3 s), else a compiler detected via CCompilerDriver
    (GCC -> g++, Clang -> clang++; binary taken from the driver's CompilerInstallation dir), else
@@ -840,8 +824,7 @@ resolveGenCxx[] := Module[{env = Environment["NT_GEN_CXX"], path, comps, clangPi
    churn and a tcmalloc_minimal LD_PRELOAD is a measured -7% on the run (it also lowers the
    glibc-arena fragmentation floor, see PHASE-A residue notes). Env prefix on the Run[] shell
    command, so it needs no code in the generator itself. Silently empty when the library is absent,
-   so nothing changes on machines without gperftools — which is also the opt-out, and is why the
-   NT_GEN_NO_TCMALLOC hatch that used to guard this (referenced nowhere) is gone. *)
+   so nothing changes on machines without gperftools — which is also the opt-out. *)
 ntTcmallocPrefix[] :=
   With[{lib = SelectFirst[
       {"/usr/lib/libtcmalloc_minimal.so", "/usr/lib64/libtcmalloc_minimal.so",
@@ -895,7 +878,7 @@ chunkLorentz[lorExpr_, ids_, env_, nonzeroCompMask_] := Which[
    splitColourGroups's `Expand` distributes it into TWO full Dirac traces. `foldDiracSigma`
    collapses that Plus into a single `ntSigma[legA, legB, din, dout]` token (each leg a slashed
    momentum {"slash",mom} or a free gluon id {"free",mu}), so the commutator is traced ONCE (the C++
-   engine folds [A,B] as a block-diagonal 2×2 factor — `dcomm*` in et/inv/dirac.hpp). The i/2 and any
+   engine folds [A,B] as a block-diagonal 2×2 factor — `dcomm*` in network/dirac.hpp). The i/2 and any
    sign live in the SCALAR (the Plus is already a bare bracket). It is a pure OPTIMIZATION: when the
    Plus is not an UNAMBIGUOUS commutator the recognizer returns $Failed and it distributes as before. *)
 (* the (type,value) leg of a gamma `g` within a term's factor list `tf`. The gamma's Lorentz label μ
@@ -1058,16 +1041,13 @@ splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
                 ({#[[1]], #[[2]], ""}&) /@ chunkLorentz[Times @@ rest, ids, env, nonzeroCompMask]]}]
         ] /@ terms;
     groups = GatherBy[branchNets, First];
-(* one {colourNet, bodyNet, scalar, restNet} entry per colour group.
-   INV backend: fuse a group's branches into ONE NetVal body via add/sc/contract — valid because
-   each branch's `core` is itself a NetVal (dirac_value(...)); restNet is a string.
-   NUMERIC backend: a branch's `core` is a BARE `DiracNet{...}` (contracted against its Lorentz
-   rest only at runtime by numeric_value_netval), so fusing it into `add(sc(DiracNet{...}), …)` is
-   a C++ type error (the `1/4/7` bug). Keep ONE entry per colour group (so the net count tracks the
-   graph, not the branch×ordering explosion), but carry the group's branches as a LIST of sub-terms:
+(* one {colourNet, bodyNet, scalar, restNet} entry per colour group. A branch's `core` is a BARE
+   `DiracNet{...}` (contracted against its Lorentz rest only at runtime by numeric_value_netval), so
+   the branches cannot be fused into one net; the group carries them as a LIST of sub-terms instead:
    bodyNet = {core_b…} (each a DiracNet literal, or a Lorentz NetVal for a gamma-free branch),
-   restNet = {{rest_b, scal_b}…} (parallel). The generator sums mp[i]=Σ_b scal_b·numeric_value_netval(
-   dnet_b, lnet_b) — matching how the inv body sums its branches, but type-correct for numeric. *)
+   restNet = {{rest_b, scal_b}…} (parallel), and the generator sums
+   Σ_b scal_b·numeric_value_netval(dnet_b, lnet_b). One entry per colour group keeps the net count
+   tracking the colour graph, not the branch×ordering explosion. *)
     Function[group,
         Module[{colProd = group[[1, 1]], colNet, colScalar, branchRecs},
           {colNet, colScalar} =
@@ -1194,20 +1174,7 @@ compileColourSum[e_, ids_] := Module[{
       Abort[]];
     compileColour[#, ids]& /@ terms];
 
-(* An "et-vs-numeric size guard" used to live here: $NumTracerFundETMaxEntries plus the
-   fundMetric / labelDimAssoc / tensorPartsOf trio that estimated the widest intermediate of a
-   FUNDAMENTAL colour contraction, to decide between the compile-time ETensor path and the
-   numeric SUNNet one. The ETensor path is gone — every colour component folds numerically —
-   so nothing read the estimate and nothing read the threshold. (tests/gen/gen_glu_quark.wls
-   still SET $NumTracerFundETMaxEntries, which had been a silent no-op for as long.) *)
-
-(* ---- Dirac trace -> Lorentz NetVal (for the invariant-basis path) ----------
-   The et engine takes a spinor trace by closing a cyclic chain; the inv generator works in
-   scalar products, so we instead apply the gamma-trace THEOREM symbolically, turning the
-   closed chain of gammas into a signed sum of metric products. Each slashed momentum is
-   ntGamma[mu,..] * ntVec[q,mu], so the metric mu-pairings contract the vecs/projectors that
-   share those Lorentz labels — leaving a pure-Lorentz network the existing reduce->rebase
-   pipeline handles unchanged. (No gamma5 support yet; gamma5-bearing traces are not expanded.) *)
+(* ---- spinor slots of the Dirac heads (used by the spinor-loop walk below) ---------------------- *)
 
 diracIn[ntGamma[_, a_, _]] := a; diracOut[ntGamma[_, _, b_]] := b;
 
@@ -1234,37 +1201,24 @@ diracIn[ntDiracSlot[_, a_, _, _]] := a; diracOut[ntDiracSlot[_, _, b_, _]] := b;
 diracSpinorSymmetricQ[_ntDeltaDirac] := True;
 diracSpinorSymmetricQ[_]             := False;
 
-(* The LEGACY symbolic gamma-trace path used to live here: orderDiracChain / rawGammaTrace /
-   canonGammaTrace / gammaTraceSum / gammaTraceSum5 / diracTrace / expandDiracComponent, which
-   applied the gamma-trace THEOREM in Mathematica to turn a closed chain into a signed sum of
-   metric products. Its own comment said it was "retained only for cross-validation" — but
-   nothing cross-validated against it: expandDiracComponent had no caller, and everything below
-   it in that chain had no caller but the next link up. The numeric backend traces in C++
-   (compileDirac -> network::dirac_value), and the dense DTensor oracle is what actually grades
-   it. diracIn/diracOut ABOVE are NOT part of this: the live undirected walk (orderDiracFacs)
-   uses them. *)
-
-(* ---- Dirac trace in the C++ generator (et/inv/dirac.hpp `dirac_value`) -----------------------
-   The inv backend emits the gamma chain as a `DiracNet` literal and the generator contracts the
-   closed spinor loop NUMERICALLY into a Lorentz net (metrics/vectors over the free gluon legs), then
-   `reduce` folds it with the projector — instead of expanding the (2n−1)!! pairing sum symbolically
-   in Mathematica (which exploded for the 3-gluon-vertex quark triangle). This parallels how colour is
-   folded by `SUNNet`/`compileColour`. *)
+(* ---- Dirac trace in the C++ generator (network/dirac.hpp `dirac_value`) ----------------------
+   The gamma chain is emitted as a `DiracNet` literal and the generator traces the closed spinor loop
+   NUMERICALLY (4×4 matrix products) against the Lorentz rest — instead of expanding the (2n−1)!!
+   pairing sum symbolically in Mathematica. This parallels how colour is folded by
+   `SUNNet`/`compileColour`. *)
 
 $ntDiracFree = 900000;(* fresh Lorentz-label base for slash–slash pairings: above every component id *)
 (* the gamma/gamma5 factors in trace order (walk the closed spinor loop; spinor-δ connectors carry no
-   token but are followed). Like `orderDiracChain` but returns the factors so each can be classified.
+   token but are followed).
 
    UNDIRECTED cycle walk: each Dirac factor is an EDGE between its two spinor labels (spinorLabelsHead);
    every label in a closed spinor loop has degree 2, so the walk is deterministic. We seed at
    `First[facs]` ENTERING on its `diracIn` label (so it leaves on `diracOut`) and at each step leave the
    current factor by its OTHER endpoint, picking the unique unvisited neighbour there. For a
    consistently-oriented loop (every node one in / one out — Zq/ZA/ZA3/ZA4/ZAqbq, which close via an
-   oriented γ) this reproduces the old directed `byIn` forward walk token-for-token (byte-identical).
-   The robustness is for a loop closed by a SYMMETRIC external spinor-δ (`ntDeltaDirac[d1,d2]`, e.g. the
-   σL scalar external projector): the old directed walk collided on the shared `diracIn`/`diracOut` keys
-   and could not traverse the cycle, collapsing the trace to a single γ5 → tr(γ5)=0. The undirected
-   adjacency closes the cycle correctly regardless of start/orientation (the trace is cyclic). *)
+   oriented γ) this is the plain forward walk. It also closes a loop through a SYMMETRIC external
+   spinor-δ (`ntDeltaDirac[d1,d2]`, e.g. the σL scalar external projector), whose two labels carry no
+   orientation, regardless of start/orientation (the trace is cyclic). *)
 
 orderDiracFacs[facs_] :=
   Module[{nodeFacs = Association[], cur = 1, prevLabel, out = {}, seen = {}, labels, exitLabel, nexts, nTok, revs = {}, fwds = {}, revQ},
@@ -1420,10 +1374,9 @@ chainTokCpp[g_, dressed_, vecOf_, ids_, env_, mask_] :=
   If[dressed, "dtfix(" <> fixedTokCpp[g, vecOf, ids, env] <> ")", fixedTokCpp[g, vecOf, ids, env]];
 $ntSlotN = 0;
 
-(* the C++ DSlot literal for one ntDressedNum: a sum of DSlotOpt{Cx coeff, {dress ids}, slash?, vlc}.
-   Each option's scalar coefficient is frame-resolved then split into a complex number × dressing atoms
-   (drDecompose); a "slash" structure's momenta become a vlc of {1.0, env Base} pairs (coeff-1, like the
-   single-vec slash above), an "ident" structure is the spinor identity (slash=false, empty vlc). *)
+(* one ntDressedNum's options. Each option's scalar coefficient is frame-resolved then split into a
+   complex number × dressing atoms (drDecompose); a "slash" structure's momenta become a vlc, an
+   "ident" structure is the spinor identity (no token). *)
 (* MEMOISED: called once per dressed-numerator token, so a dense dressed flow makes tens of thousands of
    calls — but has only a handful of DISTINCT dressed numerators, since the same propagator numerator
    recurs in every diagram and colour branch. Resolving/decomposing one is expensive, and unmemoised this
@@ -1435,9 +1388,9 @@ $dsCache = <||>;
 dressedSlotStr[gf : ntDressedNum[_, _, _], env_] := With[{h = Hash[{gf, $ctCtx}]},
     Lookup[$dsCache, h, $dsCache[h] = dressedSlotStrBody[gf, env]]];
 
-(* Returns the LIST of per-option "DSlotOpt{…}" strings (NOT the wrapped "DSlot{…}"). The generator
-   (emitNumericGenerator) expands the Cartesian product of the chain's slots' options into one
-   single-option sub-term per combination, so each slot is delivered here as its bare option list. *)
+(* Returns one {structStr, num, dr} triple per option: the dressing-free "DSlotOpt{…}" string, the
+   numeric coefficient and the dress-atom ids. The generator (emitNumericGenerator) expands the
+   Cartesian product of the chain's slots' options into one single-option sub-term per combination. *)
 dressedSlotStrBody[ntDressedNum[opts_, _, _], env_] := Function[opt,
           Module[{num, dr, vlcStr},
             {num, dr} = drDecompose[$ntDressResolve[opt[[1]]]];
@@ -1486,8 +1439,7 @@ $dslCache = <||>;
 diracSlotStr[gf : ntDiracSlot[_, _, _, _], ids_, env_, nonzeroCompMask_] := With[{h = Hash[{ntCanonIds[gf, ids, env], $ctCtx}]},
     Lookup[$dslCache, h, $dslCache[h] = diracSlotStrBody[gf, ids, env, nonzeroCompMask]]];
 
-(* Returns the LIST of per-option "DSlotOpt{…}" strings (see dressedSlotStrBody): the generator
-   expands the Cartesian product of a chain's slots into single-option sub-terms. *)
+(* Returns one {structStr, num, dr} triple per option, like dressedSlotStrBody. *)
 diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, nonzeroCompMask_] := Function[opt,
         Module[{num, dr, facs, vecOf, gammaLegs, diracFacs, lorFacs, toks, netFacs},
           {num, dr} = drDecompose[$ntDressResolve[opt[[1]]]];
@@ -2056,7 +2008,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    env as kind-2 `dress` leaves filled by fm.dress. So combinations that share a concrete structure but
    differ only in dressing collapse to ONE trace; the non-dressed path is byte-identical. *)
     hasDressed = !FreeQ[invNets, _ntDressedCore];
-    (* shared wrapper templates (same as the inv generator) so the net-builder strings compile. *)
+    (* shared wrapper templates so the net-builder strings compile. *)
     tmpl = "template<int Mu,int Nu,int Lb,int Mask,int Inv> NetVal tproj(){ return projT(Mu,Nu,Lb,Inv); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int Inv> NetVal lproj(){ return projL(Mu,Nu,Lb,Inv); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int InvS> NetVal mproj(){ return projM(Mu,Nu,Lb,InvS); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int Inv,int InvS> NetVal eproj(){ return projE(Mu,Nu,Lb,Inv,InvS); }\n" <> "template<int Mu,int Nu> NetVal lmetric(){ return met(Mu,Nu); }\n" <> "template<int Lbl,int Base,int Mask> NetVal lvec(){ return vec(Lbl,Base); }\n" <> "template<int A,int B,int C,int D> NetVal leps(){ return epsilon(A,B,C,D); }\n" <> "inline NetVal konst(double c){ return NetVal{PTerm{Cx{c,0}, {}}}; }\n" <> "template<class L> struct litco;\n" <> "template<numtracer::Cx C> struct litco<numtracer::Lit<C>>{ static constexpr numtracer::Cx v=C; };\n" <> "template<class L> NetVal sc(NetVal x){ return scale(litco<L>::v, std::move(x)); }\n";
 (* per net: a colour group is a SUM of sub-terms. invNets[i] = {core_b…} (each a DiracNet literal
    for a gamma branch, or a Lorentz NetVal for a gamma-free branch); invRest[i] = {{rest_b,scal_b}…}
@@ -2435,8 +2387,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
         " [NT_GEN_NO_DEDUP]",
         ""]];
 (* The distinct traces are emitted as ONE flat table each (still chunked by ntChunkDef, whose helpers
-   the bin-packer scatters across the -O0 units); the nets reference them by index. Guard nSub == 0:
-   {}[[All,1]] is an error, not an empty list. *)
+   the bin-packer scatters across the -O0 units); the nets reference them by index. *)
 (* Chunk/intern/bin-pack the net-builder tables into the -O0 unit TUs. Separated from the main()
    data tables below because the two have different levers: this half is dominated by ntChunkDef's
    dedup scans, that half by integer-to-text. *)
@@ -2937,7 +2888,8 @@ inline\n#define KOKKOS_FUNCTION\n#define __host__\n#define __device__\n";
 privDefs[decor_] :=
   StringRiffle[(decor <> " auto " <> # <> "(const auto &k2, const auto &p2) { return REG::" <> # <> "(k2, p2); }")& /@ {"RB", "RF", "RBdot", "RFdot", "dq2RB", "dq2RF"}, "\n"];
 
-(* per-trace real/imag accessors for the "RePart" re/im split: a kernel whose VALUE is real but which
+(* per-trace real/imag accessors for the "RePart" re/im split, as emitted into the PROBE (the kernel
+   uses the type-preserving ntReImDefsAD below): a kernel whose VALUE is real but which
    has a COMPLEX trace is assembled as Σ[Re(c)·tr.real() − Im(c)·tr.imag()] — PURE double arithmetic, so
    no complex type survives into the kernel (avoids mixing the trace's std::complex with the support
    complex, and keeps device code real). Overloads pass a real trace straight through (im → 0). *)
@@ -3178,8 +3130,9 @@ ntProjectIntegrand[integrand_, pureQ_, linear_] := Module[{sums, unsafe, degs, r
 ntPureIntegrand[integrand_] := ntProjectIntegrand[integrand, True, ntPureLinear];
 
 (* "RePart": the value is real but a trace is itself complex, so only `.real()` of the full complex
-   result is correct: Re(Σ c·tr) = Σ[Re(c)·ntRe(tr) − Im(c)·ntIm(tr)]. The integrand is LINEAR in the
-   trace tokens (strings). The naive `(… /. s:>ntRe[s]+I ntIm[s]) /. Complex[a_,b_]:>a` is WRONG:
+   result is correct: Re(Σ c·tr) = Σ[Re(c)·ntRe(tr) − Im(c)·ntIm(tr)]. This is the LINEAR case (each
+   term carries one trace token); ntProjectIntegrand routes products of tokens to the multilinear
+   split above. The naive `(… /. s:>ntRe[s]+I ntIm[s]) /. Complex[a_,b_]:>a` is WRONG:
    Mathematica keeps `i·X·(ntRe+I ntIm)` as an UNEXPANDED product, so `/. Complex:>a` zeroes the
    leading `i` factor and DROPS the whole term — silently losing the real −X·ntIm(tr) contribution of
    every complex trace. Instead split each token's coefficient into real / imaginary parts via an
@@ -3728,9 +3681,6 @@ $ntComplexRuntimeProjection = False;
 mkGenerateKernel::genfail = "Generator compile/run failed: `1`";
 mkGenerateKernel::pruneoff = "PruneRealTraces ignored: the RealProbe cannot run in this mode (Offline or RunGenerator->False), so pruned traces could not be probe-validated. Emitting all-complex traces; set RealProbe->False to assert the flow is safe to prune without a probe.";
 
-(* (mkGenerateKernel::crosscseComplex was removed 2026-07-19: CrossTraceCSE now types tarr[] from the
-   emitted `trace_all_t`, so a complex flow is no longer truncated and needs no guard.) *)
-
 mkGenerateKernel::emptynets = "Flow `1` produced no generator nets (nets=`2`, groups=`3`) — nothing to emit. Aborting instead of writing a placeholder kernel. (Either NumTrace returned no usable diagrams, or every diagram was dropped during the net build.)";
 
 mkGenerateKernel::scalarleak = "Diagram `1`: a non-numeric factor `2` reached the generator scalar coefficient (a Lorentz tensor that was not resolved by the net builder, e.g. an un-anchored metric contraction). It would be emitted as undeclared C++. Aborting; fix the net build (compileLorentz) so the contraction folds numerically.";
@@ -3867,13 +3817,11 @@ resolveGenLib[incDir_] := Module[{env, base, cands, lib},
    concrete trace VALUES, and at the Mathematica stage the traces are opaque generated C++ symbols, so
    it can't be seen there. The just-generated C++ traces CAN see it: this compiles+runs a tiny probe that
    evaluates Im(integrand) over random frames with smooth real stub dressings/regulators. Returns True iff
-   the imaginary part vanishes (|Im| <= tol·|Re|) over all sampled points — in which case the caller
-   re-emits a real (double) kernel losslessly. Conservative: any failure (compile/run/no-points) -> False
-   (keep the complex kernel). *)
+   the imaginary part vanishes (|Im| <= tol·|Re|) over all sampled points, and writes the verdict that
+   selects the real or complex kernel body (see below). *)
 (* "TraceArrayDecl": with CrossTraceCSE the integrand's trace tokens are `tarr[i]` reads, not
    `ns::tr_i(fenv)` calls, so the probe TU must declare and fill that array exactly as the kernel's
-   coreBlock does — otherwise the probe fails to compile, the failure is (deliberately) swallowed as
-   "keep the complex kernel", and the flow silently loses the lossless RePart double-kernel emission.
+   coreBlock does — otherwise the probe fails to compile and generation aborts (ntRunProbe).
    Empty for the per-trace path. *)
 
 (* The verdict is applied by the PREPROCESSOR, not by Mathematica: `kernel.hh` carries all three bodies
@@ -3901,10 +3849,11 @@ Options[ntProbeSource] = {"NPoints" -> 4000, "Tol" -> 1.*^-9, "TraceArrayDecl" -
    the verdict is which of those reproduces the complex form to tolerance, i.e. 2 = Pure,
    1 = RePart, 0 = neither (keep it complex).
 
-   THE CONSERVATISM IS THE POINT: every failure — a compile that does not build, a run that does not
-   parse, a residual above tolerance, a NaN — resolves to 0, "keep the flow complex". A wrong verdict
-   is an O(1) kernel error, while an unnecessarily complex kernel is only slower, so the two
-   outcomes are not weighed equally anywhere in this function. *)
+   THE CONSERVATISM IS THE POINT: a residual above tolerance resolves to 0, "keep the flow complex"
+   (NaN sample points are skipped), and anything that stops the probe from producing a verdict — a
+   compile that does not build, a failed run, output that does not parse — aborts generation in
+   ntRunProbe instead of guessing. A wrong verdict is an O(1) kernel error, while an unnecessarily
+   complex kernel is only slower. *)
 ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, headerFile_, drTable_ : <||>, opts : OptionsPattern[]] :=
   Module[{keepHeads, keepSyms, seedOf, argComb, stub, probeFull, probeProj, probeRePart, probeParams, probePre, fnFull, fnProj, fnRePart, drDecls, drFillArgs, randDecls, callArgs, src, np, tol, distOf},
     np = OptionValue["NPoints"];
@@ -3917,7 +3866,7 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
    INDEPENDENTLY-SEEDED pseudo-random real per head. "External" = head is not a structural math
    operation, not a frame arg, not a known constant, and not a trace token (those are raw C++ strings,
    left untouched). Independence is essential: a single shared stub would make `dress1[x]-dress2[x]`
-   collapse to 0 and nonzeroCompMask a real surviving imaginary part. Distinct heads -> distinct seeds; distinct
+   collapse to 0 and mask a real surviving imaginary part. Distinct heads -> distinct seeds; distinct
    arguments -> distinct hashes -> distinct values, so any genuine imaginary part is exposed for
    ARBITRARY dressings. *)
     keepHeads = Alternatives[Plus, Times, Power, Rational, Sqrt, Sin, Cos, Tan, Cot, Sec, Csc, Exp, Log, Abs, Sign, ArcTan, ArcSin, ArcCos, Sinh, Cosh, Tanh, Max, Min, Floor, Ceiling, Mod, Complex, List, Global`ntStub];
@@ -3994,7 +3943,7 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
    as the only diagnostic. numtracer::compute::powr (runtime.hpp) is already generic this way; this
    is the probe's own private copy catching up. T(1) rather than 1.0 for the identity and inverse. *)
         "template<int N, class T> static inline T powr(T x){ T r=T(1); int n=N<0?-N:N; for(int i=0;i<n;++i) r*=x; return N<0?T(1)/r:r; }\n",
-(* min/max belong here for the same reason the rest do: ntProbeStub's keepHeads deliberately KEEPS
+(* min/max belong here for the same reason the rest do: ntProbeSource's keepHeads deliberately KEEPS
    Max and Min, so a kernel containing one reaches the probe -- where, unlike the kernel, there is no
    `using namespace DiFfRG` to supply them. The kernel compiled and only its probe did not, with
    "'min' was not declared in this scope" as the whole diagnostic. They come from <algorithm>. *)
@@ -4206,17 +4155,6 @@ diagColPolys[colnetStrs_, includeDir_] :=
       AppendTo[res, cur]];
     res];
 
-(* The invariant-basis GENERATION path (the default numeric backend). Algorithm:
-     1. reset the per-generation registries ($ctCache, resetDiagDr, resetDr) and unpack the NTKernel.
-     2. per diagram, build the Lorentz/colour nets: splitColourGroups groups branches by colour
-        structure; a plain diagram lowers to a LorentzNet, a dressed-numerator one to a DPoly chain
-        (the two paths the generator contracts differently). CSE-share repeated net/trace builders.
-     3. emit a build-time C++ generator program (emitNumericGenerator) — a main TU plus per-net units —
-        that runs reduce -> rebase -> lower at codegen time and PRINTS the straight-line traces header.
-     4. compile + run that generator (resolveGenCxx), probe whether the result is real/complex to pick
-        the kernel's number type, then emit and write (write-if-changed) the kernel header that fills
-        the fundamental symbols and calls the generated trN(f). *)
-
 (* ---- STAGE: which trace groups may drop their imaginary half ("PruneRealTraces") --------------
    A group whose dressing coefficient is REAL has only Re(trace) consumed (the consumer takes Re of
    the whole kernel; a real coefficient cannot move Im(trace) into the real part). Flag it and the
@@ -4291,14 +4229,14 @@ ntkPruneSpec[diagData_, groups_, complexQ_, offline_, pruneRequested_, realProbe
          and factor groups (kept separate because a dressed factor entry carries its own token).
       6. INTEGRAND. Assemble the symbolic integrand over the groups, hoist launch-constant dressing
          lookups, and decide the prune spec (ntkPruneSpec, above).
-      7. EMIT + BUILD. Emit the generator (emitNumericGenerator), write it, then either compile and
-         RUN it here (online) or record a numtrace.json manifest for the `numtrace` CMake target to
-         run later (offline).
-      8. PROBE + RE-PRUNE. On a complex flow, probe whether the imaginary part cancels, write the
-         verdict header, and — if PruneRealTraces was requested — re-run stage 7 with the prune
-         applied. Stage 7 is a closure precisely so it can be re-run.
-      9. KERNEL EMISSION. Lower the integrand through FunKit into the kernel class text and write it.
-     10. MANIFEST. Record what was generated, for the build.
+      7. KERNEL LOWERING. Lower the integrand through FunKit into the kernel class/header text.
+      8. EMIT + BUILD (genPass). Emit the generator (emitNumericGenerator), write it, then either
+         compile and RUN it here (online) or leave it to the `numtrace` CMake target (offline).
+      9. PROBE + RE-PRUNE. On a complex flow, probe whether the imaginary part cancels, write the
+         verdict header, and — if PruneRealTraces was requested — re-run stage 8 with the prune
+         applied. genPass is a closure precisely so it can be re-run.
+     10. WRITE + MANIFEST. Write the kernel header (write-if-changed) and record the numtrace.json
+         manifest for the build.
 
    READING THE Module LOCALS. Several are DECLARED here and ASSIGNED inside inner scopes — the note
    on `diagData` below records what that cost once. Where a stage has been extracted to a top-level
@@ -4411,8 +4349,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                               scalars, no unit constraint. Always correct, never compact.
 
    The ORDER is the specification: each test is strictly narrower than the next, so the first that
-   qualifies is the most compact one available. NT_NO_UNIT_GROUPS forces the last branch, which is
-   how the two are A/B'd (tests/gen/gen_lambda3d_small_numeric.wls builds its control that way). *)
+   qualifies is the most compact one available. NT_NO_UNIT_GROUPS disables the mixed unit-loop branch
+   only (unitLoopMixedOkQ), which is how tests/gen/gen_lambda3d_small_numeric.wls builds its control. *)
         {pf, ad, ug} =
           Which[
             uc =!= Automatic,
@@ -5367,10 +5305,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    clang++ only — GCC's PCH is a different mechanism (a .gch beside the header, found implicitly)
    and is not worth a second code path while resolveGenCxx[] prefers clang++ anyway. When the PCH
    is not built the units fall back to their textual includes via the NT_GEN_PCH *macro* guard, so
-   this is a pure optimisation with no correctness surface — which is why the NT_GEN_NO_PCH env
-   hatch that used to disable it (referenced nowhere) is gone. Note the macro and the deleted
-   variable were different things that shared a name: the macro is emitted into each unit TU and
-   must stay.
+   this is a pure optimisation with no correctness surface. The NT_GEN_PCH macro is emitted into each
+   unit TU and must stay.
    The PCH MUST be built with the unit TUs' exact flag set (-O0 -fno-exceptions -fno-rtti + hoDef);
    clang rejects a PCH whose flags disagree with the consumer's. *)
         pchOut = bin <> ".pch";
@@ -5387,7 +5323,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    pay it again. The key covers the emitted sources, the linked libNumTracer.a, every installed
    engine header (the sources #include them), the compiler and the main-TU -O level — anything that
    can change the binary. Same pattern as FunKit's funkit-source.hash. Deleting the .srckey file is
-   the opt-out — an NT_GEN_NO_COMPILE_CACHE hatch used to exist for that and nothing referenced it.
+   the opt-out.
    CAVEAT (documented, not speculative): if phase-B parallel lowering ever lands, sN interning makes
    the source non-deterministic and this key must move to the generator INPUTS. *)
         Module[{srcKey, keyFile = bin <> ".srckey", hit},
@@ -5519,7 +5455,7 @@ MakeNTKernel[ntk : NTKernel[_], file_, opts : OptionsPattern[]] := (
 MakeNTKernel::optname = "Unknown option name(s) `1`. MakeNTKernel accepts: `2`. An unrecognised name is NOT applied — OptionsPattern[] matches any rule, so it would otherwise be swallowed silently and the setting would simply not take effect (this is what happened to \"Backend\" -> \"Dense\" after that option was removed). Check the spelling, or drop the option.";
 
 ntAssertKnownOptions[opts_List] :=
-  With[{unknown = Complement[Cases[opts, (nm_ -> _) :> ntOptName[nm]], ntOptName /@ Keys[Options[MakeNTKernel]]]},
+  With[{unknown = Complement[Cases[opts, (nm_ -> _) | (nm_ :> _) :> ntOptName[nm]], ntOptName /@ Keys[Options[MakeNTKernel]]]},
     If[unknown =!= {},
       Message[MakeNTKernel::optname, unknown, Sort[ntOptName /@ Keys[Options[MakeNTKernel]]]];
       Abort[]]];

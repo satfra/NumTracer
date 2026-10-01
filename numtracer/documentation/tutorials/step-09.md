@@ -5,7 +5,7 @@ Tags: `codegen`, `options` · **Tier B** (a Wolfram kernel and FunKit)*
 
 ## Introduction
 
-`MakeNTKernel` has 28 options. Listing them would be a reference page; this is a tutorial, so
+`MakeNTKernel` has 36 options. Listing them would be a reference page; this is a tutorial, so
 instead we emit **the same network four ways** and look at what actually changed in the generated
 C++.
 
@@ -20,14 +20,16 @@ to study are in the emitted source.
 From `Codegen.m`:
 
 ```
-"Name","Namespace","Dressings","ScalarParams","ADParams","Decorator","DeviceTarget","IncludeDir",
-"RunGenerator","FullParallel","AngleDefs","CrossTraceCSE","Components","SymbolDefs",
-"RuntimeInclude","ExtraIncludes","KernelNamespace","SupportNamespace","DressingType",
-"ShareInterpolatorIndex","HoistLoopConstLookups","RegulatorTemplate","RegulatorAlias",
-"RealProbe","PruneRealTraces","Constant","Offline","CoordinateArgs"
+"ComputeType","Name","Namespace","Dressings","ScalarParams","ADParams","ParameterOrder",
+"Decorator","DeviceTarget","IncludeDir","RunGenerator","FullParallel","AngleDefs","CrossTraceCSE",
+"Components","SymbolDefs","RuntimeInclude","ExtraIncludes","KernelNamespace","SupportNamespace",
+"DressingType","ShareInterpolatorIndex","HoistLoopConstLookups","RegulatorTemplate",
+"RegulatorAlias","RealProbe","PruneRealTraces","ComplexRuntimeProjection","ComplexEndProjection",
+"RealOutput","Constant","Offline","CoordinateArgs","MatsubaraVar","DecayingRegulators",
+"MatsubaraFiniteExtent"
 ```
 
-They fall into five groups:
+They fall into seven groups:
 
 | Group | Options | Covered in |
 |---|---|---|
@@ -36,6 +38,21 @@ They fall into five groups:
 | **Target** — what it compiles against | `RuntimeInclude`, `ExtraIncludes`, `IncludeDir`, `RegulatorTemplate`, `RegulatorAlias` | [step-15](step-15.md) |
 | **Emission strategy** — how it is spelled | `CrossTraceCSE`, `FullParallel`, `Components`, `SymbolDefs`, `ShareInterpolatorIndex`, `HoistLoopConstLookups` | here, [step-20](step-20.md), [step-21](step-21.md) |
 | **Build orchestration & correctness probes** | `Offline`, `RunGenerator`, `RealProbe`, `PruneRealTraces` | [step-20](step-20.md), [step-21](step-21.md) |
+| **Complex flows** — how a complex integrand becomes a real kernel | `ComplexRuntimeProjection`, `ComplexEndProjection`, `RealOutput` | below |
+| **Finite temperature & precision** | `MatsubaraVar`, `DecayingRegulators`, `MatsubaraFiniteExtent`, `ComputeType` | below |
+
+The options not covered by a later step:
+
+| Option | Default | What it does |
+|---|---|---|
+| `ParameterOrder` | `Automatic` | Order of the runtime parameters in the kernel signature. `Automatic` keeps scalars first, then dressings; `MakeNTKernelDiFfRG` passes DiFfRG's `Parameters` order so the signature matches the integrator's forwarded tuple. |
+| `ComplexRuntimeProjection` | `False` | For a coefficient whose `I` sits where the symbolic real/imaginary split cannot reach (a finite-density denominator `l0 + I muq`): `False` aborts (`MakeNTKernel::cplxnest`); `True` keeps it factored and takes `ntRe`/`ntIm` of it at kernel runtime, with complex arithmetic in the kernel. |
+| `ComplexEndProjection` | `False` | Skip the symbolic Pure/RePart projections and the imaginary-part probe; emit one body `ntRe[integrand]`, i.e. the pointwise real part of the full complex integrand. Requires `RealOutput -> True`. |
+| `RealOutput` | `False` | The consumer takes a real value, so the complex kernel body is not lowered at all (it is the expensive one). If the probe then finds a surviving imaginary part, the kernel returns the RePart body — a truncation, flagged by a `#warning` in the emitted header. |
+| `MatsubaraVar` | `None` | Name of the Matsubara-frequency variable of a finite-T flow. When set, the generator proves whether the kernel is even in it and, if so, emits DiFfRG's `matsubara_even` trait. |
+| `DecayingRegulators` | `Automatic` | Regulator functions that decay super-polynomially in their argument (`Automatic`: DiFfRG's six regulator wrappers). A summand multiplied by one has finite frequency extent, which decides the `matsubara_finite_extent` trait. List nothing for a regulator that decays only algebraically. |
+| `MatsubaraFiniteExtent` | `Automatic` | `Automatic` derives the `matsubara_finite_extent` trait from the algebra; `True`/`False` force it. Forcing `True` on a summand that does not die above the regulator's support silently truncates the Matsubara sum. |
+| `ComputeType` | `"double"` | Precision of the EMITTED kernel (`"double"`, `"float"`, or a complex type of either); derivation and the generator stay in double. |
 
 ```{admonition} This list moves
 :class: note

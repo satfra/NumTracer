@@ -8,8 +8,7 @@
    dressings are ZA/Zc/RB expressions and the scalar dot products are already
    reduced to the runtime scalars (l1, p, cos1, ...). So only the TENSOR heads are
    rewritten here; their momenta are resolved by the frame in MakeKernel. (`sps`,
-   the finite-T scalar product, is its own symbol and left untouched — finite-T
-   support comes later.)
+   the finite-T spatial scalar product, maps to ntSPS.)
 
        flow = traceExprcbc // dressingRules // PropParam;
        net  = FromFunKit[flow];
@@ -157,7 +156,7 @@ $funKitHeads = {"FEx", "FTerm", "deltaLorentz", "vec", "vecs", "sp", "sps",
   "deltaAdjCol", "deltaFundCol", "FCol", "TCol", "epsAdjCol", "epsFundCol",
   "deltaAdjFlav", "deltaFundFlav", "fFlav", "tauFlav", "TFlav",
   "epsAdjFlav", "epsFundFlav", "deltaFlavFundGen", "epsLorentz"};
-(* Handled outside `map`: TFlav by the hasIso rewrite above. *)
+(* Handled outside `map`: TFlav by the hasIso rewrite in FromFunKit. *)
 $ffHandledElsewhere = {"TFlav"};
 FromFunKit::untranslated = "the FunKit head(s) `1` appear in the input but have no entry in \
 $ffMap / sunMap. An untranslated head does NOT fail loudly downstream: DSL.m's scalarQ is a FreeQ \
@@ -175,11 +174,11 @@ epsFundCol/epsFundFlav went undetected. Add a $ffMap/sunMap entry, or refuse the
 
 FromFunKit::flavcount = "the fundamental-flavour sector would be closed against TWO different \
 flavour counts in the same expression: the SU(N) engine uses rank `1` (the \"FlavourGroup\" option, \
-defaulting to Global`Nf when that is a bound integer and to 2 otherwise), while the blind \
-contractFlavour folds a closed flavour loop to Global`Nf = `2`. A single diagram can use both — a \
+defaulting to Nf when that is a bound integer and to 2 otherwise), while the blind \
+contractFlavour folds a closed flavour loop to Nf = `2`. A single diagram can use both — a \
 chain that closes cheaply beside a delta web the engine has to finish — so the coefficient would \
-silently mix the two conventions rather than fail. Call SetNf[n] so Global`Nf is the integer you \
-mean, or pass \"FlavourGroup\" -> Global`Nf explicitly.";
+silently mix the two conventions rather than fail. Call SetNf[n] so Nf is the integer you \
+mean, or pass \"FlavourGroup\" -> Nf explicitly.";
 
 FromFunKit::epsadj = "Adjoint Levi-Civita at SU(`1`) with `2` indices. NumTracer supports the \
 adjoint epsilon ONLY at rank 2, where eps^abc coincides exactly with the structure constant f^abc \

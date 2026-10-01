@@ -30,10 +30,6 @@ resolveComponents[q_, frame_] :=
       Abort[]];
     c];
 
-(* `normSqExpr` (Euclidean q^2) and `spatialNormSqExpr` (spatial |q⃗|^2) used to live here, to build
-   the 1/q^2 and 1/|q⃗|^2 env slots. Both are now derived where the env is built, from the same
-   `resolveComponents` output the component table already holds, so neither had a caller. *)
-
 (* ---- symmetric-point frames (reproduce the FormTracer SP kernels' kinematics) ----
 
    The external gluons sit at 120 degrees in the 0-1 plane (|p_i| = p, sum = 0); the

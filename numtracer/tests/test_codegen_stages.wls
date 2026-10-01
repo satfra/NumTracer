@@ -34,7 +34,7 @@ Begin["NumTracer`Private`"];
    new dispatchers appear, and a literal count would turn every such addition into a spurious
    failure — which is how a counted-check guard gets "fixed" by deleting it. Still catches what it
    is for: an Abort escaping mid-file leaves nRan short of this. *)
-$nExpected = 23 + Length[$ntLeakHeads];
+$nExpected = 26 + Length[$ntLeakHeads];
 $fail = 0; nRan = 0;
 check[label_, cond_] := (
   nRan++;
@@ -133,6 +133,11 @@ check["probe will run -> pass 1 emits unpruned",
   ntkPruneSpec[{1, 2 + 3 I}, {{0}, {1}}, True, False, True, True, True]["realOnlyG"] === {}];
 check["probe will run is False when offline",
   ntkPruneSpec[{1, 2 + 3 I}, {{0}, {1}}, True, True, True, True, True]["probeWillRun"] === False];
+
+Print["=== unknown MakeNTKernel option names are refused, however the rule is written ==="];
+check["a known option passes", ! abortsQ[Hold[ntAssertKnownOptions[{"Name" -> "k", "RealProbe" :> True}]], MakeNTKernel::optname]];
+check["an unknown -> rule aborts", abortsQ[Hold[ntAssertKnownOptions[{"Nmae" -> "k"}]], MakeNTKernel::optname]];
+check["an unknown :> rule aborts", abortsQ[Hold[ntAssertKnownOptions[{"Nmae" :> "k"}]], MakeNTKernel::optname]];
 
 Print[""];
 If[nRan =!= $nExpected,
