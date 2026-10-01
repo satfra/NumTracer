@@ -132,7 +132,7 @@ DEFAULT_FLOWS=(
   # generator set against DEFAULT_FLOWS+FORM_FLOWS; each owns kernels no other generator writes.
   #
   # gen_flavour_ingroup and gen_gluon_condensate matter beyond that: they are the ONLY flows that
-  # reach diagColPolys (the group-diagonal SU(N) dressing fold, which shells out to a helper binary),
+  # reach ntFoldDiagColourNets (the group-diagonal SU(N) dressing fold, which shells out to a helper binary),
   # so without them that whole code path had no regeneration coverage at all.
   # The COMPLEX x MULTI-TRACE intersection. gen_discdirac_numeric below is multi-trace but REAL, so
   # MakeNTKernel emits one body for it and neither real projection is ever built; every complex flow

@@ -302,7 +302,7 @@ $ntVertexCollect := ntEnvFlag["NT_VERTEX_COLLECT"];
    The `=!= $Failed` decompositions are the exact tests; the other predicates are cheap pre-filters. *)
 collectibleDiracSumQRaw[p_Plus] := ! sectorBridgeQ[p] &&
   ((dressedStructureSumQ[p] && diracNumeratorSumQ[p] && dressedNumDecompose[p] =!= $Failed) ||
-   ((TrueQ[$ntVertexCollect] && dressedStructureSumQ[p]) || ! dressedStructureSumQ[p]) &&
+   (TrueQ[$ntVertexCollect] || ! dressedStructureSumQ[p]) &&
      diracSlotSumQ[p] && diracSlotDecompose[p] =!= $Failed);
 collectibleDiracSumQ[_] := False;
 distributeQRaw[p_] := sectorBridgeQ[p] ||
@@ -599,8 +599,8 @@ spatialVecFrame[net_, frame_] := Association[
    i.e. a Plus of ntSUNDeltaFund products with numeric coefficients, which lands on the
    constant-colour branch-list path (compileColourSum in CodegenNets.m).
    Applied BEFORE expandBridges/checkLabels so the object those validate is the one that compiles.
-   ntEpsFund is "Rewritten" in $ntHeads and so NOT in the codegen colour tables (ctHeads / colourFacStr /
-   labelDimAssoc): a survivor of this rewrite fails (MakeNTKernel::colleak) instead of emitting. *)
+   ntEpsFund is "Rewritten" in $ntHeads and so NOT in the codegen colour tables ($colourHeadPat /
+   colourFacStr / labelDimAssoc): a survivor of this rewrite fails (MakeNTKernel::colleak) instead of emitting. *)
 
 (* The dimension of the index space an epsilon head lives in. *)
 epsDimOf[ntEpsFund[n_, __]] := n;

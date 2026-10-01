@@ -12,9 +12,9 @@
 ntPureLinear[integrand_] := (integrand /. s_String :> Global`ntRe[s]) /. Complex[a_, b_] :> a;
 
 (* ---- token degree: the multilinear generalisation -------------------------------------------
-   The integrand is NOT always linear in the trace tokens. A disconnected diagram (lorFacOf =!= None)
-   contributes `Π traceRef[factor groups] · traceRef[anchor]`, a PRODUCT of tokens (see the integrand
-   Sum in mkGenerateKernel). The linear projections are wrong on such summands: Coefficient leaves the
+   The integrand is NOT always linear in the trace tokens. A disconnected diagram (factorIdsOf =!= None)
+   contributes `Π traceRef[factor groups] · traceRef[anchor]`, a PRODUCT of tokens (see
+   ntAssembleIntegrand). The linear projections are wrong on such summands: Coefficient leaves the
    other tokens inside, a term is counted once per token, t^2 is dropped, and ntPureLinear's
    per-token ntRe loses the −Im(A)·Im(B) leg of Re(c·A·B) (compiles, wrong number).
 
@@ -46,7 +46,7 @@ ntTokenDegree[s_] := Module[{monos = Last[ntSplitTokenPart[s]]},
   If[monos === {}, 0, Max[Length[ntTokensOfMonomial[#]] & /@ monos]]];
 
 (* ii^2 -> -1 on an expression already expanded in the real stand-in `ii` for the imaginary unit *)
-ntIiReduce[e_, ii_] := e //. Power[ii, n_Integer /; n >= 2] :> (-1)^Quotient[n, 2] * ii^Mod[n, 2];
+ntReduceImagUnitPowers[e_, ii_] := e //. Power[ii, n_Integer /; n >= 2] :> (-1)^Quotient[n, 2] * ii^Mod[n, 2];
 
 (* ---- when is the ii-substitution faithful? --------------------------------------------------
    Substituting I -> ii (a real symbol) and reading off Coefficient[·, ii, 0|1] is EXACT only where
@@ -60,20 +60,20 @@ ntIiReduce[e_, ii_] := e //. Power[ii, n_Integer /; n >= 2] :> (-1)^Quotient[n, 
    The test is purely STRUCTURAL (no Expand, so it is free on large factored coefficients). It admits
    a Complex, products and sums of admissible parts, and a non-negative integer power of one;
    everything else carrying a Complex is refused. *)
-ntIiSafeQ[e_] :=
+ntImagSplitSafeQ[e_] :=
   FreeQ[e, Complex] ||
   Switch[Head[e],
     Complex, True,
-    Times | Plus, AllTrue[List @@ e, ntIiSafeQ],
-    Power, IntegerQ[e[[2]]] && NonNegative[e[[2]]] && ntIiSafeQ[e[[1]]],
+    Times | Plus, AllTrue[List @@ e, ntImagSplitSafeQ],
+    Power, IntegerQ[e[[2]]] && NonNegative[e[[2]]] && ntImagSplitSafeQ[e[[1]]],
     _, False];
 
 (* The MAXIMAL offending nodes, for the message: descend through the Times/Plus skeleton and stop at
    the first inadmissible node, so the message shows the offending denominator, not the whole summand. *)
-ntIiUnsafeParts[e_] :=
-  If[ntIiSafeQ[e], {},
+ntImagSplitUnsafeParts[e_] :=
+  If[ntImagSplitSafeQ[e], {},
     Switch[Head[e],
-      Times | Plus, Flatten[ntIiUnsafeParts /@ (List @@ e)],
+      Times | Plus, Flatten[ntImagSplitUnsafeParts /@ (List @@ e)],
       _, {e}]];
 
 (* {Re[e], Im[e]} for a string-free coefficient whose only imaginary content is explicit `Complex`
@@ -88,12 +88,12 @@ ntSplitRealImag[e_] := Module[{fs, cs, rest, c, ii, t},
   If[cs =!= {} && FreeQ[rest, Complex],
     c = Times @@ cs;
     Return[{Re[c] * Times @@ rest, Im[c] * Times @@ rest}]];
-  (* Not a polynomial in the stand-in (see ntIiSafeQ): under "ComplexRuntimeProjection" hand the
+  (* Not a polynomial in the stand-in (see ntImagSplitSafeQ): under "ComplexRuntimeProjection" hand the
      untouched, still-factored expression to the generated code to split at runtime. Otherwise
      ntProjectIntegrand has already refused it, so the extraction below only sees safe input. *)
-  If[! ntIiSafeQ[e] && TrueQ[$ntComplexRuntimeProjection],
+  If[! ntImagSplitSafeQ[e] && TrueQ[$ntComplexRuntimeProjection],
     Return[{Global`ntRe[e], Global`ntIm[e]}]];
-  t = ntIiReduce[Expand[e /. Complex[ar_, ai_] :> ar + ii*ai], ii];
+  t = ntReduceImagUnitPowers[Expand[e /. Complex[ar_, ai_] :> ar + ii*ai], ii];
   {Coefficient[t, ii, 0], Coefficient[t, ii, 1]}];
 
 (* {Re, Im} of Σ_m coef_m · Π_j t_j, each token replaced by ntRe[t] + i·ntIm[t]. Only this small
@@ -107,7 +107,7 @@ ntTokenProductRealImag[monos_List, pureQ_] := Module[{ii, tot},
             {cr, ci} = ntSplitRealImag[Times @@ Select[ntFactorsOf[m], FreeQ[#, _String] &]];
             If[TrueQ[pureQ], ci = 0];
             (cr + ii*ci) * Times @@ (Function[t, Global`ntRe[t] + ii*Global`ntIm[t]] /@ ntTokensOfMonomial[m])]] /@ monos];
-  tot = ntIiReduce[Expand[tot], ii];
+  tot = ntReduceImagUnitPowers[Expand[tot], ii];
   {Coefficient[tot, ii, 0], Coefficient[tot, ii, 1]}];
 
 (* Re(plain · Σ_m coef_m Π t_j) = Re(plain)Re(Q) − Im(plain)Im(Q). Splitting it this way keeps
@@ -122,6 +122,13 @@ ntRealOfSummand[s_, pureQ_] := Module[{plain, monos, pr, pi, qr, qi},
   {qr, qi} = ntTokenProductRealImag[monos, pureQ];
   pr*qr - pi*qi];
 
+(* NB: no backquoted code fragments in message strings: a backquoted word is a StringForm SLOT, so
+   quoting an identifier that way makes the message itself fail to format (StringForm::sfr). *)
+
+MakeNTKernel::cplxnest = "ntProjectIntegrand: a Complex sits below a head the real/imaginary split cannot traverse (typically a denominator such as the finite-density l0 + I muq). The split is exact only for coefficients polynomial in I; here it would silently drop the imaginary part of the denominator. Pass \"ComplexRuntimeProjection\" -> True to project at runtime instead. `1` offending subexpression(s):\n`2`";
+
+MakeNTKernel::tokleak = "ntProjectIntegrand: a scoped symbol survived the real/imaginary projection and would be emitted as a bare C++ identifier (which compiles). Either the stand-in for I survived a coefficient that is not polynomial in it, or a trace-token placeholder was not substituted back: an integrand shape the projection routing does not cover. Offending symbol(s):\n`1`";
+
 (* Route by degree, after one shared guard. Only degree >= 2 summands go through the expansion above;
    the linear ones keep the linear path, whose expression shape keeps committed kernels byte-identical. *)
 ntProjectIntegrand[integrand_, pureQ_, linear_] := Module[{sums, unsafe, degs, res},
@@ -130,7 +137,7 @@ ntProjectIntegrand[integrand_, pureQ_, linear_] := Module[{sums, unsafe, degs, r
      ntSplitRealImag because ntPureLinear bypasses that and has the same blind spot: its
      `/. Complex[a_, b_] :> a` zeroes the I inside a + I b. *)
   unsafe = DeleteDuplicates @ Flatten[
-      Function[s, ntIiUnsafeParts[Times @@ Select[ntFactorsOf[s], FreeQ[#, _String] &]]] /@ sums];
+      Function[s, ntImagSplitUnsafeParts[Times @@ Select[ntFactorsOf[s], FreeQ[#, _String] &]]] /@ sums];
   If[unsafe =!= {} && ! TrueQ[$ntComplexRuntimeProjection],
     Message[MakeNTKernel::cplxnest, Length[unsafe], Short[unsafe, 6]]; Abort[]];
   degs = ntTokenDegree /@ sums;
@@ -168,7 +175,7 @@ ntPureIntegrand[integrand_] := ntProjectIntegrand[integrand, True, ntPureLinear]
    One pass: summands are bucketed by their token instead of calling Coefficient once per token (cost
    #tokens × expression size). Plus is canonically ordered, so the result is `===` the per-token form.
    ntSplitRealImag stays the single place a coefficient is split, so the ii-substitution and its guard
-   (ntIiSafeQ) cannot diverge between the two projections. *)
+   (ntImagSplitSafeQ) cannot diverge between the two projections. *)
 
 (* One summand -> {its trace token or None, its string-free coefficient}. The caller has already
    established token degree <= 1 for this summand. *)
@@ -180,6 +187,8 @@ ntLinearSplit[s_] := Module[{facs = ntFactorsOf[s], tk, rest},
   If[Length[tk] > 1 || ! FreeQ[rest, _String],
     Message[MakeNTKernel::toknest, s]; Abort[]];
   {If[tk === {}, None, First[tk]], Times @@ rest}];
+
+MakeNTKernel::toknest = "ntRePartLinear: a trace token in this summand is not a BARE factor of it — it sits inside a Power, or below some other head. The token-degree routing classified the summand as linear, but neither the factor-level scan here nor the Coefficient extraction it replaced can see such a token, so the whole summand would be dropped from the projected integrand: a missing term, with nothing downstream to notice. Offending summand:\n`1`";
 
 ntRePartLinear[integrand_] := Module[{parts, groups, toks, tokPart, constPart},
   parts = Function[s, Module[{tk, plain}, {tk, plain} = ntLinearSplit[s]; {tk, ntSplitRealImag[plain]}]] /@

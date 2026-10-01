@@ -105,34 +105,34 @@ check["a $Failed value aborts",
 check["empty and falsy values are legitimate",
   ntStageResult["probe", {"a", "b", "c"}, <|"a" -> {}, "b" -> 0, "c" -> False|>] =!= $Failed];
 
-Print["=== 4. ntkPruneSpec: the PruneRealTraces verdict, and the guards the old bug lacked ==="];
-(* THE historic bug: diagData reached this computation as an unassigned symbol, FreeQ[<unassigned>,
+Print["=== 4. ntPruneSpec: the PruneRealTraces verdict, and the guards the old bug lacked ==="];
+(* THE historic bug: netCoeff reached this computation as an unassigned symbol, FreeQ[<unassigned>,
    Complex] was vacuously True, every group was judged real, and a kernel shipped with every
    imaginary half dropped. Nothing in the repo could see it — generation was clean, net counts
    unchanged, every oracle green (the pruned kernel computes fewer numbers, all of them right; only
    the DROPPED halves are wrong). These checks are the only place that behaviour is observable.
-   groups entries are {diagIdx, ...}; diagData is indexed 1-based by diagIdx+1. *)
+   groups entries are {diagIdx, ...}; netCoeff is indexed 1-based by diagIdx+1. *)
 check["prune not requested -> empty verdict, whatever the data says",
-  ntkPruneSpec[{1, 2}, {{0}, {1}}, True, False, False, True, True]["pruneG"] === {}];
+  ntPruneSpec[{1, 2}, {{0}, {1}}, True, False, False, True, True]["pruneG"] === {}];
 check["a real group is flagged, a complex one is not",
-  ntkPruneSpec[{1, 2 + 3 I}, {{0}, {1}}, True, False, True, False, False]["pruneG"] === {True, False}];
-(* An unassigned diagData is now impossible (it is a parameter), so the residual failure is a table
+  ntPruneSpec[{1, 2 + 3 I}, {{0}, {1}}, True, False, True, False, False]["pruneG"] === {True, False}];
+(* An unassigned netCoeff is now impossible (it is a parameter), so the residual failure is a table
    that is too SHORT for the grouping — the same "read the wrong diagram" outcome. Must abort. *)
-check["grouping referencing past the end of diagData ABORTS",
-  abortsQ[Hold[ntkPruneSpec[{1}, {{0}, {5}}, True, False, True, False, False]],
+check["grouping referencing past the end of netCoeff ABORTS",
+  abortsQ[Hold[ntPruneSpec[{1}, {{0}, {5}}, True, False, True, False, False]],
           mkGenerateKernel::prunedata]];
 (* And the bug's exact signature: a COMPLEX flow in which every group came back real. *)
 check["complex flow with every group judged real ABORTS",
-  abortsQ[Hold[ntkPruneSpec[{1, 2}, {{0}, {1}}, True, False, True, False, False]],
+  abortsQ[Hold[ntPruneSpec[{1, 2}, {{0}, {1}}, True, False, True, False, False]],
           mkGenerateKernel::pruneall]];
 check["the same all-real verdict is FINE when the flow is not complex",
-  ntkPruneSpec[{1, 2}, {{0}, {1}}, False, False, True, False, False]["realOnlyG"] === {True, True}];
+  ntPruneSpec[{1, 2}, {{0}, {1}}, False, False, True, False, False]["realOnlyG"] === {True, True}];
 (* Ordering: when the probe will run, pass 1 must generate UNPRUNED so the probe sees the residual
    it is checking for. Pruning pass 1 is an O(1) kernel error, not a slow path. *)
 check["probe will run -> pass 1 emits unpruned",
-  ntkPruneSpec[{1, 2 + 3 I}, {{0}, {1}}, True, False, True, True, True]["realOnlyG"] === {}];
+  ntPruneSpec[{1, 2 + 3 I}, {{0}, {1}}, True, False, True, True, True]["realOnlyG"] === {}];
 check["probe will run is False when offline",
-  ntkPruneSpec[{1, 2 + 3 I}, {{0}, {1}}, True, True, True, True, True]["probeWillRun"] === False];
+  ntPruneSpec[{1, 2 + 3 I}, {{0}, {1}}, True, True, True, True, True]["probeWillRun"] === False];
 
 Print["=== a pure-scalar product compiles to no net, not to contract() ==="];
 check["2 zz[x] -> {\"\", 2 zz[x]}", compileLorentzBody[2 Global`zz[Global`x], <||>, <||>, 15] === {"", 2 Global`zz[Global`x]}];

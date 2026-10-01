@@ -10,7 +10,7 @@
    Substituting I -> ii and reading Coefficient[·, ii, 0|1] is exact only on a POLYNOMIAL in ii; on a
    rational function Mathematica silently power-series expands and returns the leading term, so
        "tr0"/(a + I b)   projects to   ntRe["tr0"]/a
-   — muq is deleted from every propagator and the kernel is a wrong number that compiles. ntIiSafeQ
+   — muq is deleted from every propagator and the kernel is a wrong number that compiles. ntImagSplitSafeQ
    refuses that shape; "ComplexRuntimeProjection" instead keeps the coefficient intact and emits
    ntRe/ntIm around it, deferring that one projection to generated-code runtime.
    Until this fixture, NO generator anywhere put a Complex under a Power — the option was covered only
@@ -60,8 +60,8 @@ dirac = ntGamma[m1, s1, s2] ntVec[Global`lm, m1] ntGamma[m2, s2, s1] ntVec[Globa
 colT  = ntSUNT[3, a1, c1, c2] ntSUNT[3, a2, c2, c3] ntSUNT[3, a3, c3, c1] ntSUNf[3, a1, a2, a3];
 
 (* THE POINT OF THE FIXTURE. A NEGATIVE INTEGER power of a Complex-bearing base is precisely the shape
-   ntIiSafeQ rejects (Times/Plus/non-negative-integer Power are the admissible ones), so this is what
-   turns "ComplexRuntimeProjection" on. Squared rather than linear because the option's own
+   ntImagSplitSafeQ rejects (Times/Plus/non-negative-integer Power are the admissible ones), so this
+   is what turns "ComplexRuntimeProjection" on. Squared rather than linear because the option's own
    documentation calls out a denominator raised to a power as the case needing the type-generic powr.
    A scalar factor like this lands untouched in the diagram's "Coeff" via scalarQ. *)
 denom = 1/(Global`l0 + I*Global`muq + Global`Ep)^2;

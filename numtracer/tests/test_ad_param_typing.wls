@@ -136,7 +136,7 @@ check["Symbol name, adName normalised from a Symbol",
   ntRuntimeParamType[Global`d1V, ntParamName /@ {Global`d1V}, {}, dressTy] === "auto"];
 
 Print["=== 6. ntAssertADTyped ==="];
-(* mkParam's shape, reproduced here rather than called, so the guard is tested against the
+(* ntMkParam's shape, reproduced here rather than called, so the guard is tested against the
    Association layout it actually receives. *)
 mk[nm_, ty_] := <|"Name" -> nm, "Type" -> ty, "Const" -> True, "Reference" -> True|>;
 good = {mk["k", "double"], mk["d1V", "auto"], mk["rhoL", "double"], mk["ZA", "TexLinearInterpolator1D"]};

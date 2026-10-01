@@ -23,7 +23,7 @@ inline\n#define KOKKOS_FUNCTION\n#define __host__\n#define __device__\n";
 (* regulator wrappers, prefixed with the user-chosen decorator (default plain "static inline";
    pass e.g. "Decorator" -> "static KOKKOS_INLINE_FUNCTION" for device-callable kernels).
    Emitted ONLY under "RegulatorTemplate" -> True (the fRG/DiFfRG shape); see ntKernelClass. *)
-privDefs[decor_] :=
+ntRegulatorWrappers[decor_] :=
   StringRiffle[(decor <> " auto " <> # <> "(const auto &k2, const auto &p2) { return REG::" <> # <> "(k2, p2); }")& /@ {"RB", "RF", "RBdot", "RFdot", "dq2RB", "dq2RF"}, "\n"];
 
 (* Real/imag accessors for the kernel class and the probe. They may be applied to an autodiff-typed
@@ -137,7 +137,7 @@ ntKernelClass[name_, members_List, decor_, regTemplate_, regAlias_, extraPriv_Li
         members],
     "MembersPrivate" ->
       If[TrueQ[regTemplate],
-        Join[{privDefs[decor]}, extraPriv],
+        Join[{ntRegulatorWrappers[decor]}, extraPriv],
         extraPriv]];
 
 (* ---- emit helpers: support `using`s, namespace wrapping, runtime include -------------------
@@ -146,13 +146,13 @@ ntKernelClass[name_, members_List, decor_, regTemplate_, regAlias_, extraPriv_Li
    numtracer/codegen/runtime.hpp) make the emitted code self-contained against NumTracer's own
    headers; a consumer that already provides equivalents (e.g. DiFfRG) points the codegen at
    them via "SupportNamespace" / "KernelNamespace" / "RuntimeInclude". *)
-ntSupportUsings[sns_] :=
-  DeleteDuplicates[{"using namespace " <> sns <> ";", "using namespace " <> sns <> "::compute;", "using namespace numtracer;"}];
+ntSupportUsings[supportNs_] :=
+  DeleteDuplicates[{"using namespace " <> supportNs <> ";", "using namespace " <> supportNs <> "::compute;", "using namespace numtracer;"}];
 
 (* the loop-independent `constant(p, k, dressings...)` function. DiFfRG flat-adds its return to the
    integral (constExpr second arg of MakeKernel). A 0 constant gets no namespace usings (keeps the
    emitted bytes unchanged); a nonzero expr may call compute helpers, so it gets the kernel body's. *)
-ntConstFn[constExpr_, decor_, constParams_, sns_] := FunKit`MakeCppFunction[
+ntConstFn[constExpr_, decor_, constParams_, supportNs_] := FunKit`MakeCppFunction[
     constExpr,
     "Name" -> "constant",
     "Prefix" -> decor,
@@ -162,29 +162,15 @@ ntConstFn[constExpr_, decor_, constParams_, sns_] := FunKit`MakeCppFunction[
     "Body" ->
       If[MatchQ[constExpr, 0 | 0.],
         "",
-        StringRiffle[ntSupportUsings[sns], "\n"]]];
+        StringRiffle[ntSupportUsings[supportNs], "\n"]]];
 
-ntWrapBody[kns_, classStr_, name_] := If[kns === None || kns === "",
-    {classStr},
-    {"namespace " <> kns <> "\n{", classStr, "}", "using " <> kns <> "::" <> name <> ";"}];
-
-ntRuntimeIncludes[runInc_] := If[runInc === None || runInc === "",
-    {},
-    {runInc}];
-
-ntApplyTraceComplexOverride[header_String, hdrInc_String, kns_String, sns_String, complexQ_] :=
-  If[TrueQ[complexQ] && kns === "DiFfRG" && sns === "DiFfRG",
+ntApplyTraceComplexOverride[header_String, tracesInclude_String, kernelNs_String, supportNs_String, complexQ_] :=
+  If[TrueQ[complexQ] && kernelNs === "DiFfRG" && supportNs === "DiFfRG",
     StringReplace[header,
-      "#include \"" <> hdrInc <> "\"" ->
-        "#ifndef NT_TRACE_COMPLEX\n#define NT_TRACE_COMPLEX DiFfRG::complex<" <> $ntRealT <> ">\n#endif\n#include \"" <> hdrInc <> "\"",
+      "#include \"" <> tracesInclude <> "\"" ->
+        "#ifndef NT_TRACE_COMPLEX\n#define NT_TRACE_COMPLEX DiFfRG::complex<" <> $ntRealT <> ">\n#endif\n#include \"" <> tracesInclude <> "\"",
       1],
     header];
-
-(* the dressing-parameter type: Automatic -> `const auto&` (fully generic, self-contained);
-   else the given concrete type string (e.g. a consumer's interpolator type). *)
-ntDressType[dressTy_] := If[dressTy === Automatic,
-    "auto",
-    dressTy];
 
 (* ---- mkGenerateKernel options (MakeNTKernel forwards its own; see Options[MakeNTKernel]). By default
    the emitted code is self-contained against NumTracer's headers; the namespace/include options
@@ -256,7 +242,7 @@ Options[mkGenerateKernel] =
    Im(integrand) actually vanishes, and select a real kernel body if it does. *)
     "RealProbe" -> True,
 (* Emit a `double` trace for groups whose dressing coefficient is real (only Re(trace) is consumed).
-   Must be sequenced after the probe, which needs the unpruned traces; see ntkPruneSpec. *)
+   Must be sequenced after the probe, which needs the unpruned traces; see ntPruneSpec. *)
     "PruneRealTraces" -> False,
 (* See $ntComplexRuntimeProjection. *)
     "ComplexRuntimeProjection" -> False,
@@ -279,8 +265,8 @@ Options[mkGenerateKernel] =
 
 (* "ComplexRuntimeProjection": what to do when a coefficient carries a Complex below a head the
    symbolic real/imag split cannot traverse — in practice a finite-density denominator l0 + I muq,
-   where the split is silently wrong (see ntIiSafeQ). OFF: refuse (MakeNTKernel::cplxnest). ON: keep
-   the coefficient intact and project with ntRe/ntIm at C++ runtime (complex arithmetic in the
+   where the split is silently wrong (see ntImagSplitSafeQ). OFF: refuse (MakeNTKernel::cplxnest).
+   ON: keep the coefficient intact and project with ntRe/ntIm at C++ runtime (complex arithmetic in the
    kernel, needs the type-generic powr). Every summand, including the Pure body, then takes the exact
    per-summand path. A package global because ntProjectIntegrand reads it several call layers down. *)
 $ntComplexRuntimeProjection = False;
@@ -295,15 +281,6 @@ $ntComplexRuntimeProjection = False;
 
 MakeNTKernel::endproj = "ComplexEndProjection requires RealOutput -> True; otherwise the consumer would receive a complex kernel return value instead of the requested endpoint real projection.";
 
-MakeNTKernel::nonnumeric = "the integrand is not numeric: it contains `1` Indeterminate/Infinity value(s), which would be emitted as bare Mathematica symbols in the generated C++ (e.g. `return Indeterminate;`). This almost always means a SINGULAR Gram at the chosen kinematics: the basis's structures are linearly dependent there, so the inverse metric, and every dual projector built from it, carries 0/0. Check Det[TBGetMetric[basis]] under the frame's kinematics (e.g. the symmetric point), and project with a restricted sub-basis whose Gram is non-degenerate. Offending value(s): `2`";
-
-mkGenerateKernel::genfail = "Generator compile/run failed: `1`";
-mkGenerateKernel::pruneoff = "PruneRealTraces ignored: the RealProbe cannot run in this mode (Offline or RunGenerator->False), so pruned traces could not be probe-validated. Emitting all-complex traces; set RealProbe->False to assert the flow is safe to prune without a probe.";
-
-mkGenerateKernel::emptynets = "Flow `1` produced no generator nets (nets=`2`, groups=`3`) — nothing to emit. Aborting instead of writing a placeholder kernel. (Either NumTrace returned no usable diagrams, or every diagram was dropped during the net build.)";
-
-mkGenerateKernel::scalarleak = "Diagram `1`: a non-numeric factor `2` reached the generator scalar coefficient (a Lorentz tensor that was not resolved by the net builder, e.g. an un-anchored metric contraction). It would be emitted as undeclared C++. Aborting; fix the net build (compileLorentz) so the contraction folds numerically.";
-
 (* ---- runtime-parameter typing ----------------------------------------------------------------
    A parameter name is spelled as a Symbol by a hand-written flow file and as a String by
    DiFfRG_compat (which reads it out of a DiFfRG parameter Association), and option names may be
@@ -313,7 +290,7 @@ ntParamName[nm_String] := nm;
 ntParamName[nm_Symbol] := SymbolName[nm];
 ntParamName[nm_] := ToString[nm];
 
-(* The C++ type of ONE runtime parameter (scalar or dressing), as a string for mkParam. Every input
+(* The C++ type of ONE runtime parameter (scalar or dressing), as a string for ntMkParam. Every input
    is an explicit argument so the decision is unit-testable (tests/test_ad_param_typing.wls).
    The AD test comes FIRST: a caller may pass ADParams without listing them in ScalarParams, and an
    AD scalar's own entry says "Type" -> "double" (the AD flag is a separate key), so neither the
@@ -328,7 +305,9 @@ ntRuntimeParamType[entry_, adNames_List, scalarNames_List, dressTy_] :=
       AssociationQ[entry], entry["Type"],
       True, dressTy[nm]]];
 
-(* POST-CONDITION on a finished mkParam list: every ADParams name in the signature is typed auto.
+MakeNTKernel::adtype = "ntRuntimeParamType: `1` runtime parameter(s) named in ADParams were not typed auto (const double& instead of const auto&). The kernel would still compile and run, but its autodiff twin (AD_get.cc in the consumer) cannot bind autodiff::real. Usual cause: the AD name did not survive the ToString/SymbolName normalisation, or ADParams names something that is not a runtime parameter. Offending name(s) and their types:\n`2`";
+
+(* POST-CONDITION on a finished ntMkParam list: every ADParams name in the signature is typed auto.
    kernel(), constant() and ntHoisted share runtimeParams, so one check covers all three. Nothing
    else sees a mistyped AD scalar: generation succeeds and only the consumer's AD twin fails to
    compile. Returns the list unchanged so it can be used inline. *)
@@ -347,7 +326,7 @@ ntAssertADTyped[params_List, adNames_List] :=
    empty list => all-complex traces, which is also what the probe needs in order to verify the
    cancellation it is checking for.
 
-   diagData is an ARGUMENT, never read from an enclosing scope: an unassigned diagData makes
+   netCoeff is an ARGUMENT, never read from an enclosing scope: an unassigned netCoeff makes
    `FreeQ[..., Complex]` vacuously True, silently marking every group real. The guards below make
    that failure loud.
 
@@ -356,19 +335,21 @@ ntAssertADTyped[params_List, adNames_List] :=
    1 generates unpruned and the prune is applied in a second pass after the verdict. Without a probe:
    a syntactically real flow prunes directly, RealProbe->False prunes on the caller's assertion, and
    offline/no-generator drops the request with a warning. *)
-mkGenerateKernel::prunedata = "PruneRealTraces: the diagram-coefficient table has `1` entries but the trace grouping references diagram index `2`. The table and the grouping have gone out of step, so the per-group real/complex verdict below would be read off the wrong diagram — or off nothing at all. This is the shape of the bug this guard exists for (an unassigned diagData read as vacuously real).";
+mkGenerateKernel::prunedata = "PruneRealTraces: the diagram-coefficient table has `1` entries but the trace grouping references diagram index `2`. The table and the grouping have gone out of step, so the per-group real/complex verdict below would be read off the wrong diagram — or off nothing at all. This is the shape of the bug this guard exists for (an unassigned netCoeff read as vacuously real).";
 
 mkGenerateKernel::pruneall = "PruneRealTraces: the flow is complex, yet all `1` trace groups were judged real and would lose their imaginary halves. That is the signature of an unassigned coefficient table, not a plausible result. Refusing to emit; re-run without \"PruneRealTraces\" -> True to get the full complex kernel.";
 
-ntkPruneSpec[diagData_, groups_, complexQ_, offline_, pruneRequested_, realProbe_, runGenerator_] :=
+mkGenerateKernel::pruneoff = "PruneRealTraces ignored: the RealProbe cannot run in this mode (Offline or RunGenerator->False), so pruned traces could not be probe-validated. Emitting all-complex traces; set RealProbe->False to assert the flow is safe to prune without a probe.";
+
+ntPruneSpec[netCoeff_, groups_, complexQ_, offline_, pruneRequested_, realProbe_, runGenerator_] :=
   Module[{pruneG, realOnlyG, probeWillRun},
     pruneG =
       If[pruneRequested,
         Module[{maxDiag = Max[Append[#[[1]]& /@ groups, -1]]},
 (* Index guard: an out-of-range Part would stay unevaluated, and FreeQ would call it real. *)
-          If[maxDiag >= Length[diagData],
-            Message[mkGenerateKernel::prunedata, Length[diagData], maxDiag]; Abort[]];
-          (FreeQ[diagData[[#[[1]] + 1]], Complex])& /@ groups],
+          If[maxDiag >= Length[netCoeff],
+            Message[mkGenerateKernel::prunedata, Length[netCoeff], maxDiag]; Abort[]];
+          (FreeQ[netCoeff[[#[[1]] + 1]], Complex])& /@ groups],
         {}];
 (* "Every group is real" on a flow the complex test flagged is the signature of a lost coefficient
    table, and no oracle would catch it (only the DROPPED imaginary parts are wrong). Refuse it. *)
@@ -382,7 +363,7 @@ ntkPruneSpec[diagData_, groups_, complexQ_, offline_, pruneRequested_, realProbe
         probeWillRun,      {},
         realProbe,         Message[mkGenerateKernel::pruneoff]; {},
         True,              pruneG];
-    ntStageResult["ntkPruneSpec", {"pruneG", "realOnlyG", "probeWillRun"},
+    ntStageResult["ntPruneSpec", {"pruneG", "realOnlyG", "probeWillRun"},
       <|"pruneG" -> pruneG, "realOnlyG" -> realOnlyG, "probeWillRun" -> probeWillRun|>]];
 
 (* ---- mkGenerateKernel: STAGE MAP --------------------------------------------------------------
@@ -406,7 +387,7 @@ ntkPruneSpec[diagData_, groups_, complexQ_, offline_, pruneRequested_, realProbe
       5. ntGroupTraces            additive trace groups (summed) and factor groups (multiplied).
       6. ntAssembleIntegrand      the symbolic integrand over the groups;
          ntHoistLoopConstLookups  launch-constant dressing lookups -> host-evaluated parameters;
-         ntkPruneSpec             which groups may drop their imaginary half.
+         ntPruneSpec             which groups may drop their imaginary half.
       7. ntKernelPreamble         the fenv/fill block;
          ntKernelSignature        parameter lists, the ntHoisted helper, the fill() signature;
          ntFiniteExtentPartition  the Matsubara finite-extent split;
@@ -426,7 +407,7 @@ ntkPruneSpec[diagData_, groups_, complexQ_, offline_, pruneRequested_, realProbe
 $ntDefaultDecayingRegulators = {"RB", "RF", "RBdot", "RFdot", "dq2RB", "dq2RF"};
 
 ntGenOptions[OptionsPattern[mkGenerateKernel]] :=
-  Module[{name = OptionValue["Name"], kns = OptionValue["KernelNamespace"], ns, scalarParams,
+  Module[{name = OptionValue["Name"], kernelNs = OptionValue["KernelNamespace"], ns, scalarParams,
           regAlias, endProject, offline, runGenerator},
     ns = OptionValue["Namespace"] /. Automatic -> ToLowerCase[name];
 (* loop-independent scalar doubles threaded into the signature *)
@@ -457,10 +438,10 @@ ntGenOptions[OptionsPattern[mkGenerateKernel]] :=
        "ComplexEndProjection", "RealOutput", "Constant"},
       <|"Name" -> name,
         "Namespace" -> ns,
-        "KernelNamespace" -> kns,
+        "KernelNamespace" -> kernelNs,
         "SupportNamespace" -> OptionValue["SupportNamespace"],
 (* where the generated trace fns / nenv / fill live *)
-        "NsHome" -> kns <> "::" <> ns,
+        "NsHome" -> kernelNs <> "::" <> ns,
 (* the #if macro selecting one of the 3 complex-kernel bodies *)
         "VerdictMacro" -> ntVerdictMacro[ns],
         "Dressings" -> OptionValue["Dressings"],
@@ -471,7 +452,8 @@ ntGenOptions[OptionsPattern[mkGenerateKernel]] :=
         "ScalarParamNames" -> ntParamName /@ scalarParams,
         "ADNames" -> ntParamName /@ OptionValue["ADParams"],
         "ParameterOrder" -> OptionValue["ParameterOrder"],
-        "DressingType" -> ntDressType[OptionValue["DressingType"]],
+(* Automatic -> `const auto&` (fully generic); else a concrete type string (an interpolator type) *)
+        "DressingType" -> Replace[OptionValue["DressingType"], Automatic -> "auto"],
 (* Which of `args` the loop-independent constant() receives. Automatic = p and k (a 1-D grid); a
    caller with another grid passes its coordinate names via "CoordinateArgs". k is always included. *)
         "ConstArgQ" ->
@@ -571,39 +553,39 @@ ntFrameSpec[k_, components_, userSymDefs_] :=
       <|"Args" -> args, "Frame" -> frame, "Env" -> env, "Mask" -> mask, "FillArgs" -> fillArgs,
         "NComp" -> ncomp, "SymDefs" -> symDefs|>]];
 
-(* The Matsubara frequency, in two forms. `MSym` is the SYMBOL, used by the Mathematica-side
+(* The Matsubara frequency, in two forms. `MatsubaraSym` is the SYMBOL, used by the Mathematica-side
    evenness test and finite-extent partition. `MVarIdx` is its MPoly variable index, used only by the
    generator to prove evenness of the TRACES. -1 is not an error: a purely SCALAR integrand has no
    momentum components, yet still depends on the frequency through its coefficient (denominators,
    regulator arguments). The lookup therefore spans the frame's symbols AND the fill arguments. *)
 ntMatsubaraSymbol[mv_, usyms_, fillArgs_] :=
-  Module[{mSym, mVarIdx},
-    mSym =
+  Module[{matsubaraSym, mVarIdx},
+    matsubaraSym =
       If[mv === None || mv === Automatic,
         None,
         With[{cands = Select[Join[usyms, fillArgs], SymbolName[#] === ToString[mv]&]},
           If[cands === {}, $Failed, First[cands]]]];
 (* A name that matches nothing is reported loudly, not turned into a quiet None: otherwise the
    caller gets a valid kernel without the requested optimisation and no way to tell. *)
-    If[mSym === $Failed,
+    If[matsubaraSym === $Failed,
       Print["[NumTracer] WARNING: \"MatsubaraVar\" -> ", mv,
         " names neither a frame symbol nor a kernel fill argument, so no evenness check was run ",
         "and no Matsubara trait will be emitted. The frame's symbols are: ", usyms,
         ", the fill arguments are: ", fillArgs,
         ". (The integration-variable name DiFfRG uses, e.g. \"f\", is often NOT the frame symbol, ",
         "e.g. \"f0\" — this option wants the frame symbol.)"];
-      mSym = None];
+      matsubaraSym = None];
     mVarIdx =
-      If[mSym === None,
+      If[matsubaraSym === None,
         -1,
-        With[{pos = Position[usyms, mSym, {1}]}, If[pos === {}, -1, pos[[1, 1]] - 1]]];
-    If[mSym =!= None,
-      ntLog["[matsubara] frequency symbol ", mSym, " = ",
+        With[{pos = Position[usyms, matsubaraSym, {1}]}, If[pos === {}, -1, pos[[1, 1]] - 1]]];
+    If[matsubaraSym =!= None,
+      ntLog["[matsubara] frequency symbol ", matsubaraSym, " = ",
         If[mVarIdx >= 0,
           "MPoly var " <> ToString[mVarIdx] <> " — trace evenness will be proven at generation time",
           "not a momentum-component variable (scalar integrand) — the traces carry no MPoly " <>
             "variable, so the traits are decided entirely here"]]];
-    ntStageResult["ntMatsubaraSymbol", {"MSym", "MVarIdx"}, <|"MSym" -> mSym, "MVarIdx" -> mVarIdx|>]];
+    ntStageResult["ntMatsubaraSymbol", {"MatsubaraSym", "MVarIdx"}, <|"MatsubaraSym" -> matsubaraSym, "MVarIdx" -> mVarIdx|>]];
 
 (* ---- STAGE 3: per-generation reset ------------------------------------------------------------
    Every net-builder memo depends on generation-fixed state ($ntDressResolve, env, mask, frame), so
@@ -627,9 +609,16 @@ ntResetGeneration[env_, mask_, frame_] :=
       <|"DiagDrHarvest" -> diagDrHarvest, "DrHarvest" -> drHarvest|>]];
 
 (* ---- STAGE 4: net build -----------------------------------------------------------------------
-   One diagram -> its net records {colNet, cores, coeff, rest, lorFac, factorId}. A record's net
-   index is `base` + its position in the returned list; factor ids are net indices.
-   Each diagram is a Lorentz/Dirac trace x a colour factor x a dressing coefficient. *)
+   One diagram -> its net records {colNet, cores, coeff, rest, factorIds, factorComp} (ntBuildNets
+   destructures them by these names). A record's net index is `base` + its position in the returned
+   list; factor ids are net indices.
+   Each diagram is a Lorentz/Dirac trace x a colour factor x a dressing coefficient.
+   An ENTRY is {colNet, cores, scal, rest} (splitColourGroups' shape); ntLorentzEntry wraps one
+   colour-free Lorentz net {net, scal} as such. *)
+ntLorentzEntry[netScal_List] := {"SUNNet{}", {netScal[[1]]}, netScal[[2]], {{"", 1}}};
+
+mkGenerateKernel::scalarleak = "Diagram `1`: a non-numeric factor `2` reached the generator scalar coefficient (a Lorentz tensor that was not resolved by the net builder, e.g. an un-anchored metric contraction). It would be emitted as undeclared C++. Aborting; fix the net build (compileLorentz) so the contraction folds numerically.";
+
 ntDiagramRecords[diag_, d_, base_, env_, mask_, frame_] :=
   Module[{coeff, colBr, constAcc = {}, pureLorAcc = {}, diracComps = {}, recs = Internal`Bag[],
           nRec = 0, emit, scalarleakCheck, nDir, hasLor, factorComps, factorIds = {}},
@@ -654,7 +643,7 @@ ntDiagramRecords[diag_, d_, base_, env_, mask_, frame_] :=
        Lorentz net) as ONE Dirac/colour component in diracComps;
      - pure Lorentz (no colour, no gamma): accumulate factors — ALL pure-Lorentz components
        fold into ONE product net (disjoint ids make the C++ contract_factors multiply them). *)
-          If[colourEntangledQ[comp["Factors"]] || !FreeQ[comp["Factors"], _ntGamma | _ntGamma5 | _ntC | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot],
+          If[hasColourQ[comp["Factors"]] || !FreeQ[comp["Factors"], _ntGamma | _ntGamma5 | _ntC | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot],
             AppendTo[diracComps, ntProfTimed["splitColourGroups", splitColourGroups[comp["Factors"], diag["Ids"], env, mask]]],
             pureLorAcc = Join[pureLorAcc, comp["Factors"]]]]],
       diag["Components"]];
@@ -673,9 +662,9 @@ ntDiagramRecords[diag_, d_, base_, env_, mask_, frame_] :=
    Dirac/colour component is its own factor. Two regimes:
      - <= 1 non-constant factor: the additive path. The single Dirac component's entries
        (colour folded, GlobalCollect-fusible) OR the single combined pure-Lorentz product net is
-       emitted with diagData = coeff*scal.
+       emitted with netCoeff = coeff*scal.
      - >= 2 factors: FACTORED product. One Dirac component is the additive BASE (traceRef[gi],
-       diagData = coeff*scal); every other component is emitted as its own fused trace GROUP
+       netCoeff = coeff*scal); every other component is emitted as its own fused trace GROUP
        (its per-entry scalar folded into the net, its colour folded by the group sum) and tagged
        with a factor id. The base carries the list of factor ids; the assembly multiplies in
        Π traceRef[factor groups] — P computed ONCE per component, no trace-polynomial blow-up.
@@ -701,7 +690,7 @@ ntDiagramRecords[diag_, d_, base_, env_, mask_, frame_] :=
             nDir == 1,
               diracComps[[1]],
             hasLor,
-              ({"SUNNet{}", {#[[1]]}, #[[2]], {{"", 1}}}& /@ ntProfTimed["chunkLorentz", chunkLorentz[Times @@ pureLorAcc, diag["Ids"], env, mask]]),
+              ntLorentzEntry /@ ntProfTimed["chunkLorentz", chunkLorentz[Times @@ pureLorAcc, diag["Ids"], env, mask]],
             True,
               {}]},
         scalarleakCheck[baseEntries];
@@ -711,7 +700,7 @@ ntDiagramRecords[diag_, d_, base_, env_, mask_, frame_] :=
           {
             e,
             If[baseEntries === {},
-              {{"SUNNet{}", {"konst(1.0)"}, 1, {{"", 1}}}},
+              {ntLorentzEntry[{"konst(1.0)", 1}]},
               baseEntries]}]],
 (* ---- >= 2 factors: factored product of disconnected components ----
    EVERY non-constant component becomes its OWN fused trace group: its colour-branch entries
@@ -722,7 +711,7 @@ ntDiagramRecords[diag_, d_, base_, env_, mask_, frame_] :=
    colour-channel fusion and explode the trace count. *)
       factorComps =
         If[hasLor,
-          Append[diracComps, {{"SUNNet{}", {#[[1]]}, #[[2]], {{"", 1}}}}&[compileLorentz[Times @@ pureLorAcc, diag["Ids"], env, mask]]],
+          Append[diracComps, {ntLorentzEntry[compileLorentz[Times @@ pureLorAcc, diag["Ids"], env, mask]]}],
           diracComps];
       Do[
         Module[{compEntries = factorComps[[ci]], fid = base + nRec},
@@ -747,19 +736,19 @@ ntDiagramRecords[diag_, d_, base_, env_, mask_, frame_] :=
    are BAGS: Append copies, so N appends would be O(N^2) in the net count (often ~30x the diagram
    count). FactorCompOf maps a factor net to its component id. *)
 ntBuildNets[diagrams_, env_, mask_, frame_, harvest_] :=
-  Module[{bInvNets = Internal`Bag[], bInvRest = Internal`Bag[], bColourNets = Internal`Bag[],
-          bDiagData = Internal`Bag[], bLorFacOf = Internal`Bag[], bFactorNets = Internal`Bag[],
+  Module[{bCoreNets = Internal`Bag[], bRestScalars = Internal`Bag[], bColourNets = Internal`Bag[],
+          bNetCoeff = Internal`Bag[], bFactorIdsOf = Internal`Bag[], bFactorNets = Internal`Bag[],
           nNet = 0, factorCompOf = <||>, store, res},
     store =
-      Function[rec,
-        Internal`StuffBag[bInvNets, rec[[2]]];
-        Internal`StuffBag[bInvRest, rec[[4]]];
-        Internal`StuffBag[bColourNets, rec[[1]]];
-        Internal`StuffBag[bDiagData, rec[[3]]];
-        Internal`StuffBag[bLorFacOf, rec[[5]]];
-        If[rec[[6]] =!= None,
+      Function[{colNet, cores, coeff, rest, factorIds, factorComp},
+        Internal`StuffBag[bCoreNets, cores];
+        Internal`StuffBag[bRestScalars, rest];
+        Internal`StuffBag[bColourNets, colNet];
+        Internal`StuffBag[bNetCoeff, coeff];
+        Internal`StuffBag[bFactorIdsOf, factorIds];
+        If[factorComp =!= None,
           Internal`StuffBag[bFactorNets, nNet];
-          factorCompOf[nNet] = rec[[6]]];
+          factorCompOf[nNet] = factorComp];
         nNet++];
 (* The net build itself is bound here, not passed as an ntLog argument: it is the work, not a
    diagnostic. See ntExportCpp for why load-bearing work must stay outside ntLog. *)
@@ -770,16 +759,16 @@ ntBuildNets[diagrams_, env_, mask_, frame_, harvest_] :=
           Block[{$ntProfOn = TrueQ[$NumTracerVerbose]},
             MapIndexed[
               Function[{diag, di},
-                Scan[store, ntDiagramRecords[diag, di[[1]] - 1, nNet, env, mask, frame]]],
+                Scan[Apply[store], ntDiagramRecords[diag, di[[1]] - 1, nNet, env, mask, frame]]],
               diagrams]]]},
       ntLog["[prof] per-diagram net-build (", Length[diagrams], " diagrams): ", ntT, " s"]];
     ntProfReport["[prof]   net-build part "];
     res =
-      <|"InvNets" -> Internal`BagPart[bInvNets, All],
-        "InvRest" -> Internal`BagPart[bInvRest, All],
+      <|"CoreNets" -> Internal`BagPart[bCoreNets, All],
+        "RestScalars" -> Internal`BagPart[bRestScalars, All],
         "ColourNets" -> Internal`BagPart[bColourNets, All],
-        "DiagData" -> Internal`BagPart[bDiagData, All],
-        "LorFacOf" -> Internal`BagPart[bLorFacOf, All],
+        "NetCoeff" -> Internal`BagPart[bNetCoeff, All],
+        "FactorIdsOf" -> Internal`BagPart[bFactorIdsOf, All],
         "FactorNets" -> Internal`BagPart[bFactorNets, All],
         "FactorCompOf" -> factorCompOf,
         "DiagDrExprs" -> harvest["DiagDrHarvest"][],
@@ -788,7 +777,7 @@ ntBuildNets[diagrams_, env_, mask_, frame_, harvest_] :=
    if they grow with the call count, a memo has stopped hitting. *)
     ntLog["[prof]   memo sizes: compileLorentz ", Length[$ctCache], " | orderDiracLoops ", Length[$odCache], " | dressedSlotStr ", Length[$dsCache], " | diracSlotStr ", Length[$dslCache], " (nets ", nNet, ")"];
     ntStageResult["ntBuildNets",
-      {"InvNets", "InvRest", "ColourNets", "DiagData", "LorFacOf", "FactorNets", "FactorCompOf",
+      {"CoreNets", "RestScalars", "ColourNets", "NetCoeff", "FactorIdsOf", "FactorNets", "FactorCompOf",
        "DiagDrExprs", "DrAtoms"}, res]];
 
 ntDiagDressedQ[colourNets_] := AnyTrue[colourNets, StringContainsQ[#, ".diag"]&];
@@ -803,61 +792,62 @@ ntDiagDressedQ[colourNets_] := AnyTrue[colourNets, StringContainsQ[#, ".diag"]&]
    `Σ_t coeff_t Π name(scale)` — ordinary scalar-dressing tokens — multiplied into the integrand.
    The Dirac/Lorentz trace is still computed ONCE, not a diagram per component. *)
 ntApplyDiagDressings[colourNets_, diagDrExprs_, frame_, incDir_] :=
-  Module[{nets = colourNets, drx = diagDrExprs, diagTokExpr = Table[1, {Length[colourNets]}], dressedIdx},
+  Module[{nets = colourNets, drx = diagDrExprs, colourDressingToken = Table[1, {Length[colourNets]}], dressedIdx},
     dressedIdx = Select[Range[Length[nets]], StringContainsQ[nets[[#]], ".diag"]&];
     If[dressedIdx =!= {},
       MapThread[
         Function[{d, p},
-          diagTokExpr[[d]] =
+          colourDressingToken[[d]] =
             Total[
               Function[term,
                   (term[[1]] + I term[[2]]) *
                     (Times @@ (ntResolveFrame[drx[[# + 1]], frame]& /@ term[[3]]))
                 ] /@ p];
           nets[[d]] = "SUNNet{}"],
-        {dressedIdx, diagColPolys[nets[[dressedIdx]], incDir]}];
+        {dressedIdx, ntFoldDiagColourNets[nets[[dressedIdx]], incDir]}];
       ntLog["[prof] diagonal-dressed diagrams: ", Length[dressedIdx], " (per-component colour-sum folded via sun_value_dressed seam)"]
     ];
-    ntStageResult["ntApplyDiagDressings", {"ColourNets", "DiagTokExpr"},
-      <|"ColourNets" -> nets, "DiagTokExpr" -> diagTokExpr|>]];
+    ntStageResult["ntApplyDiagDressings", {"ColourNets", "ColourDressingToken"},
+      <|"ColourNets" -> nets, "ColourDressingToken" -> colourDressingToken|>]];
 
 (* ---- STAGE 5: trace grouping ------------------------------------------------------------------
    Group diagrams (0-based) into traces. Colour is folded numerically into the generator polynomial,
    so diagrams FUSE by identical dressing coeff and the kernel evaluates ~one polynomial per Feynman
-   graph. Exceptions stay singletons: diag-dressed diagrams (diagTokExpr =!= 1) carry a per-diagram
-   RUNTIME colour-sum token (they cannot fuse by dressing coefficient alone, the token differs).
-   lorFac diagrams (lorFacOf =!= None — a Dirac trace times a disconnected pure-Lorentz scalar)
+   graph. Exceptions stay singletons: diag-dressed diagrams (colourDressingToken =!= 1) carry a
+   per-diagram RUNTIME colour-sum token (they cannot fuse by dressing coefficient alone, the token differs).
+   factored diagrams (factorIdsOf =!= None — a trace times disconnected factor components)
    likewise stay singletons: each carries a per-diagram multiplicative trace, so it must not fuse
    with another diagram's entries.
    The FACTOR nets (P, indices in factorNets) are EXCLUDED from the additive groups and appended as
    their own trace groups at the tail — generated as traces but referenced only multiplicatively via
-   lorFac, never summed into the integrand. NAdd marks the additive/factor boundary; PGroupOf maps a
+   factorIdsOf, never summed into the integrand. NAdditiveGroups marks the additive/factor boundary;
+   FactorGroupsOf maps a
    factor COMPONENT id to the list of {colour token, (0-based) trace-group ordinal} pairs it was
    split into — one per distinct token, see the GatherBy below. *)
-ntGroupTraces[diagData_, diagTokExpr_, lorFacOf_, factorNets_, factorCompOf_] :=
-  Module[{dd = diagData, tok = diagTokExpr, lf = lorFacOf, fco = factorCompOf, adj, fund,
-          additivePos, factorPos = (# + 1)& /@ factorNets, gAdd, gFactor, nAdd},
-    additivePos = Complement[Range[Length[dd]], factorPos];
-    adj = Select[additivePos, tok[[#]] === 1 && lf[[#]] === None&];
-    fund = Select[additivePos, tok[[#]] =!= 1 || lf[[#]] =!= None&];
-    gAdd = Join[(# - 1)& /@ GatherBy[adj, dd[[#]]&], List /@ (fund - 1)];
+ntGroupTraces[netCoeff_, colourDressingToken_, factorIdsOf_, factorNets_, factorCompOf_] :=
+  Module[{fusable, singletons, additivePos, factorPos = (# + 1)& /@ factorNets, additiveGroups,
+          factorGroups, nAdditiveGroups},
+    additivePos = Complement[Range[Length[netCoeff]], factorPos];
+    fusable = Select[additivePos, colourDressingToken[[#]] === 1 && factorIdsOf[[#]] === None&];
+    singletons = Select[additivePos, colourDressingToken[[#]] =!= 1 || factorIdsOf[[#]] =!= None&];
+    additiveGroups = Join[(# - 1)& /@ GatherBy[fusable, netCoeff[[#]]&], List /@ (singletons - 1)];
 (* Each disconnected factor COMPONENT fuses into trace groups gathered by {component, COLOUR
    TOKEN}. A diag-dressed entry carries a runtime colour-sum token, which the assembly can only
    apply to a whole group; gathering by component alone would silently drop it. Per component:
        scalar = Σ_t token_t · traceRef[subgroup_t]     ( = Σ_entries token_e · trace_e )
    GatherBy is stable, so with a single token (all undressed flows) this yields one group per
    component, in order. factorNets are 0-based net indices. *)
-    gFactor = GatherBy[factorNets, {fco[#], tok[[# + 1]]}&];
-    nAdd = Length[gAdd];
-    ntStageResult["ntGroupTraces", {"Groups", "NAdd", "PGroupOf"},
-      <|"Groups" -> Join[gAdd, gFactor],
-        "NAdd" -> nAdd,
+    factorGroups = GatherBy[factorNets, {factorCompOf[#], colourDressingToken[[# + 1]]}&];
+    nAdditiveGroups = Length[additiveGroups];
+    ntStageResult["ntGroupTraces", {"Groups", "NAdditiveGroups", "FactorGroupsOf"},
+      <|"Groups" -> Join[additiveGroups, factorGroups],
+        "NAdditiveGroups" -> nAdditiveGroups,
 (* One component maps to a LIST of {token, group ordinal} pairs, one per distinct token. *)
-        "PGroupOf" ->
+        "FactorGroupsOf" ->
           Merge[
             MapIndexed[
-              (fco[#1[[1]]] -> {tok[[#1[[1]] + 1]], nAdd + #2[[1]] - 1})&,
-              gFactor],
+              (factorCompOf[#1[[1]]] -> {colourDressingToken[[#1[[1]] + 1]], nAdditiveGroups + #2[[1]] - 1})&,
+              factorGroups],
             Identity]|>]];
 
 (* ---- STAGE 6: integrand -----------------------------------------------------------------------
@@ -869,25 +859,24 @@ ntTraceRef[crossCSE_, nsHome_] :=
     nsHome <> "::tr" <> ToString[#] <> "(fenv)"
   ]&;
 
-(* The dressing coefficient stays FACTORED in `diagData` (COEN CSEs it), so each group is one
+(* The dressing coefficient stays FACTORED in `netCoeff` (COEN CSEs it), so each group is one
    collected kinematic trace × its dressing — not a flat polynomial.
-   Sum the ADDITIVE groups only (1..nAdd); factor groups (nAdd+1..) are referenced multiplicatively
-   via lorFac, each computed ONCE as a separate trace. *)
-ntAssembleIntegrand[groups_, nAdd_, pGroupOf_, diagData_, diagTokExpr_, lorFacOf_, traceRef_] :=
-  Module[{g = groups, pg = pGroupOf, dd = diagData, tok = diagTokExpr, lf = lorFacOf, tr = traceRef},
-    ntStageResult["ntAssembleIntegrand", {"Integrand"},
-      <|"Integrand" ->
-        Sum[
-          With[{rep = g[[gi, 1]]},
-            dd[[rep + 1]] * tok[[rep + 1]] *
-              If[lf[[rep + 1]] === None,
-                1,
+   Sum the ADDITIVE groups only (1..nAdditiveGroups); the factor groups after them are referenced
+   multiplicatively via factorIdsOf, each computed ONCE as a separate trace. *)
+ntAssembleIntegrand[groups_, nAdditiveGroups_, factorGroupsOf_, netCoeff_, colourDressingToken_, factorIdsOf_, traceRef_] :=
+  ntStageResult["ntAssembleIntegrand", {"Integrand"},
+    <|"Integrand" ->
+      Sum[
+        With[{rep = groups[[gi, 1]]},
+          netCoeff[[rep + 1]] * colourDressingToken[[rep + 1]] *
+            If[factorIdsOf[[rep + 1]] === None,
+              1,
 (* Each factor component contributes Σ_t token_t · traceRef[subgroup_t]. *)
-                Times @@ (
-                  Function[cid, Total[(First[#] tr[Last[#]])& /@ pg[cid]]] /@
-                    lf[[rep + 1]])
-              ] * tr[gi - 1]],
-          {gi, nAdd}]|>]];
+              Times @@ (
+                Function[cid, Total[(First[#] traceRef[Last[#]])& /@ factorGroupsOf[cid]]] /@
+                  factorIdsOf[[rep + 1]])
+            ] * traceRef[gi - 1]],
+        {gi, nAdditiveGroups}]|>];
 
 (* ---- k-only dressing-lookup hoisting ("HoistLoopConstLookups") -----------------------------
    A lookup whose argument contains NO integration variable and NO grid coordinate is a LAUNCH
@@ -934,7 +923,7 @@ ntTarrDecl[nsHome_, nGrp_] :=
    The fenv setup block: declare fenv, (dressed only) compute each dressing atom into dr_<id>,
    fill, and (CrossTraceCSE) precompute the traces. Kinematic angle defs (kept symbolic in the
    dressing) are emitted once as named temporaries. *)
-ntKernelPreamble[angleDefs_, fillArgs_, drAtoms_, hasDr_, crossCSE_, tarrDecl_, nsHome_, sns_] :=
+ntKernelPreamble[angleDefs_, fillArgs_, drAtoms_, hasDr_, crossCSE_, tarrDecl_, nsHome_, supportNs_] :=
   Module[{angleDecls, coreBlock},
     angleDecls = ("const " <> $ntRealT <> " " <> SymbolName[First[#]] <> " = " <> cppFlat[Last[#]] <> ";")& /@ angleDefs;
     coreBlock =
@@ -962,8 +951,8 @@ ntKernelPreamble[angleDefs_, fillArgs_, drAtoms_, hasDr_, crossCSE_, tarrDecl_, 
       <|"Preamble" ->
           StringRiffle[
             If[hasDr,
-              Join[ntSupportUsings[sns], angleDecls, coreBlock],
-              Join[ntSupportUsings[sns], coreBlock, angleDecls]],
+              Join[ntSupportUsings[supportNs], angleDecls, coreBlock],
+              Join[ntSupportUsings[supportNs], coreBlock, angleDecls]],
             "\n"],
         "AngleDecls" -> angleDecls|>]];
 
@@ -1073,6 +1062,8 @@ ntKernelSignature[o_, args_, fillArgs_, hoistCalls_, hoistSyms_, hasDr_, nDrAtom
       <|"KernelParams" -> kernelParams, "ConstParams" -> constParams, "HoistFn" -> hoistFnStr,
         "FillArgSig" -> fillArgSig|>]];
 
+MakeNTKernel::nonnumeric = "the integrand is not numeric: it contains `1` Indeterminate/Infinity value(s), which would be emitted as bare Mathematica symbols in the generated C++ (e.g. `return Indeterminate;`). This almost always means a SINGULAR Gram at the chosen kinematics: the basis's structures are linearly dependent there, so the inverse metric, and every dual projector built from it, carries 0/0. Check Det[TBGetMetric[basis]] under the frame's kinematics (e.g. the symmetric point), and project with a restricted sub-basis whose Gram is non-degenerate. Offending value(s): `2`";
+
 (* LOUD GUARD: the integrand must be numeric-valued before it is lowered to C++. A DEGENERATE input
    — most often a basis whose Gram is singular at the chosen kinematics, so its inverse metric (and
    hence every dual projector) carries 0/0 — leaves Indeterminate / ComplexInfinity / DirectedInfinity
@@ -1097,25 +1088,25 @@ ntAssertNumericIntegrand[integrand_] :=
    The mixed case pays because term costs are very unequal: the expensive traces get the few exact
    modes, and only the unbounded terms run the full Gaussian rule. COEN's CSE is per-function, so
    each half computes only the traces and lookups it uses. *)
-ntFiniteExtentPartition[integrand_, mSym_, decayRegs_, forced_] :=
-  Module[{finiteExtent = False, split = False, feExpr = 0, tailExpr = 0},
+ntFiniteExtentPartition[integrand_, matsubaraSym_, decayRegs_, forced_] :=
+  Module[{finiteExtent = False, split = False, finiteExtentPart = 0, tailPart = 0},
     Which[
-      mSym === None, Null,
+      matsubaraSym === None, Null,
       forced =!= Automatic,
         finiteExtent = TrueQ[forced],
       True,
         Module[{terms, feT, tlT,
                 hs = (If[Head[#] === Symbol, SymbolName[#], ToString[#]] & ) /@ Flatten[{decayRegs}]},
           terms = If[Head[integrand] === Plus, List @@ integrand, {integrand}];
-          {feT, tlT} = Lookup[GroupBy[terms, TrueQ[ntFiniteExtentQ[#, mSym, hs]] &], {True, False}, {}];
+          {feT, tlT} = Lookup[GroupBy[terms, TrueQ[ntFiniteExtentQ[#, matsubaraSym, hs]] &], {True, False}, {}];
           finiteExtent = (tlT === {}) && (feT =!= {});
           split = (feT =!= {}) && (tlT =!= {});
-          If[split, feExpr = Total[feT]; tailExpr = Total[tlT]];
+          If[split, finiteExtentPart = Total[feT]; tailPart = Total[tlT]];
           ntLog["[matsubara] ", Length[terms], " term(s), ", Length[feT], " of finite extent",
             If[split, " -- emitting a split kernel", ""]]]];
     ntStageResult["ntFiniteExtentPartition", {"FiniteExtent", "Split", "FiniteExtentExpr", "TailExpr"},
-      <|"FiniteExtent" -> finiteExtent, "Split" -> split, "FiniteExtentExpr" -> feExpr,
-        "TailExpr" -> tailExpr|>]];
+      <|"FiniteExtent" -> finiteExtent, "Split" -> split, "FiniteExtentExpr" -> finiteExtentPart,
+        "TailExpr" -> tailPart|>]];
 
 (* One kernel entry point, lowered by FunKit. Each body has its own MakeCppFunction so COEN's CSE
    spans it whole. Per-body timing: the aggregate [prof] line of ntLowerKernel also covers
@@ -1182,15 +1173,15 @@ ntKernelBody[nm_, expr_, o_, kernelParams_, preamble_, complexQ_] :=
    `Sqrt[f0^2 + l1^2]` passes; a bare f0, or a shifted argument like ZQ[f0 + p0], does not. A
    missed trait only costs time, a wrong one costs correctness. This side decides whether to emit
    the member; the generator's constant supplies its value (absent member = false in DiFfRG). *)
-ntMatsubaraEvenQ[integrand_, mSym_, mVarIdx_, symDefs_] :=
+ntMatsubaraEvenQ[integrand_, matsubaraSym_, mVarIdx_, symDefs_] :=
   With[{evenFreeQ = Function[{e, ms}, FreeQ[e /. Power[ms, n_Integer /; EvenQ[n]] :> 1, ms]]},
     With[{even =
-        mSym =!= None && evenFreeQ[integrand, mSym] &&
+        matsubaraSym =!= None && evenFreeQ[integrand, matsubaraSym] &&
 (* mVarIdx >= 0: the traces are the generator's job. Otherwise they can only see the frequency
    through a trace-env atom (symDefs), which no generator proof covers, so check those here. *)
-          (mVarIdx >= 0 || AllTrue[Values[symDefs], evenFreeQ[#, mSym]&])},
-      If[mSym =!= None && !even,
-        ntLog["[matsubara] kernel body uses ", mSym,
+          (mVarIdx >= 0 || AllTrue[Values[symDefs], evenFreeQ[#, matsubaraSym]&])},
+      If[matsubaraSym =!= None && !even,
+        ntLog["[matsubara] kernel body uses ", matsubaraSym,
           " at an odd power (or inside a shifted dressing argument) — no matsubara_even trait"]];
       even]];
 
@@ -1199,23 +1190,28 @@ ntMatsubaraEvenQ[integrand_, mSym_, mVarIdx_, symDefs_] :=
    runtime; no tensor-engine headers. A complex flow pulls the verdict header unless
    ComplexEndProjection emits an unconditional end-real body with no probe/verdict. *)
 ntKernelHeader[o_, members_List, complexQ_, headerFile_] :=
-  With[{hdrInc = FileNameTake[headerFile], kns = o["KernelNamespace"], decor = o["Decorator"]},
-    ntApplyTraceComplexOverride[
-      FunKit`MakeCppHeader[
-        "Includes" -> Join[o["ExtraIncludes"], ntRuntimeIncludes[o["RuntimeInclude"]],
-          {"numtracer/sun/sun_data.hpp", hdrInc},
-          If[complexQ && !o["ComplexEndProjection"], {ntVerdictFile}, {}]],
-        "Body" -> ntWrapBody[kns,
-          ntKernelClass[o["Name"], members, decor, o["RegulatorTemplate"], o["RegulatorAlias"],
+  With[{tracesInclude = FileNameTake[headerFile], kernelNs = o["KernelNamespace"], decor = o["Decorator"],
+        runInc = o["RuntimeInclude"]},
+    With[{classStr =
+        ntKernelClass[o["Name"], members, decor, o["RegulatorTemplate"], o["RegulatorAlias"],
 (* ntRe/ntIm are needed by both real branches, so a complex flow always carries them. *)
-            If[complexQ, {ntReImAccessors[decor]}, {}]],
-          o["Name"]]
-      ],
-      hdrInc, kns, o["SupportNamespace"], complexQ]];
+          If[complexQ, {ntReImAccessors[decor]}, {}]]},
+      ntApplyTraceComplexOverride[
+        FunKit`MakeCppHeader[
+          "Includes" -> Join[o["ExtraIncludes"], If[runInc === None || runInc === "", {}, {runInc}],
+            {"numtracer/sun/sun_data.hpp", tracesInclude},
+            If[complexQ && !o["ComplexEndProjection"], {ntVerdictFile}, {}]],
+(* KernelNamespace None/"" emits the class at the includer's scope *)
+          "Body" ->
+            If[kernelNs === None || kernelNs === "",
+              {classStr},
+              {"namespace " <> kernelNs <> "\n{", classStr, "}", "using " <> kernelNs <> "::" <> o["Name"] <> ";"}]
+        ],
+        tracesInclude, kernelNs, o["SupportNamespace"], complexQ]]];
 
 (* The integrand -> C++ lowering (FunKit). Timed as one block: it is the one heavy stage between the
    net-build and the generator emit, so without this the [prof] trail has a blind spot. *)
-ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, mSym_, mVarIdx_, symDefs_, headerFile_] :=
+ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, mVarIdx_, symDefs_, headerFile_] :=
   Module[{bodyFor, kernelFn, splitFns, constFn, mEvenBody, header},
     With[{ntT =
       First @
@@ -1230,10 +1226,10 @@ ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, mSym_, mVarIdx_
                bodyFor["kernel_tail", part["TailExpr"]]},
               {}];
           constFn = ntConstFn[o["Constant"], o["Decorator"], sig["ConstParams"], o["SupportNamespace"]];
-          mEvenBody = ntMatsubaraEvenQ[integrand, mSym, mVarIdx, symDefs];
-          If[mSym =!= None,
+          mEvenBody = ntMatsubaraEvenQ[integrand, matsubaraSym, mVarIdx, symDefs];
+          If[matsubaraSym =!= None,
             ntLog["[matsubara] decaying regulators: ", o["DecayingRegulators"],
-              " — finite extent in ", mSym, ": ",
+              " — finite extent in ", matsubaraSym, ": ",
               Which[
                 part["Split"], "split — kernel_finite_extent on the exact sum, kernel_tail on the Gaussian rule",
                 part["FiniteExtent"], "yes — emitting matsubara_finite_extent (exact Matsubara sum)",
@@ -1264,10 +1260,10 @@ ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, mSym_, mVarIdx_
 (* ---- STAGE 8: emit + build the generator ------------------------------------------------------
    Split generator: a main TU + N net-builder unit TUs + a decl header, so the net builders compile
    in parallel (see emitNumericGenerator). The main `#include`s the decl. *)
-ntEmitGeneratorSources[invNets_, invRest_, colourNets_, groups_, ncomp_, fillArgSig_, complexQ_,
+ntEmitGeneratorSources[coreNets_, restScalars_, colourNets_, groups_, ncomp_, fillArgSig_, complexQ_,
                        realOnlyG_, mVarIdx_, o_, genFile_] :=
   Module[{genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles},
-    With[{ntT = First @ AbsoluteTiming[{genPre, genUnits, genDecl, genMain} = emitNumericGenerator[invNets, invRest, colourNets, groups, ncomp, o["Namespace"], fillArgSig, o["KernelNamespace"], complexQ, realOnlyG, o["CrossTraceCSE"], mVarIdx];]},
+    With[{ntT = First @ AbsoluteTiming[{genPre, genUnits, genDecl, genMain} = emitNumericGenerator[coreNets, restScalars, colourNets, groups, ncomp, o["Namespace"], fillArgSig, o["KernelNamespace"], complexQ, realOnlyG, o["CrossTraceCSE"], mVarIdx];]},
       ntLog["[prof] emitNumericGenerator: ", ntT, " s"]];
     declFile = StringReplace[genFile, ".cpp" -> "_nets.hh"];
 (* Precompiled-header source for the -O0 net-builder units. Deliberately a SUPERSET of what any
@@ -1299,6 +1295,8 @@ ntEmitGeneratorSources[invNets_, invRest_, colourNets_, groups_, ncomp_, fillArg
     Print["wrote generator: ", genFile, " (+ ", Length[genUnits], " net units + decl header)"];
     ntStageResult["ntEmitGeneratorSources", {"DeclFile", "PchFile", "UnitFiles"},
       <|"DeclFile" -> declFile, "PchFile" -> pchFile, "UnitFiles" -> unitFiles|>]];
+
+mkGenerateKernel::genfail = "Generator compile/run failed: `1`";
 
 (* COMPILE the generator into a temp binary. The main TU (mainOpt) and the -O0 net-builder units
    compile CONCURRENTLY, then link. A failed unit compile leaves its .o missing, so the link rc is
@@ -1419,10 +1417,10 @@ ntRunGenerator[bin_, o_, headerFile_] :=
    PruneRealTraces pass re-runs this with the pruned groups (see ntProbeAndReprune). OFFLINE mode
    stops after writing: the `numtrace` CMake target compiles and runs the sources as a build step,
    and the committed traces header is left untouched until then. *)
-ntGenPass[invNets_, invRest_, colourNets_, groups_, ncomp_, fillArgSig_, complexQ_, realOnlyG_,
+ntGenPass[coreNets_, restScalars_, colourNets_, groups_, ncomp_, fillArgSig_, complexQ_, realOnlyG_,
           mVarIdx_, o_, incDir_, genFile_, headerFile_] :=
   Module[{src, bin = None},
-    src = ntEmitGeneratorSources[invNets, invRest, colourNets, groups, ncomp, fillArgSig, complexQ,
+    src = ntEmitGeneratorSources[coreNets, restScalars, colourNets, groups, ncomp, fillArgSig, complexQ,
             realOnlyG, mVarIdx, o, genFile];
     If[o["RunOnline"],
       bin = ntCompileGenerator[genFile, src, o, incDir]["Binary"];
@@ -1480,6 +1478,8 @@ ntWriteKernelAndManifest[o_, header_, kernelFile_, genFile_, headerFile_, unitFi
     ntStageResult["ntWriteKernelAndManifest", {"Manifest"}, <|"Manifest" -> mf|>]];
 
 (* ---- the driver -------------------------------------------------------------------------------- *)
+mkGenerateKernel::emptynets = "Flow `1` produced no generator nets (nets=`2`, groups=`3`) — nothing to emit. Aborting instead of writing a placeholder kernel. (Either NumTrace returned no usable diagrams, or every diagram was dropped during the net build.)";
+
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : OptionsPattern[]] :=
   Block[{$RecursionLimit = $RecursionLimit, $ctCtx = $ctCtx, $ntDressResolve = $ntDressResolve,
          $ntCanonIdsSrc = $ntCanonIdsSrc, $ntCanonRules = $ntCanonRules,
@@ -1507,43 +1507,43 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
         ntResolveIncludeDir[o["IncludeDir"]],
         None];
     dd = ntApplyDiagDressings[nets["ColourNets"], nets["DiagDrExprs"], fr["Frame"], incDir];
-    grp = ntGroupTraces[nets["DiagData"], dd["DiagTokExpr"], nets["LorFacOf"], nets["FactorNets"],
+    grp = ntGroupTraces[nets["NetCoeff"], dd["ColourDressingToken"], nets["FactorIdsOf"], nets["FactorNets"],
             nets["FactorCompOf"]];
     hoist = ntHoistLoopConstLookups[
-              ntAssembleIntegrand[grp["Groups"], grp["NAdd"], grp["PGroupOf"], nets["DiagData"],
-                dd["DiagTokExpr"], nets["LorFacOf"], ntTraceRef[o["CrossTraceCSE"], o["NsHome"]]]["Integrand"],
+              ntAssembleIntegrand[grp["Groups"], grp["NAdditiveGroups"], grp["FactorGroupsOf"], nets["NetCoeff"],
+                dd["ColourDressingToken"], nets["FactorIdsOf"], ntTraceRef[o["CrossTraceCSE"], o["NsHome"]]]["Integrand"],
               fr["Args"], o["Dressings"], o["HoistLoopConstLookups"]];
     integrand = hoist["Integrand"];
 (* a package global read several call layers down (ntPureIntegrand/ntRePartIntegrand ->
    ntProjectIntegrand); assigned unconditionally so a flow never inherits another's setting. *)
     $ntComplexRuntimeProjection = o["ComplexRuntimeProjection"];
-    prune = ntkPruneSpec[nets["DiagData"], grp["Groups"], complexQ, o["Offline"],
+    prune = ntPruneSpec[nets["NetCoeff"], grp["Groups"], complexQ, o["Offline"],
               o["PruneRealTraces"], o["RealProbe"], o["RunGenerator"]];
     nGrp = Length[grp["Groups"]];
     tarrDecl = ntTarrDecl[o["NsHome"], nGrp];
 (* surface the post-net-build shape, and abort on empty nets / empty grouping rather than emit a
    placeholder kernel. *)
-    ntLog["[prof] post-net-build: nets=", Length[nets["InvNets"]], " groups(nGrp)=", nGrp, " complexQ=", complexQ];
-    If[Length[nets["InvNets"]] === 0 || nGrp === 0,
-      Message[mkGenerateKernel::emptynets, o["Name"], Length[nets["InvNets"]], nGrp];
+    ntLog["[prof] post-net-build: nets=", Length[nets["CoreNets"]], " groups(nGrp)=", nGrp, " complexQ=", complexQ];
+    If[Length[nets["CoreNets"]] === 0 || nGrp === 0,
+      Message[mkGenerateKernel::emptynets, o["Name"], Length[nets["CoreNets"]], nGrp];
       Abort[]];
-    hasDr = !FreeQ[nets["InvNets"], _ntDressedCore];
+    hasDr = !FreeQ[nets["CoreNets"], _ntDressedCore];
     pre = ntKernelPreamble[o["AngleDefs"], fr["FillArgs"], nets["DrAtoms"], hasDr, o["CrossTraceCSE"],
             tarrDecl, o["NsHome"], o["SupportNamespace"]];
     sig = ntKernelSignature[o, fr["Args"], fr["FillArgs"], hoist["HoistCalls"], hoist["HoistSyms"],
             hasDr, Length[nets["DrAtoms"]]];
     ntAssertNumericIntegrand[integrand];
-    part = ntFiniteExtentPartition[integrand, ms["MSym"], o["DecayingRegulators"],
+    part = ntFiniteExtentPartition[integrand, ms["MatsubaraSym"], o["DecayingRegulators"],
              o["MatsubaraFiniteExtent"]];
-    header = ntLowerKernel[o, integrand, part, sig, pre["Preamble"], complexQ, ms["MSym"],
+    header = ntLowerKernel[o, integrand, part, sig, pre["Preamble"], complexQ, ms["MatsubaraSym"],
                ms["MVarIdx"], fr["SymDefs"], headerFile]["Header"];
-    gen = ntGenPass[nets["InvNets"], nets["InvRest"], dd["ColourNets"], grp["Groups"], fr["NComp"],
+    gen = ntGenPass[nets["CoreNets"], nets["RestScalars"], dd["ColourNets"], grp["Groups"], fr["NComp"],
             sig["FillArgSig"], complexQ, prune["realOnlyG"], ms["MVarIdx"], o, incDir, genFile, headerFile];
     probe = ntProbeAndReprune[o, integrand, fr["Args"], fr["FillArgs"], pre["AngleDecls"],
               nets["DrAtoms"], tarrDecl, prune["pruneG"], complexQ, genFile, headerFile];
 (* the deferred PruneRealTraces pass: re-emit with the pruned groups *)
     If[probe["Reprune"],
-      gen = ntGenPass[nets["InvNets"], nets["InvRest"], dd["ColourNets"], grp["Groups"], fr["NComp"],
+      gen = ntGenPass[nets["CoreNets"], nets["RestScalars"], dd["ColourNets"], grp["Groups"], fr["NComp"],
               sig["FillArgSig"], complexQ, prune["pruneG"], ms["MVarIdx"], o, incDir, genFile, headerFile]];
     ntWriteKernelAndManifest[o, header, kernelFile, genFile, headerFile, gen["UnitFiles"], complexQ,
       probe["ProbeFile"]];

@@ -193,8 +193,8 @@ ntLptBinPack[defs_List, nUnits_Integer] :=
     Lookup[GroupBy[Transpose[{bin, defs[[order]]}], First -> Last], Range[nUnits], {}]];
 
 (* ---- STAGE 1: sub-term expansion + interning --------------------------------------------------
-   Per net, a colour group is a SUM of sub-terms: invNets[i] = {core_b…} (a DiracNet literal for a
-   gamma branch, a Lorentz NetVal for a gamma-free one), invRest[i] = {{rest_b, scal_b}…} parallel.
+   Per net, a colour group is a SUM of sub-terms: coreNets[i] = {core_b…} (a DiracNet literal for a
+   gamma branch, a Lorentz NetVal for a gamma-free one), restScalars[i] = {{rest_b, scal_b}…} parallel.
    Each branch yields {ds, ls, scal, dc, dl, dr} columns (usually one sub-term). A DRESSED branch
    (ntDressedCore[chainStr, slotsStr]) expands the Cartesian product of its chain's slot options,
    each a triple {structStr, num, dr}: the structures (dl) form the trace key, ∏ num folds into the
@@ -206,33 +206,34 @@ ntLptBinPack[defs_List, nUnits_Integer] :=
    integers. Byte-identity: `ntMkIntern` assigns ids in first-appearance order along the walk
    nets -> cores -> combinations (`Tuples` last-slot-fastest), which is the order the join relies
    on (I1). *)
-ntGenExpandSubTerms[invNets_, invRest_] :=
-  Module[{dsInt, dsGet, lsInt, lsGet, dcInt, dcGet, dlInt, dlGet, drInt, drGet, scCache = <||>,
+ntGenExpandSubTerms[coreNets_, restScalars_] :=
+  Module[{internDiracNet, diracNetPool, internLorNet, lorNetPool, internChain, chainPool,
+          internSlotTuple, slotTuplePool, internDressMono, dressMonoPool, slotComboCache = <||>,
           slotCombo, cols, ntT},
-    {dsInt, dsGet} = ntMkIntern[];
-    {lsInt, lsGet} = ntMkIntern[];
-    {dcInt, dcGet} = ntMkIntern[];
-    {dlInt, dlGet} = ntMkIntern[];
-    {drInt, drGet} = ntMkIntern[];
+    {internDiracNet, diracNetPool} = ntMkIntern[];
+    {internLorNet, lorNetPool} = ntMkIntern[];
+    {internChain, chainPool} = ntMkIntern[];
+    {internSlotTuple, slotTuplePool} = ntMkIntern[];
+    {internDressMono, dressMonoPool} = ntMkIntern[];
 (* The Cartesian expansion of one core's slot options depends on `slotOpts` ALONE, so it is memoised
    per distinct option set. Returns {dlIds, drIds, nums, n} from one call so the columns can never
    desync: `Tuples` and `Flatten[Outer[...]]` both vary the last slot fastest, and that alignment
    between a structure tuple and its numeric coefficient is load-bearing. *)
     slotCombo[slotOpts_] :=
-      Lookup[scCache, Key[slotOpts],
-        scCache[slotOpts] =
+      Lookup[slotComboCache, Key[slotOpts],
+        slotComboCache[slotOpts] =
           Module[{structs, nums, dress, cs, n},
             structs = #[[All, 1]]& /@ slotOpts;
             nums    = #[[All, 2]]& /@ slotOpts;
             dress   = #[[All, 3]]& /@ slotOpts;
             cs = Tuples[structs];
             n  = Length[cs];
-            {Developer`ToPackedArray[dlInt /@ cs],
+            {Developer`ToPackedArray[internSlotTuple /@ cs],
 (* by far the common case: no slot option on this core carries a dressing atom, so every
    combination's union is empty. Checked once per distinct option set. *)
              If[AllTrue[dress, AllTrue[#, # === {}&]&],
-               ConstantArray[drInt[{}], n],
-               Developer`ToPackedArray[drInt /@ (Sort[Catenate[#]]& /@ Tuples[dress])]],
+               ConstantArray[internDressMono[{}], n],
+               Developer`ToPackedArray[internDressMono /@ (Sort[Catenate[#]]& /@ Tuples[dress])]],
              Flatten[Outer[Times, Sequence @@ nums]],
              n}]];
     ntT = First @ AbsoluteTiming[
@@ -255,34 +256,34 @@ ntGenExpandSubTerms[invNets_, invRest_] :=
                             MatchQ[nv, _ntDressedCore],
                               With[{chain = nv[[1]], slotOpts = nv[[2]]},
                                 If[slotOpts === {},
-                                  {{dsInt["DiracNet{}"]}, {lsInt[lsStr]}, ntPackCx[{scal}], {dcInt[chain]}, {dlInt[{}]}, {drInt[{}]}},
+                                  {{internDiracNet["DiracNet{}"]}, {internLorNet[lsStr]}, ntPackCx[{scal}], {internChain[chain]}, {internSlotTuple[{}]}, {internDressMono[{}]}},
 (* dl = this combination's STRUCTURAL option-string LIST (one dressing-free structStr per chain
    slot), interned so the table emitter still pools the distinct structures; the numeric Cx folds
    into the sub-term scalar and the dress ids become the DPoly key. *)
                                   Module[{tb = slotCombo[slotOpts], n},
                                     n = tb[[4]];
-                                    {ConstantArray[dsInt["DiracNet{}"], n],
-                                     ConstantArray[lsInt[lsStr], n],
+                                    {ConstantArray[internDiracNet["DiracNet{}"], n],
+                                     ConstantArray[internLorNet[lsStr], n],
                                      ntPackCx[scal * tb[[3]]],
-                                     ConstantArray[dcInt[chain], n],
+                                     ConstantArray[internChain[chain], n],
                                      tb[[1]],
                                      tb[[2]]}]]],
                             (* gamma branch: DiracNet + projector rest *)
                             StringStartsQ[nv, "DiracNet"],
-                              {{dsInt[nv]}, {lsInt[lsStr]}, ntPackCx[{scal}], {dcInt["std::vector<DChainTok>{}"]}, {dlInt[{}]}, {drInt[{}]}},
+                              {{internDiracNet[nv]}, {internLorNet[lsStr]}, ntPackCx[{scal}], {internChain["std::vector<DChainTok>{}"]}, {internSlotTuple[{}]}, {internDressMono[{}]}},
                             (* gamma-free branch: whole net is the rest *)
                             True,
-                              {{dsInt["DiracNet{}"]}, {lsInt[nv]}, ntPackCx[{scal}], {dcInt["std::vector<DChainTok>{}"]}, {dlInt[{}]}, {drInt[{}]}}]]],
+                              {{internDiracNet["DiracNet{}"]}, {internLorNet[nv]}, ntPackCx[{scal}], {internChain["std::vector<DChainTok>{}"]}, {internSlotTuple[{}]}, {internDressMono[{}]}}]]],
                       {cores, rss[[All, 1]], rss[[All, 2]]}]]],
-            {invNets, invRest}];];
+            {coreNets, restScalars}];];
     ntLog["[prof] sub-term expansion: ", ntT, " s"];
     ntStageResult["ntGenExpandSubTerms",
       {"DiracNetIds", "LorNetIds", "SubScalars", "ChainIds", "SlotTupleIds", "DressMonoIds",
        "DiracNetPool", "LorNetPool", "ChainPool", "SlotTuplePool", "DressMonoPool"},
       <|"DiracNetIds" -> cols[[1]], "LorNetIds" -> cols[[2]], "SubScalars" -> cols[[3]],
         "ChainIds" -> cols[[4]], "SlotTupleIds" -> cols[[5]], "DressMonoIds" -> cols[[6]],
-        "DiracNetPool" -> dsGet[], "LorNetPool" -> lsGet[], "ChainPool" -> dcGet[],
-        "SlotTuplePool" -> dlGet[], "DressMonoPool" -> drGet[]|>]];
+        "DiracNetPool" -> diracNetPool[], "LorNetPool" -> lorNetPool[], "ChainPool" -> chainPool[],
+        "SlotTuplePool" -> slotTuplePool[], "DressMonoPool" -> dressMonoPool[]|>]];
 
 (* ---- STAGE 2: colour-net tables ---------------------------------------------------------------
    The distinct colour nets are one `SUNNet{...}` literal each; on a large colour graph the table can
@@ -581,7 +582,9 @@ ntGenMainPrologue[ncomp_, nsInner_, hasDressed_] :=
    ntGenDedupJoin. HASH-CONSED (ntHashConsRows): written out in full these tables dominate the main
    TU, and a multi-megabyte braced-init in the optimised main TU costs minutes. sidx is row-deduped;
    dsc and sdr on BOTH levels (distinct values, then distinct rows of value indices). The O(nets)
-   runtime rebuild reproduces sidx/dsc/sdr exactly. *)
+   runtime rebuild reproduces sidx/dsc/sdr exactly.
+   Emitted names: <t>U = the distinct rows, <t>R = each net's row index into <t>U, <t>V = the
+   distinct values a <t>U row indexes (ntSidxU, ntDscU, ... are the chunk functions building them). *)
 ntGenMainTables[netTraceRows_, netDressRows_, netScalarRows_, hasDressed_] :=
   Module[{sidx = ntHashConsRows[netTraceRows], dsc = ntHashConsRows[netScalarRows, "Values"],
           sdr, sidxU, sidxR, dscU, dscR, sdrR},
@@ -756,7 +759,7 @@ ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_, crossCSE_] :=
             "  { std::vector<MPoly> dead; traceTable.swap(dead); }\n"]|>]];
 
 (* the fill formulas, the header preamble, the Matsubara verdict, and the trace bodies *)
-ntGenMainEmission[varFill_, nsInner_, kns_, fillArgSig_, complexQ_, hasDressed_, crossCSE_, mIdx_, nGrp_] :=
+ntGenMainEmission[varFill_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDressed_, crossCSE_, mIdx_, nGrp_] :=
   ntStageResult["ntGenMainEmission", {"Text"},
     <|"Text" ->
       StringJoin[
@@ -784,7 +787,7 @@ ntGenMainEmission[varFill_, nsInner_, kns_, fillArgSig_, complexQ_, hasDressed_,
           If[complexQ,
             "#include <complex>\\n",
             ""
-          ] <> "namespace " <> kns <> " { namespace \" << hns << \" {\\n\";\n",
+          ] <> "namespace " <> kernelNs <> " { namespace \" << hns << \" {\\n\";\n",
         If[complexQ,
           "  std::cout << \"#ifndef NT_TRACE_COMPLEX\\n#define NT_TRACE_COMPLEX std::complex<" <> $ntRealT <> ">\\n#endif\\nusing nt_complex_t = NT_TRACE_COMPLEX;\\n\";\n",
           ""],
@@ -819,7 +822,7 @@ ntGenMainEmission[varFill_, nsInner_, kns_, fillArgSig_, complexQ_, hasDressed_,
           "  emit_cpp_fused(std::cout, fused, \"trace_all\", decor);\n",
           "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> ToString[nGrp] <> ");\n" <> "    for(int i=0;i<" <> ToString[nGrp] <> ";++i){\n" <> "      const std::string nm = \"tr\"+std::to_string(i);\n" <> "      std::ostringstream os; emit_cpp(os, progs[i], nm, decor);\n" <> "      std::string s = os.str(); std::string body = s.substr(s.find('{'));\n" <> "      auto it = seen.find(body);\n" <> "      if(it==seen.end()){ seen.emplace(std::move(body), nm); std::cout << s; }\n" <> "      else { const std::string sig = s.substr(0, s.find(\" \"+nm+\"(\")); const std::string rt = sig.substr(sig.rfind(' ')+1);\n" <> "        std::cout << decor << \" \" << rt << \" \" << nm << \"(const " <> $ntRealT <> " *f) { return \" << it->second << \"(f); }\\n\"; } } }\n"
         ],
-        "  std::cout << \"}} // namespace " <> kns <> "::\" << hns << \"\\n\";\n",
+        "  std::cout << \"}} // namespace " <> kernelNs <> "::\" << hns << \"\\n\";\n",
         "  if(ntprof) std::fprintf(stderr,\"[num] emission: %.1f s\\n\", std::chrono::duration<double>(std::chrono::steady_clock::now()-tEmit).count());\n",
         "  return 0;\n}\n"]|>];
 
@@ -829,10 +832,10 @@ ntGenMainEmission[varFill_, nsInner_, kns_, fillArgSig_, complexQ_, hasDressed_,
    NT_GEN_NO_DEDUP=1 turns the dedup join off (I4): every occurrence is its own trace, nothing is
    merged, dropped or cached. It is the escape hatch and the control for the equivalence test, which
    must compare kernel VALUES: dedup changes GlobalEnv interning order and so renumbers every sN. *)
-emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kns_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False, mIdx_:-1] :=
-  Module[{nNet = Length[invNets], hasDressed = !FreeQ[invNets, _ntDressedCore],
+emitNumericGenerator[coreNets_, restScalars_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kernelNs_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False, mIdx_:-1] :=
+  Module[{nNet = Length[coreNets], hasDressed = !FreeQ[coreNets, _ntDressedCore],
           noDedup = ntEnvFlag["NT_GEN_NO_DEDUP"], sub, col, preambles, cse, joined, unitSrc, main, ntT},
-    sub = ntGenExpandSubTerms[invNets, invRest];
+    sub = ntGenExpandSubTerms[coreNets, restScalars];
     col = ntGenColourTables[colourNets, nNet];
     preambles = ntGenPreambles[hasDressed, col["MainDecls"], col["ChunkDefs"] =!= {}];
     cse = ntGenNetCSE[sub["DiracNetPool"], sub["LorNetPool"], sub["DiracNetIds"], sub["LorNetIds"]];
@@ -864,6 +867,6 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
             ntGenMainPhaseA[joined["nSub"], joined["nReused"], hasDressed, mIdx]["Text"],
             col["MainText"],
             phaseB["Text"],
-            ntGenMainEmission[ncomp["varFill"], nsInner, kns, fillArgSig, complexQ, hasDressed, crossCSE, mIdx, Length[groups]]["Text"]]];];
+            ntGenMainEmission[ncomp["varFill"], nsInner, kernelNs, fillArgSig, complexQ, hasDressed, crossCSE, mIdx, Length[groups]]["Text"]]];];
     ntLog["[prof] main() data tables: ", ntT, " s"];
     {preambles["Pre"], unitSrc["Units"], unitSrc["Decl"], main}];

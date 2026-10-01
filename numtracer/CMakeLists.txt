@@ -654,7 +654,7 @@ if(NUMTRACER_BUILD_TESTS)
   # suite silently keeps its previous coverage rather than failing on a missing dependency.
   find_program(NT_WOLFRAM_EXE NAMES wolfram wolframscript math)
   if(NT_WOLFRAM_EXE)
-    # Real/imaginary projection of a complex integrand: the ntIiSafeQ shape table (a
+    # Real/imaginary projection of a complex integrand: the ntImagSplitSafeQ shape table (a
     # silently-wrong-kernel guard), byte-identity of the one-pass ntRePartLinear against the
     # per-token-Coefficient formulation it replaced, and the multilinear route's exactness.
     add_test(NAME wolfram_complex_projection

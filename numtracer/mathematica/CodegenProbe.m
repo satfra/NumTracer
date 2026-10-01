@@ -1,6 +1,6 @@
 (* Code generation: the imaginary-part probe (ntProbeSource emits it, ntRunProbe builds and runs it
-   and writes the verdict header), bounded compiler-log reporting, and diagColPolys, the build-time
-   helper that folds group-diagonal dressed colour nets through the C++ engine.
+   and writes the verdict header), bounded compiler-log reporting, and ntFoldDiagColourNets, the
+   build-time helper that folds group-diagonal dressed colour nets through the C++ engine.
    Loaded by NumTracer.m via ntLoadPart, in the NumTracer`Private` context. *)
 
 (* ---- semantic complexQ: does the imaginary part actually vanish? ---------------------------
@@ -37,7 +37,7 @@ Options[ntProbeSource] = {"NPoints" -> 4000, "Tol" -> 1.*^-9, "TraceArrayDecl" -
    anything that prevents a verdict (compile, run or parse failure) aborts generation in ntRunProbe.
    A wrong verdict is an O(1) kernel error; an unnecessarily complex kernel is only slower. *)
 ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, headerFile_, drAtoms_List : {}, opts : OptionsPattern[]] :=
-  Module[{keepHeads, keepSyms, seedOf, argComb, stub, probeFull, probeProj, probeRePart, probeParams, probePre, fnFull, fnProj, fnRePart, drDecls, drFillArgs, randDecls, callArgs, src, np, tol, distOf},
+  Module[{keepHeads, keepSyms, seedOf, argComb, stub, probeFull, probePure, probeRePart, probeParams, probePre, fnFull, fnPure, fnRePart, drDecls, drFillArgs, randDecls, callArgs, src, np, tol, distOf},
     np = OptionValue["NPoints"];
     (* A float kernel's roundoff is ~1e-7 relative, so the double tolerance would read noise as a
        surviving Im. 1e-4 is still far below a genuine Im or a dropped term, which are O(1) relative. *)
@@ -62,7 +62,7 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
        e.g. `probeFull /. Complex[a_,b_] :> a` agrees with ntPureIntegrand only for a LINEAR integrand,
        and would certify a multilinear body that drops the −Im(A)·Im(B) legs. Stubbing leaves the trace
        tokens untouched, so the projections see the same tokens they will emit. *)
-    probeProj = ntPureIntegrand[probeFull];
+    probePure = ntPureIntegrand[probeFull];
     probeRePart = ntRePartIntegrand[probeFull];
     probeParams = (<|"Name" -> SymbolName[#], "Type" -> $ntRealT, "Const" -> True, "Reference" -> True|>)& /@ args;
     (* Dressed kernels: the generated `fill()` takes one extra `double dr_<id>` per dressing atom. The
@@ -90,7 +90,7 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
        [prof] body lines because this is pure verdict overhead. *)
     With[{ntT = First @ AbsoluteTiming[
     fnFull = FunKit`MakeCppFunction[probeFull, "Name" -> "probe_full", "Prefix" -> "static inline", "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> probeParams, "Body" -> probePre];
-    fnProj = FunKit`MakeCppFunction[probeProj, "Name" -> "probe_proj", "Prefix" -> "static inline", "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> probeParams, "Body" -> probePre];
+    fnPure = FunKit`MakeCppFunction[probePure, "Name" -> "probe_proj", "Prefix" -> "static inline", "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> probeParams, "Body" -> probePre];
     fnRePart = FunKit`MakeCppFunction[probeRePart, "Name" -> "probe_repart", "Prefix" -> "static inline", "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> probeParams, "Body" -> probePre];]},
       ntLog["[prof] ntProbeSource: 3 body lowerings: ", ntT, " s"]];
     (* the frame's angle arguments are named cos<n> (a cosine, [-1,1]) and phi<n> (an azimuth); match
@@ -132,7 +132,7 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
         ntReImAccessors["static inline"], "\n",
         fnFull,
         "\n",
-        fnProj,
+        fnPure,
         "\n",
         fnRePart,
         "\n",
@@ -233,7 +233,7 @@ ntRunProbe[srcFile_String, tracesDir_String, verdictFile_ : None, macro_ : None]
    probe), returning per net a list of terms {coeffRe, coeffIm, {dr, ...}} (a flat list of dressing
    ids, repetition = power). Reuses the numeric engine verbatim, so the per-component colour weights
    are byte-identical to the typed-out SU(N) tables — no Mathematica reimplementation of the algebra. *)
-diagColPolys[colnetStrs_, includeDir_] :=
+ntFoldDiagColourNets[colnetStrs_, includeDir_] :=
   Module[{cxx = resolveGenCxx[], src, cppFile, bin, rc, out, lines, res = {}, cur = Null, num},
     num[s_] := ToExpression[StringReplace[s, {"e+" -> "*^", "e-" -> "*^-", "e" -> "*^"}]];
     src =

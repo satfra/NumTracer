@@ -189,30 +189,7 @@ ntStageResult[label_String, keys_List, a_Association] :=
       Message[ntStageResult::unbound, label, First[bad], a[First[bad]]]; Abort[]];
     a];
 
-MakeNTKernel::eagernn = "compileLorentz: an eagerly-summed structure has a NON-NUMERIC per-structure scalar coefficient, which the emitted add(...) cannot carry (each summand is scaled by a numeric literal). The sum should have been distributed by expandBridges (DSL.m) or collected into an ntDressedNum. Offending sum:\n`1`";
-
-MakeNTKernel::tleak = "compileLorentz: un-lowered TENSOR structure reached the scalar fallthrough — it would be CForm'd into C++ as a bare scalar with its indices silently dropped (this is what caused the ZAAqbq metric leak). Every tensor head must be handled by lorentzNetStr or one of the Power/Times/Plus branches. Offending structure:\n`1`";
-
-MakeNTKernel::colleak = "compileColour: a factor of a constant SU(N) component is not one of the six group heads (ntSUNf/ntSUNDeltaAdj/ntSUNT/ntSUNDeltaFund/ntSUNDiag{Fund,Adj}) and would be emitted as raw Mathematica. A Plus means a colour/flavour sum missed compileColourSum; any other head means it is missing from the head registry ($ntHeads in DSL.m). Offending factor:\n`1`";
-
-(* NB: no backquoted code fragments in this string — a backquoted word is a StringForm SLOT, so
-   quoting an identifier that way makes the message itself fail to format (StringForm::sfr). *)
-
-MakeNTKernel::colrest = "splitColourGroups: SU(N) head(s) remain in a branch's Lorentz/Dirac remainder after the colour split and would be emitted as raw Mathematica. The split only sees BARE group-head factors at level 1; one inside a Power (a closed colour loop, deltaFund[N,i,j]^2) or an unexpanded Plus slips through. Offending head(s):\n`1`\nRemainder:\n`2`";
-
-MakeNTKernel::colpow = "compileColour: a colour/flavour SUM raised to the integer power `1`. Expanding it by repetition would duplicate the summands' index labels, so the same label would appear on 2k tensors and the et/SUNNet contraction would silently mis-pair them into a wrong number — and checkLabels has already run by this point, so nothing downstream would notice. (This is the colour analogue of NumTrace::bridgepow.) Refusing instead. Offending base:\n`2`";
-
-MakeNTKernel::tokleak = "ntProjectIntegrand: a scoped symbol survived the real/imaginary projection and would be emitted as a bare C++ identifier (which compiles). Either the stand-in for I survived a coefficient that is not polynomial in it, or a trace-token placeholder was not substituted back: an integrand shape the projection routing does not cover. Offending symbol(s):\n`1`";
-
-(* NB: no backquoted code fragments in these two strings either — see the note above. *)
-
-MakeNTKernel::cplxnest = "ntProjectIntegrand: a Complex sits below a head the real/imaginary split cannot traverse (typically a denominator such as the finite-density l0 + I muq). The split is exact only for coefficients polynomial in I; here it would silently drop the imaginary part of the denominator. Pass \"ComplexRuntimeProjection\" -> True to project at runtime instead. `1` offending subexpression(s):\n`2`";
-
-MakeNTKernel::toknest = "ntRePartLinear: a trace token in this summand is not a BARE factor of it — it sits inside a Power, or below some other head. The token-degree routing classified the summand as linear, but neither the factor-level scan here nor the Coefficient extraction it replaced can see such a token, so the whole summand would be dropped from the projected integrand: a missing term, with nothing downstream to notice. Offending summand:\n`1`";
-
 MakeNTKernel::cppleak = "`1`: the generated source still contains un-lowered Mathematica — the text `2` appears in it. Writing it would produce a file that either fails to compile or, worse, compiles into a silently wrong kernel. This means some expression reached the emitter without being turned into C++; the fragment above should identify which. Offending file:\n`3`";
-
-MakeNTKernel::adtype = "ntRuntimeParamType: `1` runtime parameter(s) named in ADParams were not typed auto (const double& instead of const auto&). The kernel would still compile and run, but its autodiff twin (AD_get.cc in the consumer) cannot bind autodiff::real. Usual cause: the AD name did not survive the ToString/SymbolName normalisation, or ADParams names something that is not a runtime parameter. Offending name(s) and their types:\n`2`";
 
 (* max chars of net-builder elements packed into ONE emitted function (see ntChunkDef). A single
    braced-init of a dense net is one huge basic block (slow compile, OOM) and materialises every

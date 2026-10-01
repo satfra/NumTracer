@@ -15,7 +15,7 @@
 
    WHAT IS PINNED, and what breaks if it regresses:
 
-     1. ntIiSafeQ — which coefficient shapes the I -> ii substitution may be applied to. This is a
+     1. ntImagSplitSafeQ — which coefficient shapes the I -> ii substitution may be applied to. This is a
         SILENT-WRONG-ANSWER guard, not a style check: Coefficient power-series expands anything that
         is not a polynomial in ii and returns the leading term, so "tr0"/(a + I b) projects to
         ntRe["tr0"]/a. At finite density that deletes muq from every quark propagator and the kernel
@@ -56,20 +56,20 @@ SetAttributes[abortsQ, HoldRest];
 abortsQ[expr_Hold, msg_] :=
   CheckAbort[Quiet[ReleaseHold[expr]; False, msg], True];
 
-Print["=== 1. ntIiSafeQ: which shapes the ii-substitution may be applied to ==="];
+Print["=== 1. ntImagSplitSafeQ: which shapes the ii-substitution may be applied to ==="];
 (* SAFE: a Complex itself, and anything built from Complexes by Times / Plus / non-negative integer
    Power — exactly the shapes Coefficient[·, ii, n] handles as a genuine polynomial. *)
-Scan[check["safe:   " <> ToString[InputForm[#]], ntIiSafeQ[#]] &,
+Scan[check["safe:   " <> ToString[InputForm[#]], ntImagSplitSafeQ[#]] &,
   {x*y, I*x*y, Complex[3, -2]*x, (1 + I a)*(2 + I b), I*(x + I y), (a + I b)^3,
    Zq/(l0 + Ep), 1/(a + b)^2}];
 (* UNSAFE: a Complex under a negative power (every denominator — the finite-density l0 + I muq) or
    under a non-rational head, where Coefficient silently returns a series leading term. *)
-Scan[check["unsafe: " <> ToString[InputForm[#]], ! ntIiSafeQ[#]] &,
+Scan[check["unsafe: " <> ToString[InputForm[#]], ! ntImagSplitSafeQ[#]] &,
   {1/(a + I b), 1/(a + I b)^2, Zq/(l0 + I muq + Ep), Sqrt[a + I b], Exp[I a],
    1/(a + I b) + 1/(c - I d)}];
 (* the message has to name the DENOMINATOR, not the whole summand it is buried in *)
-check["ntIiUnsafeParts isolates the offending factor",
-  ntIiUnsafeParts[Zq*dr1*"x"/(l0 + I muq + Ep)] === {1/(Ep + l0 + I muq)}];
+check["ntImagSplitUnsafeParts isolates the offending factor",
+  ntImagSplitUnsafeParts[Zq*dr1*"x"/(l0 + I muq + Ep)] === {1/(Ep + l0 + I muq)}];
 
 Print[""];
 Print["=== 2. one-pass ntRePartLinear === the per-token-Coefficient reference ==="];

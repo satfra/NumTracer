@@ -10,26 +10,31 @@
    `lorentzElemStr` emits the same head as the `Elem` aggregate that a collected Dirac slot's
    factor nets take instead. *)
 
+(* C++ argument lists. The separators are byte-load-bearing: ", " in the Lorentz dialect, "," in
+   the SU(N) one. *)
+ntLorArgs[xs___] := StringRiffle[ToString /@ {xs}, ", "];
+ntSunArgs[xs___] := StringRiffle[ToString /@ {xs}, ","];
+
 lorentzNetStr[ntMetric[mu_, nu_], ids_, env_, nonzeroCompMask_] :=
-  "lmetric<" <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ">()";
+  "lmetric<" <> ntLorArgs[ids[mu], ids[nu]] <> ">()";
 
 lorentzNetStr[ntVec[q_, mu_], ids_, env_, nonzeroCompMask_] :=
-  "lvec<" <> ToString[ids[mu]] <> ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[nonzeroCompMask[q]] <> ">()";
+  "lvec<" <> ntLorArgs[ids[mu], env[q]["Base"], nonzeroCompMask[q]] <> ">()";
 
 lorentzNetStr[ntTransProj[q_, mu_, nu_], ids_, env_, nonzeroCompMask_] :=
-  "tproj<" <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[nonzeroCompMask[q]] <> ", " <> ToString[env[q]["Inv"]] <> ">()";
+  "tproj<" <> ntLorArgs[ids[mu], ids[nu], env[q]["Base"], nonzeroCompMask[q], env[q]["Inv"]] <> ">()";
 
 lorentzNetStr[ntLongProj[q_, mu_, nu_], ids_, env_, nonzeroCompMask_] :=
-  "lproj<" <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[nonzeroCompMask[q]] <> ", " <> ToString[env[q]["Inv"]] <> ">()";
+  "lproj<" <> ntLorArgs[ids[mu], ids[nu], env[q]["Base"], nonzeroCompMask[q], env[q]["Inv"]] <> ">()";
 
 lorentzNetStr[ntMagneticProj[q_, mu_, nu_], ids_, env_, nonzeroCompMask_] :=
-  "mproj<" <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[nonzeroCompMask[q]] <> ", " <> ToString[env[q]["InvS"]] <> ">()";
+  "mproj<" <> ntLorArgs[ids[mu], ids[nu], env[q]["Base"], nonzeroCompMask[q], env[q]["InvS"]] <> ">()";
 
 lorentzNetStr[ntElectricProj[q_, mu_, nu_], ids_, env_, nonzeroCompMask_] :=
-  "eproj<" <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[nonzeroCompMask[q]] <> ", " <> ToString[env[q]["Inv"]] <> ", " <> ToString[env[q]["InvS"]] <> ">()";
+  "eproj<" <> ntLorArgs[ids[mu], ids[nu], env[q]["Base"], nonzeroCompMask[q], env[q]["Inv"], env[q]["InvS"]] <> ">()";
 
 lorentzNetStr[ntEpsilon[a_, b_, c_, d_], ids_, env_, nonzeroCompMask_] :=
-  "leps<" <> ToString[ids[a]] <> ", " <> ToString[ids[b]] <> ", " <> ToString[ids[c]] <> ", " <> ToString[ids[d]] <> ">()";
+  "leps<" <> ntLorArgs[ids[a], ids[b], ids[c], ids[d]] <> ">()";
 
 (* A Lorentz factor as a single `network::Elem{...}` literal (for a collected Dirac slot's per-option
    `netFacs`). Mirrors lorentzNetStr's id/momentum/atom resolution but emits the Elem aggregate the
@@ -37,19 +42,19 @@ lorentzNetStr[ntEpsilon[a_, b_, c_, d_], ids_, env_, nonzeroCompMask_] :=
    {kind, a, b, vid, inv, vlc, c, d, invS}. A projector's momentum rides `vid = env Base` (elem_to_nelem
    reconstructs it as {{1.0, vid}}); a vector's rides `vlc`. *)
 lorentzElemStr[ntMetric[mu_, nu_], ids_, env_] :=
-  "Elem{Elem::Metric, " <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ", -1, -1, {}}";
+  "Elem{" <> ntLorArgs["Elem::Metric", ids[mu], ids[nu], -1, -1, "{}"] <> "}";
 lorentzElemStr[ntVec[q_, mu_], ids_, env_] :=
-  "Elem{Elem::Vector, " <> ToString[ids[mu]] <> ", -1, -1, -1, {{1.0, " <> ToString[env[q]["Base"]] <> "}}}";
+  "Elem{" <> ntLorArgs["Elem::Vector", ids[mu], -1, -1, -1, "{{" <> ntLorArgs["1.0", env[q]["Base"]] <> "}}"] <> "}";
 lorentzElemStr[ntTransProj[q_, mu_, nu_], ids_, env_] :=
-  "Elem{Elem::ProjT, " <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[env[q]["Inv"]] <> ", {}}";
+  "Elem{" <> ntLorArgs["Elem::ProjT", ids[mu], ids[nu], env[q]["Base"], env[q]["Inv"], "{}"] <> "}";
 lorentzElemStr[ntLongProj[q_, mu_, nu_], ids_, env_] :=
-  "Elem{Elem::ProjL, " <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[env[q]["Inv"]] <> ", {}}";
+  "Elem{" <> ntLorArgs["Elem::ProjL", ids[mu], ids[nu], env[q]["Base"], env[q]["Inv"], "{}"] <> "}";
 lorentzElemStr[ntMagneticProj[q_, mu_, nu_], ids_, env_] :=
-  "Elem{Elem::ProjM, " <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ", " <> ToString[env[q]["Base"]] <> ", -1, {}, 0, 0, " <> ToString[env[q]["InvS"]] <> "}";
+  "Elem{" <> ntLorArgs["Elem::ProjM", ids[mu], ids[nu], env[q]["Base"], -1, "{}", 0, 0, env[q]["InvS"]] <> "}";
 lorentzElemStr[ntElectricProj[q_, mu_, nu_], ids_, env_] :=
-  "Elem{Elem::ProjE, " <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[env[q]["Inv"]] <> ", {}, 0, 0, " <> ToString[env[q]["InvS"]] <> "}";
+  "Elem{" <> ntLorArgs["Elem::ProjE", ids[mu], ids[nu], env[q]["Base"], env[q]["Inv"], "{}", 0, 0, env[q]["InvS"]] <> "}";
 lorentzElemStr[ntEpsilon[a_, b_, c_, d_], ids_, env_] :=
-  "Elem{Elem::Epsilon, " <> ToString[ids[a]] <> ", " <> ToString[ids[b]] <> ", -1, -1, {}, " <> ToString[ids[c]] <> ", " <> ToString[ids[d]] <> "}";
+  "Elem{" <> ntLorArgs["Elem::Epsilon", ids[a], ids[b], -1, -1, "{}", ids[c], ids[d]] <> "}";
 
 scaleStr[str_, 1] := str;
 
@@ -90,6 +95,10 @@ ntCanonIds[e_, ids_, env_] :=
   e /. If[ids === $ntCanonIdsSrc,
          $ntCanonRules,
          Normal[KeyDrop[ids, Keys[env]]]];
+
+MakeNTKernel::eagernn = "compileLorentz: an eagerly-summed structure has a NON-NUMERIC per-structure scalar coefficient, which the emitted add(...) cannot carry (each summand is scaled by a numeric literal). The sum should have been distributed by expandBridges (DSL.m) or collected into an ntDressedNum. Offending sum:\n`1`";
+
+MakeNTKernel::tleak = "compileLorentz: un-lowered TENSOR structure reached the scalar fallthrough — it would be CForm'd into C++ as a bare scalar with its indices silently dropped (this is what caused the ZAAqbq metric leak). Every tensor head must be handled by lorentzNetStr or one of the Power/Times/Plus branches. Offending structure:\n`1`";
 
 (* Lorentz expression -> {netString, scalar}. MEMOISED (recursion included): the same projector
    structures recur across every diagram and branch, so calls far outnumber distinct arguments.
@@ -133,17 +142,18 @@ compileLorentzBody[e_, ids_, env_, nonzeroCompMask_] := Which[
 (* ---- colour factor patterns (used by splitColourGroups and compileColour) -------------------- *)
 
 (* the SU(N) heads of $ntHeads that reach codegen *)
-ctHeads = Blank @* ntHeadSym /@ Select[ntSectorHeads[{"Adjoint", "Fundamental"}], ! TrueQ[#["Rewritten"]] &];
-$ctHeadPat = Alternatives @@ ctHeads;
+$colourHeadPat =
+  Alternatives @@ (Blank @* ntHeadSym /@ Select[ntSectorHeads[{"Adjoint", "Fundamental"}], ! TrueQ[#["Rewritten"]] &]);
 
-colourEntangledQ[e_] := !FreeQ[e, $ctHeadPat];
+(* any colour/flavour head anywhere in e *)
+hasColourQ[e_] := !FreeQ[e, $colourHeadPat];
 
 (* A group head OR an integer power of one. The colour/rest split is a level-1 Cases/DeleteCases
    over the factor list, and a closed colour/flavour loop yields deltaFund[N,i,j]^2 (= N), a Power,
    not a head. Matched by the head alone it would stay in the Lorentz remainder and leak into the
    C++; collected here, compileColour expands it into repeated SUNNet factors. *)
 
-ctFac = Alternatives[$ctHeadPat, Power[$ctHeadPat, _Integer?Positive]];
+$colourFactorPat = Alternatives[$colourHeadPat, Power[$colourHeadPat, _Integer?Positive]];
 
 mergeColNet["SUNNet{}", b_] := b;
 
@@ -383,7 +393,12 @@ foldDiracSigma[factors_List] := Module[{commPlus, recognized},
         sums each group's branches at runtime. *)
 
 (* a Plus that mixes colour with Dirac structure: expanded into branches *)
-scgEntangledQ[x_] := Head[x] === Plus && (colourEntangledQ[x] || !FreeQ[x, _ntGamma | _ntGamma5 | _ntC | _ntDeltaDirac]);
+scgEntangledQ[x_] := Head[x] === Plus && (hasColourQ[x] || !FreeQ[x, _ntGamma | _ntGamma5 | _ntC | _ntDeltaDirac]);
+
+(* NB: no backquoted code fragments in message strings: a backquoted word is a StringForm SLOT, so
+   quoting an identifier that way makes the message itself fail to format (StringForm::sfr). *)
+
+MakeNTKernel::colrest = "splitColourGroups: SU(N) head(s) remain in a branch's Lorentz/Dirac remainder after the colour split and would be emitted as raw Mathematica. The split only sees BARE group-head factors at level 1; one inside a Power (a closed colour loop, deltaFund[N,i,j]^2) or an unexpanded Plus slips through. Offending head(s):\n`1`\nRemainder:\n`2`";
 
 splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
   Module[{factors = foldDiracSigma[factors0], needExpand, keepAll, keepCol, keepRest, keepColLeakQ, keepDiracQ,
@@ -392,9 +407,9 @@ splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
     keepAll = Select[factors, !scgEntangledQ[#]&];
     (* keepAll is a factor of EVERY branch: split it into colour and remainder, and test the remainder,
        once per call rather than once per branch *)
-    keepCol = Cases[keepAll, ctFac];
-    keepRest = DeleteCases[keepAll, ctFac];
-    keepColLeakQ = !FreeQ[keepRest, $ctHeadPat];
+    keepCol = Cases[keepAll, $colourFactorPat];
+    keepRest = DeleteCases[keepAll, $colourFactorPat];
+    keepColLeakQ = !FreeQ[keepRest, $colourHeadPat];
     keepDiracQ = !FreeQ[keepRest, $diracHeadPat];
     (* small: product of the entangled Pluses only *)
     distributed = Expand[Times @@ needExpand];
@@ -406,14 +421,14 @@ splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
     branchNets =
       Function[term,
           Module[{termFactors = If[Head[term] === Times, List @@ term, {term}], termRest, colProd, rest},
-            colProd = Times @@ Join[Cases[termFactors, ctFac], keepCol];
-            termRest = DeleteCases[termFactors, ctFac];
+            colProd = Times @@ Join[Cases[termFactors, $colourFactorPat], keepCol];
+            termRest = DeleteCases[termFactors, $colourFactorPat];
             (* gammas + Lorentz + numeric coeff (no colour) *)
             rest = Join[termRest, keepRest];
             (* Level-1 DeleteCases only strips bare colour factors; one buried in an unexpanded Plus
                would leak into the C++ via lorentzNetStr. Fail here, where the offender is identifiable. *)
-            If[keepColLeakQ || !FreeQ[termRest, $ctHeadPat],
-              Message[MakeNTKernel::colrest, Short[DeleteDuplicates @ Cases[rest, $ctHeadPat, {0, Infinity}], 6], Short[rest, 8]];
+            If[keepColLeakQ || !FreeQ[termRest, $colourHeadPat],
+              Message[MakeNTKernel::colrest, Short[DeleteDuplicates @ Cases[rest, $colourHeadPat, {0, Infinity}], 6], Short[rest, 8]];
               Abort[]];
             {
               colProd,
@@ -447,25 +462,27 @@ splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
    LorentzEnv), so the rank is written once, not on every factor. *)
 
 colourFacStr[ntSUNf[n_, a_, b_, c_], ids_] :=
-  "sun" <> ToString[n] <> ".f(" <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> "," <> ToString[ids[c]] <> ")";
+  "sun" <> ToString[n] <> ".f(" <> ntSunArgs[ids[a], ids[b], ids[c]] <> ")";
 
 colourFacStr[ntSUNDeltaAdj[n_, a_, b_], ids_] :=
-  "sun" <> ToString[n] <> ".deltaAdj(" <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> ")";
+  "sun" <> ToString[n] <> ".deltaAdj(" <> ntSunArgs[ids[a], ids[b]] <> ")";
 
 colourFacStr[ntSUNT[n_, a_, i_, j_], ids_] :=
-  "sun" <> ToString[n] <> ".T(" <> ToString[ids[a]] <> "," <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> ")";
+  "sun" <> ToString[n] <> ".T(" <> ntSunArgs[ids[a], ids[i], ids[j]] <> ")";
 
 colourFacStr[ntSUNDeltaFund[n_, i_, j_], ids_] :=
-  "sun" <> ToString[n] <> ".deltaFund(" <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> ")";
+  "sun" <> ToString[n] <> ".deltaFund(" <> ntSunArgs[ids[i], ids[j]] <> ")";
 
 (* per-component diagonal dressings: parse the spec into a per-component dressing-id vector
    (component → dr, -1 = drop; 1-based physics indices) and emit a diag factor carrying it. *)
 
 colourFacStr[ntSUNDiagFund[n_, i_, j_, spec_], ids_] :=
-  "sun" <> ToString[n] <> ".diagFund(" <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> "," <> diagVecStr[diagComp2Dr[spec, n]] <> ")";
+  "sun" <> ToString[n] <> ".diagFund(" <> ntSunArgs[ids[i], ids[j], diagVecStr[diagComp2Dr[spec, n]]] <> ")";
 
 colourFacStr[ntSUNDiagAdj[n_, a_, b_, spec_], ids_] :=
-  "sun" <> ToString[n] <> ".diagAdj(" <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> "," <> diagVecStr[diagComp2Dr[spec, n^2 - 1]] <> ")";
+  "sun" <> ToString[n] <> ".diagAdj(" <> ntSunArgs[ids[a], ids[b], diagVecStr[diagComp2Dr[spec, n^2 - 1]]] <> ")";
+
+MakeNTKernel::colleak = "compileColour: a factor of a constant SU(N) component is not one of the six group heads (ntSUNf/ntSUNDeltaAdj/ntSUNT/ntSUNDeltaFund/ntSUNDiag{Fund,Adj}) and would be emitted as raw Mathematica. A Plus means a colour/flavour sum missed compileColourSum; any other head means it is missing from the head registry ($ntHeads in DSL.m). Offending factor:\n`1`";
 
 (* CATCH-ALL, and it must stay LAST: the six rules above are the only lowerable colour factors.
    Without it a non-matching factor returns unevaluated and StringRiffle would ToString it into the
@@ -478,6 +495,11 @@ colourFacStr[e_, _] := (
 
 (* Constant colour product -> {colourNetString, factoredScalar}. NOT memoised: like compileDirac
    (see below), caching it was measured as a net loss. *)
+
+(* NB: no backquoted code fragments in message strings: a backquoted word is a StringForm SLOT, so
+   quoting an identifier that way makes the message itself fail to format (StringForm::sfr). *)
+
+MakeNTKernel::colpow = "compileColour: a colour/flavour SUM raised to the integer power `1`. Expanding it by repetition would duplicate the summands' index labels, so the same label would appear on 2k tensors and the et/SUNNet contraction would silently mis-pair them into a wrong number — and checkLabels has already run by this point, so nothing downstream would notice. (This is the colour analogue of NumTrace::bridgepow.) Refusing instead. Offending base:\n`2`";
 
 compileColour[e_, ids_] := Module[
     {
@@ -500,7 +522,7 @@ compileColour[e_, ids_] := Module[
        contracts the shared indices; colourFacStr handles a single head, not Power[head,k].
        Restricted to a BARE group head: repeating a Plus or Times duplicates labels instead of
        closing a self-trace. *)
-    parts = parts /. Power[b_, k_Integer?Positive] /; MatchQ[b, $ctHeadPat] :> Sequence @@ ConstantArray[b, k];
+    parts = parts /. Power[b_, k_Integer?Positive] /; MatchQ[b, $colourHeadPat] :> Sequence @@ ConstantArray[b, k];
     sc = Select[parts, scalarQ];
     tn = Select[parts, !scalarQ[#]&];
     {"SUNNet{" <> StringRiffle[colourFacStr[#, ids]& /@ tn, ", "] <> "}", Times @@ sc}];
