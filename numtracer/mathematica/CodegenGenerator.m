@@ -795,7 +795,9 @@ ntGenMainEmission[varFill_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDres
 (* Unqualified fma/sqrt in a float header would otherwise bind the global double ::fma/::sqrt on
    the host, silently running that arithmetic in double. *)
         If[ntSingleQ[], "  std::cout << \"using std::fma;\\nusing std::sqrt;\\n\";\n", ""],
-        "  std::cout << \"template<int N> \" << decor << \" " <> $ntRealT <> " powr(" <> $ntRealT <> " x){ " <> $ntRealT <> " r=" <> If[ntSingleQ[], "1.f", "1.0"] <> "; for(int i=0;i<N;++i) r*=x; return r; }\\n\";\n",
+(* fill() emits negative powers, e.g. powr<-1>(1 - ...) in certain frames or situations:
+   the helper must invert for N < 0, or every such factor silently becomes 1. *)
+        "  std::cout << \"template<int N> \" << decor << \" " <> $ntRealT <> " powr(" <> $ntRealT <> " x){ " <> $ntRealT <> " r=" <> If[ntSingleQ[], "1.f", "1.0"] <> "; for(int i=0;i<(N<0?-N:N);++i) r*=x; return N<0?" <> If[ntSingleQ[], "1.f", "1.0"] <> "/r:r; }\\n\";\n",
         "  emit_env_layout(std::cout, genv);\n",
         "  std::cout << \"static inline constexpr int nenv = \" << genv.syms.size() << \";\\n\";\n",
 (* The proven verdict, as a compile-time constant the kernel class picks up. Always emitted for a
