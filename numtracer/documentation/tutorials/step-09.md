@@ -17,7 +17,7 @@ to study are in the emitted source.
 
 ### The full option list
 
-From `Codegen.m`:
+From `CodegenKernel.m`:
 
 ```
 "ComputeType","Name","Namespace","Dressings","ScalarParams","ADParams","ParameterOrder",
@@ -58,7 +58,7 @@ The options not covered by a later step:
 :class: note
 The option set is not frozen — `GlobalCollect` and `NumericContract` were options and are now
 unconditional behaviour, and `ShareInterpolatorIndex` / `HoistLoopConstLookups` are recent
-additions. If this table and `Options[MakeNTKernel]` in `Codegen.m` disagree, believe `Codegen.m`.
+additions. If this table and `Options[MakeNTKernel]` in `CodegenKernel.m` disagree, believe `CodegenKernel.m`.
 The *listings* on this page cannot go stale — they are pulled from the script that runs — but prose
 about a specific option can.
 ```

@@ -10,8 +10,6 @@
    scalar args. Composite momenta resolve by list arithmetic, so a difference like
    q1 - ql is handled automatically. *)
 
-(* Four components of a (possibly composite) momentum in the frame. *)
-
 resolveComponents::zeroMomentum = "A momentum in the frame resolved to `1` instead of a list of four \
 components. This means a tensor leaf carries the ZERO four-vector -- almost always because a \
 kinematic substitution (p -> 0 for a p^2-coefficient extraction, a soft-meson slice, ...) was \
@@ -19,12 +17,11 @@ applied to an expression that still contained a momentum-dependent PROJECTOR. tr
 0/0, so there is nothing sensible to resolve. Keep the projector out of the substitution (subtract \
 inside the diagram only) or pick a frame in which the leg is nonzero.";
 
+(* Four components of a (possibly composite) momentum in the frame. *)
 resolveComponents[q_, frame_] :=
   Module[{c = Simplify[q /. Normal[frame]]},
-(* Guard rather than let a bare 0 travel on: downstream this becomes `mpcpp /@ 0`, which returns the
-   INTEGER 0 where a C++ string was expected, and the whole generator source degenerates into one
-   unevaluated StringJoin. The symptom is then a StringTake::strse plus a several-hundred-line dump
-   of the half-built source -- true, but useless. Fail here, where the cause is still visible. *)
+    (* Fail here, where the cause is visible: a bare 0 travelling on becomes `mpcpp /@ 0`, an integer
+       where a C++ string is expected, and surfaces much later as an unreadable StringJoin failure. *)
     If[! (ListQ[c] && Length[c] === 4),
       Message[resolveComponents::zeroMomentum, c];
       Abort[]];
@@ -40,29 +37,23 @@ resolveComponents[q_, frame_] :=
    chooses the vector tags (here q1,q2,q3,ql) and uses the same in its DSL network. *)
 
 (* One external direction + loop: q1 along axis 0, l in the 0-1 plane. (Zc / ZA) *)
-
 propFrame[p_, l1_, cos1_, q1_, ql_] :=
   <|q1 -> p {1, 0, 0, 0}, ql -> l1 {cos1, Sqrt[1 - cos1^2], 0, 0}|>;
 
 (* Three externals at the symmetric point + loop with two angles. (A3) *)
-
 sp3Frame[p_, l1_, cos1_, cos2_, q1_, q2_, q3_, ql_] :=
   <|q1 -> p {1, 0, 0, 0}, q2 -> p {-1/2, Sqrt[3] / 2, 0, 0}, q3 -> p {-1/2, -Sqrt[3] / 2, 0, 0}, ql -> l1 {cos1, Sqrt[1 - cos1^2] cos2, Sqrt[(1 - cos1^2) (1 - cos2^2)], 0}|>;
 
 (* Three externals in a GENERAL configuration + loop with two angles.
 
-   sp3Frame pins the symmetric point (|p_i| all equal, p_i.p_j = -p^2/2), which is a MEASURE-ZERO
-   slice of the 3-point phase space — and some tensor bases are degenerate exactly there. The full
-   AqbqDirect basis is the case in point: its 12 structures are linearly DEPENDENT at the symmetric
-   point (Det[TBGetMetric["AqbqDirect"]] = 0), so its inverse metric is 0/0 and every dual projector
-   built from it comes out Indeterminate. A basis-orthonormality check must therefore be traced in a
-   GENERAL frame, or it is only testing the tracer on a special point where the algebra degenerates.
+   Some tensor bases are degenerate at the symmetric point (e.g. the 12 AqbqDirect structures are
+   linearly dependent there, so their dual projectors are 0/0). A basis-orthonormality check must
+   therefore be traced in a GENERAL frame.
 
    Two independent external magnitudes p1m, p2m and the angle cosP between them; the third leg is
    fixed by momentum conservation q3 = -(q1+q2), so |q3| varies independently of |q1|,|q2|. The loop
    keeps sp3Frame's parametrisation (cos1 to axis 0, cos2 in the 0-1 plane). Setting
    p1m == p2m and cosP == -1/2 recovers the symmetric point exactly. *)
-
 gen3Frame[p1m_, p2m_, cosP_, l1_, cos1_, cos2_, q1_, q2_, q3_, ql_] :=
   Module[{v1, v2},
     v1 = p1m {1, 0, 0, 0};
@@ -79,18 +70,20 @@ gen3Frame[p1m_, p2m_, cosP_, l1_, cos1_, cos2_, q1_, q2_, q3_, ql_] :=
    perpendicular to q1, spanned by the orthonormal perpA,perpB below). This reproduces
    the oracle's DeclareSymmetricPoints4DP4 loop-external cosines cosl1p{1..4} exactly
    (verified against SP4Defs). *)
-
 sp4Frame[p_, l1_, cos1_, cos2_, phi_, q1_, q2_, q3_, q4_, ql_] :=
   Module[{v1, v2, v3, v4, perpA, perpB, sin1, sin2, loopDir},
+    (* v1..v4: tetrahedron vertices *)
     v1 = {1, 1, 1} / Sqrt[3];
     v2 = {1, -1, -1} / Sqrt[3];
     v3 = {-1, 1, -1} / Sqrt[3];
-    v4 = {-1, -1, 1} / Sqrt[3];(* tetrahedron vertices *)
+    v4 = {-1, -1, 1} / Sqrt[3];
+    (* perpA, perpB: orthonormal, perpendicular to v1 *)
     perpA = {2, -1, -1} / Sqrt[6];
-    perpB = {0, 1, -1} / Sqrt[2];(* orthonormal, perpendicular to v1 *)
+    perpB = {0, 1, -1} / Sqrt[2];
     sin1 = Sqrt[1 - cos1^2];
     sin2 = Sqrt[1 - cos2^2];
-    loopDir = cos2 v1 + sin2 (Cos[phi] perpA + Sin[phi] perpB); (* loop in-plane direction *)
+    (* loop in-plane direction *)
+    loopDir = cos2 v1 + sin2 (Cos[phi] perpA + Sin[phi] perpB);
     <|q1 -> p Append[v1, 0], q2 -> p Append[v2, 0], q3 -> p Append[v3, 0], q4 -> p Append[v4, 0], ql -> l1 Append[sin1 loopDir, cos1]|>
   ];
 
@@ -103,7 +96,6 @@ sp4Frame[p_, l1_, cos1_, cos2_, phi_, q1_, q2_, q3_, q4_, ql_] :=
    magnitude l1 making angle cos1 with the external spatial momentum (azimuthal symmetry puts it in
    the 1-2 plane, slot 3 unused). This is the finite-T analogue of propFrame, with the temporal
    components no longer zero — so sps/vec[·,0] and the electric/magnetic projectors are meaningful. *)
-
 propFrameFT[p0_, p_, l0_, l1_, cos1_, pSym_, lSym_] :=
   <|pSym -> {p0, p, 0, 0}, lSym -> {l0, l1 cos1, l1 Sqrt[1 - cos1^2], 0}|>;
 
@@ -123,14 +115,13 @@ propFrameFT[p0_, p_, l0_, l1_, cos1_, pSym_, lSym_] :=
    FormTracer kernel that used those declarations.
 
    Note the loop's spatial part is a UNIT 3-vector times l1 -- Sum_{i=1..3} U_i^2 = 1 -- which is
-   precisely the property unitLoopSpatialQ / unitLoopMixedFrameSpec in Codegen.m need to collapse
+   precisely the property unitLoopSpatialQ / unitLoopMixedFrameSpec in CodegenFrames.m need to collapse
    the bare-loop denominator to the two-term l0^2 + l1^2. Do not reparametrise the loop in a way
    that breaks that identity (e.g. by inlining a non-polar direction), or the emitted traces blow
    up. Slot 0 is temporal throughout, slots 1..3 spatial. *)
 
 (* Three externals at the spatial symmetric point (120 degrees in the spatial 1-2 plane) + loop
    with polar angle cos1 (against the spatial 3-axis) and azimuth phi. (ZAcbc / ZA3) *)
-
 sp3FrameFT[p0s_List, p_, l0_, l1_, cos1_, phi_, q1_, q2_, q3_, ql_] :=
   <|q1 -> {p0s[[1]], p, 0, 0},
     q2 -> {p0s[[2]], -p/2, p Sqrt[3]/2, 0},
@@ -144,9 +135,9 @@ sp3FrameFT[p0s_List, p_, l0_, l1_, cos1_, phi_, q1_, q2_, q3_, ql_] :=
    and hence a THIRD loop angle -- four SPATIAL vectors summing to zero fit in three dimensions, so
    the finite-T ZA4 kernel needs only (cos1, phi) plus the Matsubara variable. That is why the
    finite-T ZA4 uses Integrator_fT_p2_4D_2ang, not a 3-angle integrator. *)
-
 sp4FrameFT[p0s_List, p_, l0_, l1_, cos1_, phi_, q1_, q2_, q3_, q4_, ql_] :=
-  Module[{s = 2 Sqrt[2]/3},(* Sin[ArcCos[-1/3]] *)
+  (* s = Sin[ArcCos[-1/3]] *)
+  Module[{s = 2 Sqrt[2]/3},
     <|q1 -> {p0s[[1]], 0, 0, p},
       q2 -> {p0s[[2]], p s, 0, -p/3},
       q3 -> {p0s[[3]], -p s/2, p s Sqrt[3]/2, -p/3},
@@ -173,7 +164,6 @@ sp4FrameFT[p0s_List, p_, l0_, l1_, cos1_, phi_, q1_, q2_, q3_, q4_, ql_] :=
    the frame's ordinary list arithmetic.
 
    `shift` is added to component 0 only; passing -pi T gives the other sign convention. *)
-
 frameShiftedLoop[frame_, lSym_, lfSym_, shift_] :=
   Join[frame, <|lfSym -> MapAt[# + shift &, frame[lSym], 1]|>];
 
@@ -184,7 +174,6 @@ frameShiftedLoop[frame_, lSym_, lfSym_, shift_] :=
    part resolves its momenta through the frame while the scalar dressings go through AngleDefs, and
    if the two disagree the kernel is silently wrong at every momentum -- nothing downstream compares
    them. *)
-
 frameSpatialCosines[frame_, ql_, qs_List, p_, l1_] :=
   MapIndexed[
     Symbol["cosl1p" <> ToString[First[#2]]] ->

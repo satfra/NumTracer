@@ -41,7 +41,7 @@ template <Cx C> struct Lit {};   // e.g. Lit<Cx{0,1}> is the imaginary unit i
 `Lit<C>` is an empty type whose only job is to carry a `Cx` value as a template argument. The
 code generator uses it to pass scalar coefficients into the emitted helper templates: a diagram's
 numeric coefficient is written as `numtracer::Lit<Cx{…}>` and recovered by a small trait
-specialisation in the generator program (`litco`/`sc<L>`, emitted by `mathematica/Codegen.m`).
+specialisation in the generator program (`litco`/`sc<L>`, emitted by `mathematica/CodegenGenerator.m`).
 
 ```{note}
 `Lit` is *only* a constant carrier — it is not an expression algebra. The contraction itself runs

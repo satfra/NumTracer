@@ -1,6 +1,6 @@
 #!/usr/bin/env wolframscript
 (* Unit gate for the C++ TYPE given to each runtime kernel parameter — ntRuntimeParamType and
-   ntAssertADTyped in mathematica/Codegen.m.
+   ntAssertADTyped in mathematica/CodegenKernel.m.
 
    WHY IT EXISTS. An AD-flagged scalar must be emitted `const auto&`, not `const double&`: FunKit's
    MakeParameterString turns "auto" into an abbreviated function template, and that is the only
@@ -60,7 +60,7 @@ check[label_, cond_] := (
   Print[If[TrueQ[cond], "  PASS  ", "  FAIL  "], label];
   If[! TrueQ[cond], $fail++]);
 
-(* Abort[] is how every guard in Codegen.m reports; CheckAbort turns that into a value so one
+(* Abort[] is how every guard in Codegen*.m reports; CheckAbort turns that into a value so one
    refusal does not tear down the rest of the file. Quiet suppresses only the message we expect.
    HoldRest is load-bearing: without it `MakeNTKernel::adtype` evaluates to the message TEXT before
    Quiet ever sees it, Quiet rejects it (Quiet::mgre) and the abort is not caught — the check then

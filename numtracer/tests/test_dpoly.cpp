@@ -655,7 +655,7 @@ int main()
     nm::DPoly ref = env.numeric_value_dressed_netval(chain, slots, lor, comp, {});
 
     // lever (b): enumerate the structural combinations, contract each to a PLAIN MPoly, and carry the
-    // dressing (coeff → sc, atoms → dmono) exactly as Codegen.m does. Then fold_net_dressed reassembles.
+    // dressing (coeff → sc, atoms → dmono) exactly as Codegen*.m does. Then fold_net_dressed reassembles.
     std::vector<nm::MPoly> T;
     std::vector<int> sidx;
     std::vector<Cx> sc;

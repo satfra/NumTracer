@@ -1,5 +1,5 @@
 #!/usr/bin/env wolframscript
-(* Spinor-loop ORIENTATION guard (Codegen.m: orderDiracFacs, DSL.m: diracSlotDecompose).
+(* Spinor-loop ORIENTATION guard (CodegenNets.m: orderDiracFacs, DSL.m: diracSlotDecompose).
 
    A closed spinor loop is emitted as a left-to-right 4x4 MATRIX PRODUCT tr(M1..Mn) — that collapse
    is what makes phase A affordable — and a matrix product has an ORDER, which orderDiracFacs
@@ -41,7 +41,7 @@ check["forward loop: nothing marked",
    closures traverse EVERY factor backwards for exactly this reason. It costs nothing, because
    reversing a closed gamma loop is the charge-conjugation identity: tr(Mn..M1) = tr(M1^T..Mn^T) and
    gamma_mu^T = C^-1 (-gamma_mu) C, so a reversal is worth (-1)^(#gamma) — and any trace with an odd
-   gamma count already vanishes by the parity rule applied elsewhere in Codegen.m. (gamma5 and the
+   gamma count already vanishes by the parity rule applied elsewhere in Codegen*.m. (gamma5 and the
    identity transpose with a PLUS sign and do not enter that count.) So the engine has ALWAYS relied
    on this identity implicitly; a guard keyed on direction rather than on mixture would break every
    meson flow in the tree. Two tokens: the delta connector carries none. *)

@@ -1,6 +1,6 @@
 #!/usr/bin/env wolframscript
 (* Unit gate for the codegen EMISSION GUARDS and the stage-handoff contract in
-   mathematica/Codegen.m. Symbolic only — no generation, no C++, no compile — so it runs in a plain
+   mathematica/Codegen*.m. Symbolic only — no generation, no C++, no compile — so it runs in a plain
    `ctest` in about a second, unlike codegen_regen which takes tens of minutes behind an opt-in flag
    and is therefore not run while editing.
 

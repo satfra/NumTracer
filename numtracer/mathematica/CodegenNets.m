@@ -1,12 +1,14 @@
+(* CodegenNets.m — net builders: lower one diagram component (Lorentz tensors, SU(N) colour/flavour
+   factors, Dirac chains, dressed numerators, collected Dirac slots) to the C++ net literals
+   (NetVal builders, SUNNet, DiracNet, DSlotOpt) that the emitted generator contracts numerically.
+   Loaded by NumTracer.m via ntLoadPart, in the NumTracer`Private` context. *)
+
 (* ---- Lorentz-factor emission ------------------------------------------------------------------
    Each tensor head becomes a call to one of the generator's wrapper templates
    (tproj / lproj / eproj / mproj / lmetric / lvec / leps / sc / contract / add), which the emitted
    generator defines over `NetVal`. `lorentzNetStr` emits the CALL TEXT for one head;
-   `lorentzElemStr` emits the same head as the `Elem` aggregate the Stage-4 factor nets take instead.
-
-   These carried an `…Inv` suffix until 2026, from a time when a second "compileT" dialect emitted a
-   different backend. That backend is gone and its functions with it, so the suffix distinguished
-   nothing — it just made every name in the emission chain read as if there were an alternative. *)
+   `lorentzElemStr` emits the same head as the `Elem` aggregate that a collected Dirac slot's
+   factor nets take instead. *)
 
 lorentzNetStr[ntMetric[mu_, nu_], ids_, env_, nonzeroCompMask_] :=
   "lmetric<" <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ">()";
@@ -30,7 +32,7 @@ lorentzNetStr[ntEpsilon[a_, b_, c_, d_], ids_, env_, nonzeroCompMask_] :=
   "leps<" <> ToString[ids[a]] <> ", " <> ToString[ids[b]] <> ", " <> ToString[ids[c]] <> ", " <> ToString[ids[d]] <> ">()";
 
 (* A Lorentz factor as a single `network::Elem{...}` literal (for a collected Dirac slot's per-option
-   `netFacs`, Stage 4). Mirrors lorentzNetStr's id/momentum/atom resolution but emits the Elem aggregate the
+   `netFacs`). Mirrors lorentzNetStr's id/momentum/atom resolution but emits the Elem aggregate the
    numeric backend appends to the net, rather than a NetVal builder. Field order (network.hpp):
    {kind, a, b, vid, inv, vlc, c, d, invS}. A projector's momentum rides `vid = env Base` (elem_to_nelem
    reconstructs it as {{1.0, vid}}); a vector's rides `vlc`. *)
@@ -63,41 +65,23 @@ wrapContract[{one_}] := one;
 wrapContract[many_] := "contract(" <> StringRiffle[many, ", "] <> ")";
 
 (* ---- memo keys for the net builders ----------------------------------------------------------
-   These caches are keyed on the builders' TRUE argument, which is not the argument tuple as written.
+   The caches are keyed on the builders' TRUE argument, not the argument tuple as written:
+   - `env` and `nonzeroCompMask` are fixed per generation (caches are cleared per generation), so they
+     enter once, via the per-generation stamp $ctCtx, rather than being hashed on every call.
+   - `ids` is the WHOLE diagram's label map, but the emitted string only sees labels resolved through
+     it. So the key is `e` with its labels already substituted (ntCanonIds); keying on raw {e, ids}
+     makes identical structures from different diagrams miss.
+   - Momenta are dropped from the substitution (KeyDrop on the env keys): they resolve through
+     `env`/`nonzeroCompMask`, and mapping them onto integers could conflate two different nets. *)
 
-   `env` and `nonzeroCompMask` are fixed for a whole generation and the caches are cleared per generation, so
-   they belong in a single per-generation stamp rather than in every key: hashing two whole
-   associations on every (recursive) call is pure overhead.
+(* per-generation stamp of {env, nonzeroCompMask, frame}; set in mkGenerateKernel *)
+$ctCtx = 0;
 
-   `ids` is the subtler half. The emitted string never contains an index LABEL — lorentzNetStr resolves
-   every label through `ids[mu]` to an axis integer — so the builder's real argument is `e` with its
-   labels already resolved. Keying on the raw {e, ids} pair instead made structurally identical calls
-   miss: `ids` is the WHOLE diagram's label map, so two diagrams computing the same structure differ
-   in the key merely by carrying different labels elsewhere. On a dense flow that degraded the cache
-   to near-useless — 70507 stored entries producing 258 distinct nets — and the net-build, which
-   should track the number of DISTINCT structures, tracked the call count instead.
-
-   Momenta are dropped from the label substitution (KeyDrop against the frame's momentum symbols):
-   a momentum must stay symbolic in the key, since two momenta resolve through `env`/`nonzeroCompMask`, not
-   `ids`, and collapsing them onto an integer could conflate two genuinely different nets. *)
-
-$ctCtx = 0;(* per-generation stamp of {env, nonzeroCompMask, frame}; set in mkGenerateKernel *)
-
-(* The rule list is a pure function of (ids, env), and `ids` is CONSTANT for a whole diagram while
-   `env` is fixed for the generation — but this used to rebuild it, from an Association, on every
-   single call. That matters because the callers are `compileLorentz` (RECURSIVE, and this sits inside
-   its memo KEY, so it runs at every tree node on hits as well as misses) and `diracSlotStr`. The
-   per-diagram loop caches it below; here we only decide whether the cache applies.
-
-   The `===` guard is what makes this safe rather than merely convenient. A bare global would be
-   SILENTLY WRONG the moment any call site passed a different diagram's `ids`: the canonicalisation
-   would use the wrong labels, the key would collide with a genuinely different structure, and the
-   memo would hand back that other structure's emitted string — a wrong DiracNet/NetVal in the kernel
-   with no diagnostic anywhere. With the guard, a mismatch simply takes the original slow path and
-   stays correct. For the hot path the comparison is pointer-identical and so costs nothing.
-
-   Dispatch, not a plain rule list: ReplaceAll over a bare list is a linear scan per subexpression,
-   and `ids` runs to tens of entries. *)
+(* The substitution rules are constant per diagram, so the per-diagram loop precomputes them into
+   $ntCanonRules (a Dispatch). The `===` guard is a correctness guard: if a caller passes a different
+   diagram's `ids`, the stale rules would make the key collide with a different structure and the memo
+   would silently return the wrong net. On a mismatch we rebuild the rules instead; on the hot path the
+   comparison is pointer-identical. *)
 
 $ntCanonIdsSrc = None;
 $ntCanonRules = None;
@@ -107,10 +91,9 @@ ntCanonIds[e_, ids_, env_] :=
          $ntCanonRules,
          Normal[KeyDrop[ids, Keys[env]]]];
 
-(* MEMOIZED: the projector/Lorentz net builder is called with mostly repeated inputs — the same
-   transverse-projector structures recur across every diagram/branch, so a dense flow makes orders of
-   magnitude more calls than it has distinct arguments. $ctCache is cleared per generation in
-   mkGenerateKernel. Output-preserving (a pure function of its inputs); the recursion is memoised too. *)
+(* Lorentz expression -> {netString, scalar}. MEMOISED (recursion included): the same projector
+   structures recur across every diagram and branch, so calls far outnumber distinct arguments.
+   $ctCache is cleared per generation in mkGenerateKernel. *)
 
 compileLorentz[e_, ids_, env_, nonzeroCompMask_] := ntProfTimed["compileLorentz",
   With[{h = Hash[{ntCanonIds[e, ids, env], $ctCtx}]},
@@ -120,10 +103,11 @@ compileLorentzBody[e_, ids_, env_, nonzeroCompMask_] := Which[
     tensorQ[e],
       {lorentzNetStr[e, ids, env, nonzeroCompMask], 1},
     Head[e] === Power && IntegerQ[e[[2]]] && e[[2]] >= 1 && !scalarQ[e],
-(* A TENSOR raised to an integer power = that many copies sharing the SAME index labels, i.e. a
-   closed self-contraction (e.g. ntMetric[v1,v2]^2 = g_{v1 v2} g_{v1 v2} = D). Expand into n
-   contracted copies so the numeric index-elimination folds it to a number. Without this it falls
-   through to the scalar branch below and is CForm'd into undeclared C++ (the ZAAqbq metric leak). *)Module[{cs = Table[compileLorentz[e[[1]], ids, env, nonzeroCompMask], {e[[2]]}]},
+    (* A TENSOR raised to an integer power = that many copies sharing the SAME index labels, i.e. a
+       closed self-contraction (e.g. ntMetric[v1,v2]^2 = g_{v1 v2} g_{v1 v2} = D). Expand into n
+       contracted copies so the numeric index elimination folds it to a number; otherwise it would reach
+       the leak guard below. *)
+      Module[{cs = Table[compileLorentz[e[[1]], ids, env, nonzeroCompMask], {e[[2]]}]},
         {wrapContract[cs[[All, 1]]], Times @@ cs[[All, 2]]}],
     Head[e] === Times,
       Module[{parts = List @@ e, sc, tn, cs},
@@ -137,39 +121,26 @@ compileLorentzBody[e_, ids_, env_, nonzeroCompMask_] := Which[
           Message[MakeNTKernel::eagernn, e];
           Abort[]];
         {"add(" <> StringRiffle[MapThread[scaleStr, {cs[[All, 1]], cs[[All, 2]]}], ", "] <> ")", 1}],
-    (* a genuine scalar coefficient: no builder, the expression IS the scalar *)scalarQ[e],
+    (* a genuine scalar coefficient: no builder, the expression IS the scalar *)
+    scalarQ[e],
       {"", e},
-(* Anything else still carries a TENSOR head but matched none of the branches above, so it
-   would be emitted as a bare C++ scalar with its indices silently dropped (the ZAAqbq metric
-   leak, see the Power comment above). Fail loudly instead — this is the Lorentz/colour
-   analogue of the Dirac leak guard below. *)True,
+    (* Anything else still carries a tensor head the branches above cannot lower; emitting it as a
+       bare C++ scalar would silently drop its indices. Fail loudly instead. *)
+    True,
       Message[MakeNTKernel::tleak, Short[e, 6]];
       Abort[]];
 
-(* ---- colour/Lorentz sector split for a colour-ENTANGLED Lorentz/Dirac component -----------
-   The full quark-gluon vertex basis (AqbqDirect147 structures 4/7) produces a quark-loop
-   component that is a SUM whose terms pair different colour orderings (T^{c1}T^{c2} vs
-   T^{c2}T^{c1}) with different Dirac traces — colour and Dirac do NOT factor globally, only per
-   term. expandDiracComponent then leaves the colour tensors inside the (would-be Lorentz) result,
-   where the Lorentz-only lorentzNetStr cannot lower them. The fix: group the Dirac-traced expression
-   by its colour-factor product; each group has ONE colour structure (folded numerically as a
-   SUNNet — exactly like a constant adjoint/fundamental component) times a pure-Lorentz
-   polynomial (the inv net). The diagram's trace is Sum_group colv_group * lorentzPoly_group,
-   emitted as several (sunNet, lorentzNet) entries that the per-diagram combination already sums. *)
+(* ---- colour factor patterns (used by splitColourGroups and compileColour) -------------------- *)
 
 ctHeads = {_ntSUNf, _ntSUNDeltaAdj, _ntSUNT, _ntSUNDeltaFund, _ntSUNDiagFund, _ntSUNDiagAdj};
 $ctHeadPat = Alternatives @@ ctHeads;
 
 colourEntangledQ[e_] := !FreeQ[e, $ctHeadPat];
 
-(* A group head OR an integer power of one. Splitting a term into "colour" and "the Lorentz/Dirac
-   rest" is a LEVEL-1 Cases/DeleteCases over the factor list, so it matches only what is a BARE
-   factor — and a CLOSED colour/flavour loop collapses two identical deltas into deltaFund[N,i,j]^2
-   (= N), which is a Power, not a head. Matched by the head pattern alone, such a factor is silently
-   left in the remainder and handed to the Lorentz-only lorentzNetStr, which CForm's it into the
-   generated C++. compileColour already knows how to expand this power into repeated SUNNet factors;
-   it just has to be COLLECTED here first. (The four-quark Fierz gate reached exactly this: the
-   epsilon-pair expansion produces delta products, and a closed flavour loop squares one of them.) *)
+(* A group head OR an integer power of one. The colour/rest split is a level-1 Cases/DeleteCases
+   over the factor list, and a closed colour/flavour loop yields deltaFund[N,i,j]^2 (= N), a Power,
+   not a head. Matched by the head alone it would stay in the Lorentz remainder and leak into the
+   C++; collected here, compileColour expands it into repeated SUNNet factors. *)
 
 ctFac = Alternatives[$ctHeadPat, Power[$ctHeadPat, _Integer?Positive]];
 
@@ -183,12 +154,12 @@ mergeColNet[a_, b_] :=
 (* ---- per-component diagonal-dressing registry (ntSUNDiag{Fund,Adj}) ------------------------
    A diag-dressed group δ dresses SELECTED components with distinctly-named scalar dressings (e.g.
    the Cartan directions of a condensate) and DROPS the rest. Its `spec` is a rules list
-   {c1 -> name1, …, Default -> defName}: `ci` are 1-based component indices, `namei` scalar dressing
-   symbols; components with no rule (and no Default) vanish. colourFacStr registers each distinct
-   (name, scale) leaf under a small integer id `dr` and bakes a per-component id vector
+   {c1 -> expr1, …, Default -> defExpr}: `ci` are 1-based component indices, `expri` scalar dressing
+   expressions; components with no rule (and no Default) vanish. colourFacStr registers each distinct
+   dressing expression under a small integer id `dr` and bakes a per-component id vector
    (component → dr, -1 = drop) into the emitted sun<n>.diag{Fund,Adj}(...,{d0,…}) factor. The C++ seam
    folds the net to a SUNPoly over these ids, and the integrand multiplies in the runtime sum
-   Σ_t coeff_t Π name(scale) — an ordinary scalar-dressing token, no array. Reset per generation. *)
+   Σ_t coeff_t Π expr — an ordinary scalar-dressing token, no array. Reset per generation. *)
 
 $diagDrTable = <||>; $diagDrByKey = <||>; $diagDrCounter = 0;
 
@@ -197,17 +168,9 @@ resetDiagDr[] := (
     $diagDrByKey = <||>;
     $diagDrCounter = 0;);
 
-(* A component's dressing is a COMPLETE expression — whatever the caller wrote, kinematics and all.
-   It is interned here and frame-resolved at emission; nothing is applied to it on the way out.
-
-   This used to be a (name, scale) PAIR, with the emitter forming `name[resolvedScale]`. That split
-   bought nothing and cost the caller a contract to remember: the name had to be a bare symbol with
-   a downvalue, one scale was forced on every component, and writing the natural `f[scale]` inline
-   produced a silent double application. Neither of the things it appeared to buy was real —
-   `resolveScale` is a rule replacement that finds ntVec/ntSPS anywhere in an expression, and the
-   k-only hoist scans the finished integrand rather than this table, so both work identically on an
-   already-applied expression. Callers now write `{1 -> Zu[scale], 2 -> Zd[scale]}`, and may give
-   each component a different scale. *)
+(* A component's dressing is a COMPLETE expression, kinematics included (e.g.
+   `{1 -> Zu[scale], 2 -> Zd[scale]}`; each component may use its own scale). It is interned here and
+   frame-resolved at emission; nothing is applied to it on the way out. *)
 
 diagDrId[expr_] := Module[{key = expr},
     If[!KeyExistsQ[$diagDrByKey, key],
@@ -234,11 +197,11 @@ diagVecStr[vec_] := "{" <> StringRiffle[ToString /@ vec, ","] <> "}";
 (* ---- scalar-dressing registry (symbolic dressing collection: ntDressedNum slots) -------------
    Each DISTINCT dressing atom — a maximal non-numeric multiplicative factor in a dressed numerator's
    per-structure coefficient (a propagator dressing `Zq[...]`, `hSigL[...]`, a regulator `RB[...]`, a
-   composite denominator `Power[D,-1]`, a kinematic `cos1`) — is interned under a small integer id baked
-   into the emitted DSlotOpt and into the generator's fm.dress table. So identical atoms across slots /
-   diagrams share ONE `f[]` slot and the runtime evaluates each dressing call ONCE (the cross-diagram
-   collection FORM does). The atom expression is already frame-resolved (ntSP/ntVec components
-   substituted) so its C++ fill is `cppFlat[atom]`. Reset per generation alongside resetDiagDr. *)
+   composite denominator `Power[D,-1]`, a kinematic `cos1`) — is interned under a small integer id
+   that keys the sub-term's dressing monomial and the generator's fm.dress table. So identical atoms
+   across slots / diagrams share ONE `f[]` slot and the runtime evaluates each dressing call ONCE.
+   The atom expression is already frame-resolved (ntSP/ntVec components substituted) so its C++ fill
+   is `cppFlat[atom]`. Reset per generation alongside resetDiagDr. *)
 
 $drTable = <||>; $drByKey = <||>; $drCounter = 0;
 
@@ -298,22 +261,16 @@ chunkLorentz[lorExpr_, ids_, env_, nonzeroCompMask_] := Which[
             {lorExpr}]},
         (compileLorentz[Total[#], ids, env, nonzeroCompMask]& /@ Partition[terms, UpTo[$ntInvChunk]])]];
 
-(* {colourNet, lorentzNet, scalar} entries per colour-structure group of a colour-entangled component.
-   DISTRIBUTE only the entangled Pluses (the vertex colour-ordering / commutator sub-sums, small) — NOT
-   the big pure-Lorentz angular polynomial, which stays factored in each branch. Each branch is split
-   into its colour-factor product (folded numerically → SUNNet) and its colour-free rest; the rest
-   is emitted as a `dirac_value` net (gammas traced in C++) when it carries a gamma chain, else as a
-   chunked Lorentz net. Branches are grouped by colour structure and summed. The Dirac trace is thus
-   contracted in the C++ generator, not expanded symbolically here. *)
-(* ---- struct-7 σ^{μν} folding: keep the bare γ-commutator as ONE token ------------------------
-   The quark-gluon-vertex struct-7 tensor σ^{μν}=(i/2)[γ^μ,γ^ν] arrives from FunKit as a bare 2-term
+(* ---- σ^{μν} folding: keep the bare γ-commutator as ONE token -----------------------------------
+   The quark-gluon-vertex tensor σ^{μν}=(i/2)[γ^μ,γ^ν] arrives from FunKit as a bare 2-term
    antisymmetric γ-pair `Plus`  s·(γ(X)γ(Y) − γ(Y)γ(X))  (FunKit has no σ primitive). Left alone,
    splitColourGroups's `Expand` distributes it into TWO full Dirac traces. `foldDiracSigma`
    collapses that Plus into a single `ntSigma[legA, legB, din, dout]` token (each leg a slashed
    momentum {"slash",mom} or a free gluon id {"free",mu}), so the commutator is traced ONCE (the C++
    engine folds [A,B] as a block-diagonal 2×2 factor — `dcomm*` in network/dirac.hpp). The i/2 and any
    sign live in the SCALAR (the Plus is already a bare bracket). It is a pure OPTIMIZATION: when the
-   Plus is not an UNAMBIGUOUS commutator the recognizer returns $Failed and it distributes as before. *)
+   Plus is not an UNAMBIGUOUS commutator the recognizer returns $Failed and it distributes. *)
+
 (* the (type,value) leg of a gamma `g` within a term's factor list `tf`. The gamma's Lorentz label μ
    is carried by the factor(s) holding ntVec[_,μ): either a single ntVec[mom,μ] OR a nested momentum
    sum like (ntVec[l1,μ]−ntVec[p2,μ]) — the LOOP σ legs are momentum linear combinations (l1−p2, …),
@@ -321,7 +278,7 @@ chunkLorentz[lorExpr_, ids_, env_, nonzeroCompMask_] := Which[
    momentum (an env key by construction: momentumOf collected every ntVec momentum into the env basis),
    so legStr maps it straight to a vlc without re-decomposing over a non-atomic basis. A μ carried by
    no ntVec ⇒ a free (open) gluon id {"free",μ}; an ill-formed leg (a μ-bearing factor that is not a
-   plain coeff·ntVec sum) ⇒ $Failed (stay conservative — the commutator then distributes as before). *)
+   plain coeff·ntVec sum) ⇒ $Failed (stay conservative — the commutator then distributes). *)
 
 ntSigmaLeg[leg_, termFactors_] := Module[{mu = First[leg], momFactors, terms},
     momFactors = Times @@ Select[termFactors, !FreeQ[#, ntVec[_, mu]]&];
@@ -356,8 +313,8 @@ ntSigmaTermInfo[term_] := Module[{tf, gs, g1, g2, first, second, din, dout},
     gs = Cases[tf, _ntGamma];
     If[Length[gs] =!= 2,
       Return[$Failed]];
-(* the two γ's (and their ntVecs) must be the term's ONLY tensor structure — no colour, projector,
-   metric, other Dirac heads: anything else means the Plus is not a clean bare commutator. *)
+    (* the two γ's (and their ntVecs) must be the term's ONLY tensor structure — no colour, projector,
+       metric, other Dirac heads: anything else means the Plus is not a clean bare commutator. *)
     If[!FreeQ[tf, _ntGamma5 | _ntC | _ntDeltaDirac | _ntSigma | _ntSUNT | _ntSUNDeltaFund | _ntSUNf | _ntSUNDeltaAdj | _ntTransProj | _ntLongProj | _ntMetric | _ntEpsilon],
       Return[$Failed]];
     {g1, g2} = gs;
@@ -389,23 +346,26 @@ ntRecognizeComm[p_] := Module[{terms, a, b},
     b = ntSigmaTermInfo[terms[[2]]];
     If[a === $Failed || b === $Failed,
       Return[$Failed]];
+    (* same spinor endpoints *)
     If[a[[3]] =!= b[[3]] || a[[4]] =!= b[[4]],
       Return[$Failed]
-    ];(* same spinor endpoints *)
+    ];
+    (* legs swapped between terms *)
     If[!(a[[1]] === b[[2]] && a[[2]] === b[[1]]),
       Return[$Failed]
-    ];(* legs swapped between terms *)
+    ];
+    (* identical legs ⇒ [X,X]=0 *)
     If[a[[1]] === a[[2]],
       Return[$Failed]
-    ];(* identical legs ⇒ [X,X]=0 *)
+    ];
+    (* opposite scalar sign *)
     If[Simplify[a[[5]] + b[[5]]] =!= 0,
       Return[$Failed]
-    ];(* opposite scalar sign *)
+    ];
     {a[[5]], ntSigma[a[[1]], a[[2]], a[[3]], a[[4]]]}];
 
-(* replace every recognized bare γ-commutator Plus factor with its single ntSigma token + scalar.
-   Set env NT_NO_SIGMA_FOLD=1 to disable the optimization (the commutator then distributes into two
-   traces as before) — a safety switch and the baseline for measuring the fold's sub-term reduction. *)
+(* NT_NO_SIGMA_FOLD=1 disables the fold (the commutator then distributes into two traces): a safety
+   switch and the baseline for measuring the fold's sub-term reduction. *)
 
 $ntSigmaFold := !ntEnvFlag["NT_NO_SIGMA_FOLD"];
 
@@ -423,14 +383,16 @@ foldDiracSigma[factors_List] := Module[{commPlus, recognized},
     recognized = ntRecognizeComm[commPlus];
     foldDiracSigma[Join[DeleteCases[factors, commPlus, {1}, 1], {recognized[[1]], recognized[[2]]}]]];
 
-(* Split a colour-ENTANGLED Lorentz/Dirac component (the AqbqDirect147 4/7 quark-gluon vertex, where
-   colour and Dirac do NOT factor globally, only per term) into per-colour-structure groups so the
-   Lorentz-only lorentzNetStr can lower each. Algorithm:
-     1. fold σ commutators, then EXPAND only the entangled Pluses (those mixing colour with
-        Dirac/Lorentz) into branches — single-sector sums stay eager (no monomial blow-up).
-     2. each branch → {colourProduct, {core, scal, restStr}} via compileDirac / chunkLorentz.
-     3. GatherBy colour product, emitting ONE {colourNet, bodyNets, scalar, restNets} entry per group
-        (so the net count tracks the colour graph, not the branch×ordering explosion); the generator
+(* ---- colour/Lorentz sector split for a colour-ENTANGLED Lorentz/Dirac component ---------------
+   With the full quark-gluon vertex basis a quark-loop component is a SUM whose terms pair different
+   colour orderings (T^{c1}T^{c2} vs T^{c2}T^{c1}) with different Dirac traces: colour and Dirac
+   factor only per term, not globally. splitColourGroups therefore
+     1. folds σ commutators, then EXPANDs only the entangled Pluses (those mixing colour with
+        Dirac structure) into branches — the big pure-Lorentz angular polynomial stays factored;
+     2. splits each branch into its colour product and a colour-free rest, compiled by compileDirac
+        (gamma chain, traced numerically in C++) or chunkLorentz → {colourProduct, {{core, scal, restStr}…}};
+     3. GatherBy colour product, emitting ONE {colourNet, bodyNets, scalar, restNets} entry per group,
+        so the net count tracks the colour graph, not the branch×ordering explosion. The generator
         sums each group's branches at runtime. *)
 
 (* a Plus that mixes colour with Dirac structure: expanded into branches *)
@@ -447,7 +409,8 @@ splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
     keepRest = DeleteCases[keepAll, ctFac];
     keepColLeakQ = !FreeQ[keepRest, $ctHeadPat];
     keepDiracQ = !FreeQ[keepRest, $diracHeadPat];
-    distributed = Expand[Times @@ needExpand];(* small: product of the entangled Pluses only *)
+    (* small: product of the entangled Pluses only *)
+    distributed = Expand[Times @@ needExpand];
     terms =
       If[Head[distributed] === Plus,
         List @@ distributed,
@@ -458,11 +421,10 @@ splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
           Module[{termFactors = If[Head[term] === Times, List @@ term, {term}], termRest, colProd, rest},
             colProd = Times @@ Join[Cases[termFactors, ctFac], keepCol];
             termRest = DeleteCases[termFactors, ctFac];
-            rest = Join[termRest, keepRest];(* gammas + Lorentz + numeric coeff (no colour) *)
-(* Level-1 DeleteCases only strips BARE group-head factors. Anything that buries one (a Power, or
-   a Plus that entangledQ did not expand) leaves colour in the remainder, which then reaches the
-   Lorentz-only lorentzNetStr and is CForm'd into the .cpp. Fail here, where the offender is still
-   identifiable, rather than at the emission chokepoint three layers away. *)
+            (* gammas + Lorentz + numeric coeff (no colour) *)
+            rest = Join[termRest, keepRest];
+            (* Level-1 DeleteCases only strips bare colour factors; one buried in an unexpanded Plus
+               would leak into the C++ via lorentzNetStr. Fail here, where the offender is identifiable. *)
             If[keepColLeakQ || !FreeQ[termRest, $ctHeadPat],
               Message[MakeNTKernel::colrest, Short[DeleteDuplicates @ Cases[rest, $ctHeadPat, {0, Infinity}], 6], Short[rest, 8]];
               Abort[]];
@@ -474,32 +436,28 @@ splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
                 ({#[[1]], #[[2]], ""}&) /@ chunkLorentz[Times @@ rest, ids, env, nonzeroCompMask]]}]
         ] /@ terms;
     groups = GatherBy[branchNets, First];
-(* one {colourNet, bodyNet, scalar, restNet} entry per colour group. A branch's `core` is a BARE
-   `DiracNet{...}` (contracted against its Lorentz rest only at runtime by numeric_value_netval), so
-   the branches cannot be fused into one net; the group carries them as a LIST of sub-terms instead:
-   bodyNet = {core_b…} (each a DiracNet literal, or a Lorentz NetVal for a gamma-free branch),
-   restNet = {{rest_b, scal_b}…} (parallel), and the generator sums
-   Σ_b scal_b·numeric_value_netval(dnet_b, lnet_b). One entry per colour group keeps the net count
-   tracking the colour graph, not the branch×ordering explosion. *)
+    (* A branch's `core` is a bare DiracNet contracted against its Lorentz rest only at runtime
+       (numeric_value_netval), so branches cannot be fused into one net. A group carries them as
+       parallel lists: bodyNet = {core_b…} (DiracNet, or a Lorentz NetVal for a gamma-free branch),
+       restNet = {{rest_b, scal_b}…}; the generator sums Σ_b scal_b·numeric_value_netval(dnet_b, lnet_b). *)
     Function[group,
         Module[{colProd = group[[1, 1]], colNet, colScalar, branchRecs},
           {colNet, colScalar} =
             If[colProd === 1,
               {"SUNNet{}", 1},
               compileColour[colProd, ids]];
-          branchRecs = Flatten[group[[All, 2]], 1];(* each = {core, scal, restStr} *)
+          (* each = {core, scal, restStr} *)
+          branchRecs = Flatten[group[[All, 2]], 1];
           {colNet, branchRecs[[All, 1]], colScalar, ({#[[3]], #[[2]]}&) /@ branchRecs}]
       ] /@ groups];
 
-(* ---- colour/group dialect: a constant SU(N) component is a product of structure constants,
-        generators, and Kronecker deltas; emit it as a `SUNNet` literal for the generator's
-        numeric SU(N) contraction (the et engine can't instantiate the four-gluon colour tensor
-        type). Each head carries its own group rank N as the leading argument, so one net can mix
-        several groups (e.g. colour SU(Nc) ⊗ flavour SU(Nf)) — sun_net.hpp's sun_value_cx
-        contracts each rank separately and multiplies. Returns {colourNetString, factoredScalar}. *)
-(* Each factor is minted by the per-rank `sun<n>` SUNEnv (declared in the generator main, one per
-   distinct rank appearing in the colour nets), so the group rank is written once, not on every factor.
-   `sun<n>` is the network::SUNEnv analogue of the numeric LorentzEnv. *)
+(* ---- colour/group dialect -----------------------------------------------------------------------
+   A constant SU(N) component is a product of structure constants, generators and Kronecker deltas,
+   emitted as a `SUNNet` literal for the generator's numeric SU(N) contraction. Each head carries its
+   group rank N as leading argument, so one net can mix several groups (colour SU(Nc) ⊗ flavour
+   SU(Nf)); sun_net.hpp's sun_value_cx contracts each rank separately and multiplies. Each factor is
+   minted by the per-rank `sun<n>` SUNEnv (declared in the generator main, the analogue of
+   LorentzEnv), so the rank is written once, not on every factor. *)
 
 colourFacStr[ntSUNf[n_, a_, b_, c_], ids_] :=
   "sun" <> ToString[n] <> ".f(" <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> "," <> ToString[ids[c]] <> ")";
@@ -523,18 +481,16 @@ colourFacStr[ntSUNDiagAdj[n_, a_, b_, spec_], ids_] :=
   "sun" <> ToString[n] <> ".diagAdj(" <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> "," <> diagVecStr[diagComp2Dr[spec, n^2 - 1]] <> ")";
 
 (* CATCH-ALL, and it must stay LAST: the six rules above are the only lowerable colour factors.
-   Without this a non-matching factor returns UNEVALUATED and StringRiffle happily ToString's it
-   into the generator .cpp — `colourFacStr[Plus[...], <|v1 -> 0, ...|>]` — which is how the four-quark
-   Fierz flavour sum surfaced (as a clang syntax error, three layers away from its cause).
-   compileLorentz has had exactly this guard (MakeNTKernel::tleak) since the ZAAqbq metric leak;
-   colourFacStr was the one per-head dispatcher in this file with neither a Plus branch nor a
-   fallthrough. Fail loudly and locally instead. *)
+   Without it a non-matching factor returns unevaluated and StringRiffle would ToString it into the
+   generator .cpp, surfacing as a C++ syntax error far from its cause. Same role as
+   MakeNTKernel::tleak in compileLorentz. *)
 
 colourFacStr[e_, _] := (
     Message[MakeNTKernel::colleak, Short[e, 6]];
     Abort[]);
 
-(* NOT memoised — see the note on compileDirac above; caching it was measured a net loss. *)
+(* Constant colour product -> {colourNetString, factoredScalar}. NOT memoised: like compileDirac
+   (see below), caching it was measured as a net loss. *)
 
 compileColour[e_, ids_] := Module[
     {
@@ -544,42 +500,31 @@ compileColour[e_, ids_] := Module[
           {e}],
       sc,
       tn},
-(* A colour/flavour SUM raised to a power cannot be expanded by repetition: the copies would share
-   index labels (see MakeNTKernel::colpow). Refuse before the rewrite below can do it. *)
+    (* A colour/flavour SUM raised to a power cannot be expanded by repetition: the copies would share
+       index labels (see MakeNTKernel::colpow). Refuse before the rewrite below can do it. *)
     Cases[
       parts,
       Power[b_Plus, k_Integer?Positive] /; !scalarQ[b] :>
         (
           Message[MakeNTKernel::colpow, k, Short[b, 6]];
           Abort[])];
-(* a colour/flavour factor raised to an integer power (e.g. deltaAdjFlav^2 from a CLOSED meson
-   loop: delta_adj(a,b)^2 -> the flavour trace N^2-1) must be expanded into repeated SUNNet
-   factors so the C++ sun_value contracts the shared indices — colourFacStr handles a single head,
-   not Power[head,k], so an un-expanded power leaks Mathematica syntax into the generator.
-   Restricted to a BARE group head: the old `! scalarQ[b]` guard also admitted Power[Plus[..],k]
-   and Power[Times[..],k], whose repetition duplicates labels rather than closing a self-trace. *)
+    (* A colour/flavour factor raised to an integer power (e.g. deltaAdjFlav^2 from a CLOSED meson
+       loop -> the flavour trace N^2-1) is expanded into repeated SUNNet factors so sun_value
+       contracts the shared indices; colourFacStr handles a single head, not Power[head,k].
+       Restricted to a BARE group head: repeating a Plus or Times duplicates labels instead of
+       closing a self-trace. *)
     parts = parts /. Power[b_, k_Integer?Positive] /; MatchQ[b, $ctHeadPat] :> Sequence @@ ConstantArray[b, k];
     sc = Select[parts, scalarQ];
     tn = Select[parts, !scalarQ[#]&];
     {"SUNNet{" <> StringRiffle[colourFacStr[#, ids]& /@ tn, ", "] <> "}", Times @@ sc}];
 
 (* ---- a colour/flavour component that is a SUM ------------------------------------------------
-   `SUNNet` is a flat PRODUCT (std::vector<SUNFac>) with no sum node and no coefficient field, and
-   mergeColNet splices `SUNNet{...}` literals by string surgery — so a sum cannot be represented
-   inside one net, and there is no colour analogue of compileLorentz's `add(...)`.
-
-   It does not need one. Colour folds to a SCALAR (sun_value_cx -> Cx), and the generator already
-   sums colour structures by emitting SEVERAL nets that share a group:
-       for(int d: grp) acc = acc + mp[d]*env.constant(colv[d]);
-   So a summed colour component lowers to a LIST of {net, scalar} branches — the same shape
-   chunkLorentz already returns and its callers already loop over.
-
-   ONE Expand over the product of all the diagram's constant components does the cross-product in
-   one step (the same device splitColourGroups uses for its entangled sums), so several summed
-   constant components do not need pairwise outer products.
-
-   Reached only from the CONSTANT-component path: splitColourGroups's colProd is a level-1
-   Cases over an already-Expanded branch, hence flat by construction, and keeps using compileColour. *)
+   `SUNNet` is a flat PRODUCT with no sum node or coefficient (mergeColNet splices literals by string
+   surgery), so a sum cannot live in one net. It need not: colour folds to a scalar and the generator
+   already sums several nets sharing a group. A summed component therefore lowers to a LIST of
+   {net, scalar} branches, the shape chunkLorentz returns. Given the product of all the diagram's
+   constant components, one Expand does the whole cross-product. Reached only from the
+   constant-component path; splitColourGroups's colProd is flat by construction. *)
 
 $ntColSumMaxBranches = 4096;
 
@@ -601,67 +546,51 @@ compileColourSum[e_, ids_] := Module[{
 (* the IN (row) spinor slot of a Dirac head; its OUT (column) slot is the other one *)
 diracIn[h_] := First[spinorLabelsHead[h]];
 
-(* SPINOR-SLOT SYMMETRY. `diracIn`/`diracOut` name a head's two spinor slots, but only for the heads
-   whose two slots play DIFFERENT roles (row vs column, i.e. the two ends of a fermion arrow) is that
-   naming meaningful. The spinor delta is symmetric, δ_{ab} = δ_{ba}, so it may be traversed either
-   way with the same value and has no orientation to record — which is why the walk below can be
-   undirected at all (a loop closed by a symmetric external projector). Everything else (γ, γ5, σ, a
-   collected numerator or vertex slot) is an ordinary matrix whose two slots are NOT interchangeable,
-   so traversing it against the arrow means the network wants its TRANSPOSE — which `orderDiracFacs`
-   records with an `ntTransposed` wrapper and the engine honours. *)
+(* SPINOR-SLOT SYMMETRY. The spinor delta is symmetric, δ_{ab} = δ_{ba}: it may be traversed either
+   way and has no orientation to record (which is why the walk below can be undirected). Every other
+   Dirac head (γ, γ5, σ, a collected numerator or vertex slot) is an ordinary matrix whose row and
+   column slots are NOT interchangeable; traversing it against the arrow means the network wants its
+   TRANSPOSE, which `orderDiracFacs` records with an `ntTransposed` wrapper. *)
 diracSpinorSymmetricQ[_ntDeltaDirac] := True;
 diracSpinorSymmetricQ[_]             := False;
 
 (* ---- Dirac trace in the C++ generator (network/dirac.hpp `dirac_value`) ----------------------
    The gamma chain is emitted as a `DiracNet` literal and the generator traces the closed spinor loop
-   NUMERICALLY (4×4 matrix products) against the Lorentz rest — instead of expanding the (2n−1)!!
-   pairing sum symbolically in Mathematica. This parallels how colour is folded by
+   NUMERICALLY (4×4 matrix products) against the Lorentz rest, as colour is folded by
    `SUNNet`/`compileColour`. *)
-
-(* the gamma/gamma5 factors in trace order (walk the closed spinor loop; spinor-δ connectors carry no
-   token but are followed).
-
-   UNDIRECTED cycle walk: each Dirac factor is an EDGE between its two spinor labels (spinorLabelsHead);
-   every label in a closed spinor loop has degree 2, so the walk is deterministic. We seed at
-   `First[facs]` ENTERING on its `diracIn` label (so it leaves on `diracOut`) and at each step leave the
-   current factor by its OTHER endpoint, picking the unique unvisited neighbour there. For a
-   consistently-oriented loop (every node one in / one out — Zq/ZA/ZA3/ZA4/ZAqbq, which close via an
-   oriented γ) this is the plain forward walk. It also closes a loop through a SYMMETRIC external
-   spinor-δ (`ntDeltaDirac[d1,d2]`, e.g. the σL scalar external projector), whose two labels carry no
-   orientation, regardless of start/orientation (the trace is cyclic). *)
 
 orderDiracFacs::open = "the spinor-loop walk consumed `1` of `2` token-bearing Dirac factors — a spinor loop did not close, and emitting it would silently drop γ structure (a collapsed trace). Loop factors:\n`3`";
 
+(* The token-bearing factors of ONE closed spinor loop in trace order; spinor-δ connectors carry no
+   token but are followed. UNDIRECTED cycle walk: each Dirac factor is an edge between its two spinor
+   labels, every label has degree 2, so the walk is deterministic. Seed at `First[facs]` entering on
+   its `diracIn`, then always leave by the OTHER endpoint. This also closes loops through a symmetric
+   external spinor-δ (e.g. a scalar external projector); the trace is cyclic, so the start is free. *)
 orderDiracFacs[facs_] :=
   Module[{nodeFacs = Association[], cur = 1, prevLabel, out = {}, seen = {}, labels, exitLabel, nexts, nTok, revs = {}, fwds = {}, revQ},
     Do[
       Module[{ls = spinorLabelsHead[facs[[i]]]},
         (nodeFacs[#] = Append[Lookup[nodeFacs, #, {}], i])& /@ ls],
       {i, Length[facs]}];
-    prevLabel = diracIn[facs[[1]]];(* enter First on its diracIn so it exits on diracOut *)
+    (* enter First on its diracIn so it exits on diracOut *)
+    prevLabel = diracIn[facs[[1]]];
     While[
       !MemberQ[seen, cur],
       AppendTo[seen, cur];
-(* ORIENTATION. A closed spinor loop is a cycle in a degree-2 index network, and following that cycle
-   IS a matrix product: entering a factor on its `diracIn` (row) and leaving on its `diracOut` (column)
-   uses the factor as declared, because a fermion line multiplies as M1.M2 with M1's column contracted
-   against M2's row. Entering on the OTHER slot means the network wants this factor TRANSPOSED.
-
-   That is not an identity about gamma matrices — it is what "follow the cycle" means:
-     sum_{l0..l(n-1)} M1[l0,l1] M2[l1,l2] .. Mn[l(n-1),l0]  =  tr(N1 N2 .. Nn),   Nk = Mk or Mk^T.
-   So a reversed factor is simply MARKED here and transposed by the engine. No sign rule, no
-   charge-conjugation identity, no case analysis — those were tried and measured: the walk's verbatim
-   output agrees with the network only up to a sign that segment parity does NOT predict.
-
-   `revs`/`fwds` are kept for the diagnostic and the slot guard below. The spinor delta is symmetric,
-   so it has no orientation to record and carries no token anyway. *)
+      (* ORIENTATION. Following the cycle IS a matrix product: entering a factor on its `diracIn` (row)
+         and leaving on its `diracOut` (column) uses it as declared; entering on the other slot means
+         the network wants it TRANSPOSED:
+           sum_{l0..l(n-1)} M1[l0,l1] M2[l1,l2] .. Mn[l(n-1),l0]  =  tr(N1 N2 .. Nn),   Nk = Mk or Mk^T.
+         A reversed factor is only MARKED here; the engine transposes it. Do not replace this by a sign
+         rule: the untransposed walk differs from the network by a sign segment parity does not predict. *)
       revQ = ! diracSpinorSymmetricQ[facs[[cur]]] && prevLabel =!= diracIn[facs[[cur]]];
       If[! diracSpinorSymmetricQ[facs[[cur]]],
         If[revQ, AppendTo[revs, facs[[cur]]], AppendTo[fwds, facs[[cur]]]]];
       If[MatchQ[facs[[cur]], _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDressedNum | _ntDiracSlot],
         AppendTo[out, If[revQ, ntTransposed[facs[[cur]]], facs[[cur]]]]];
       labels = spinorLabelsHead[facs[[cur]]];
-      exitLabel = First[DeleteCases[labels, prevLabel], Missing[]];(* the OTHER endpoint *)
+      (* the OTHER endpoint *)
+      exitLabel = First[DeleteCases[labels, prevLabel], Missing[]];
       If[MissingQ[exitLabel],
         Break[]];
       nexts = Select[DeleteCases[Lookup[nodeFacs, exitLabel, {}], cur], !MemberQ[seen, #]&];
@@ -669,23 +598,15 @@ orderDiracFacs[facs_] :=
         Break[]];
       prevLabel = exitLabel;
       cur = First[nexts]];
-(* LOUD GUARD: a closed spinor loop must consume EVERY token-bearing factor. If the walk fell short
-   (a fragmented / improperly-closed loop), the emitted trace would silently drop γ structure (the
-   historical hSigL meson-sector collapse: a single surviving γ5 → tr(γ5)=0). Abort rather than emit a
-   wrong kernel. The δ-only "connector" factors carry no token, so they are excluded from the count. *)
+    (* The loop must consume EVERY token-bearing factor (δ connectors carry none); a walk that fell
+       short would silently drop γ structure (e.g. a lone surviving γ5 → tr(γ5)=0). *)
     nTok = Count[facs, _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDressedNum | _ntDiracSlot];
     If[Length[out] =!= nTok,
       Message[orderDiracFacs::open, Length[out], nTok, facs];
       Abort[]];
-(* Guard 2 (orientation) is GONE, and deliberately so. Reversed factors are marked `ntTransposed`
-   above and transposed by the engine — fixed tokens via DFac::transposed, collected slots via
-   dtrslot(k), which reverses the option's chain at the dress_enumerate splice. A mixed loop (the
-   anomalous qq / q-bar q-bar diquark case) is therefore representable, not an error.
-
-   What replaced the guard is a PROPERTY TEST, not a proof: section J of tests/test_numeric_contract.cpp
-   grades the engine against a direct index-network contraction (a brute-force sum over all label
-   assignments) on thousands of randomly scrambled nets. Disabling the transpose makes 220 of them
-   fail, so the check is live. *)
+    (* Mixed-orientation loops (e.g. qq diquarks) are valid: reversed factors are transposed by the
+       engine (DFac::transposed, or dtrslot(k) for a slot). The transposition is checked by section J
+       of tests/test_numeric_contract.cpp against a brute-force index contraction. *)
     out];
 
 (* A component may contain SEVERAL independent closed spinor loops (a quark loop + the
@@ -693,12 +614,9 @@ orderDiracFacs[facs_] :=
    loop and would drop the rest; partition the Dirac factors into spinor-connected groups first
    (two factors share a loop iff they share a spinor index), then order each loop. Returns a LIST of
    ordered token lists (one per loop) — a single-loop component yields a one-element list. The C++
-   contraction traces each loop separately and contracts their shared gluon legs (DFac::LoopSep). *)
-(* MEMOISED: called once per Dirac component, but the distinct Dirac structures are far fewer than the
-   calls — the same chains recur across diagrams and colour branches (the same redundancy the net-term
-   CSE exploits downstream). Building the spinor-loop graph on every call, rather than once per distinct
-   chain, dominated the net-build on a dense dressed flow. Pure function of `facs`; $odCache is cleared
-   per generation in mkGenerateKernel. *)
+   contraction traces each loop separately and contracts their shared gluon legs (DFac::LoopSep).
+   MEMOISED: the same chains recur across diagrams and colour branches, so distinct inputs are far
+   fewer than calls. Pure function of `facs`; $odCache is cleared per generation in mkGenerateKernel. *)
 
 $odCache = <||>;
 
@@ -709,27 +627,19 @@ orderDiracLoopsBody[facs_] := If[Length[facs] <= 1,
     {orderDiracFacs[facs]},
     Module[
       {sp = spinorLabelsHead /@ facs, edges, g, comps},
-(* Two factors are adjacent iff they SHARE a spinor label, so index label -> nodes and read the edges
-   off the buckets: O(n) in the chain length. Testing all Subsets[...,{2}] pairs instead is O(n^2),
-   which was the steepest term in the net-build and the one that would bite hardest on flows with
-   longer Dirac chains. Sort+DeleteDuplicates reproduce the old pair scan's output exactly —
-   lexicographic order (so the Graph, hence ConnectedComponents' component order, is unchanged) and
-   each pair once (two factors may share BOTH labels). *)
+      (* Two factors are adjacent iff they SHARE a spinor label: bucket factors by label and read the
+         edges off the buckets (O(n), not an O(n^2) pair scan). Sort+DeleteDuplicates fix the edge order
+         lexicographically, and so ConnectedComponents' component order (byte-identity), and keep each
+         pair once (two factors may share BOTH labels). *)
       edges = Sort @ DeleteDuplicates @ Flatten[Subsets[#, {2}]& /@ Values @ GroupBy[Flatten[Table[{l, i}, {i, Length[facs]}, {l, sp[[i]]}], 1], First -> Last], 1];
       g = Graph[Range[Length[facs]], UndirectedEdge @@@ edges];
       comps = ConnectedComponents[g];
-(* a SINGLE spinor loop → the exact original path (orderDiracFacs[facs]), so existing flows stay
-   byte-identical; only genuinely multi-loop components are split (indices sorted to preserve the
-   original relative order within each loop). *)
+      (* a single spinor loop is walked on `facs` as given; multi-loop components are split, with
+         indices sorted to keep the input order within each loop (byte-identity). *)
       If[Length[comps] <= 1,
         {orderDiracFacs[facs]},
         (orderDiracFacs[facs[[Sort[#]]]])& /@ comps]]];
 
-(* {netString, scalar} for a colour-free component (gammas + Lorentz + numeric coeff). The gamma chain
-   becomes `dirac_value(DiracNet{...})` (each γ: a SLASH `dslash` if its Lorentz index is contracted
-   with an `ntVec[q,μ]`, else a FREE leg `dgamma(μ)` that contracts the projector); the remaining
-   (Lorentz) factors compile through `compileLorentz` and are `contract`ed with the trace. A component
-   with no Dirac factor is just its Lorentz net. *)
 (* frame resolver for dressed-numerator option coefficients (ntSP/ntVec[q,i] -> components). Set in
    mkGenerateKernel to the diagram's resolveScale; Identity when the dressed path is inactive. *)
 
@@ -794,35 +704,32 @@ $ntSlotN = 0;
 
 (* one ntDressedNum's options. Each option's scalar coefficient is frame-resolved then split into a
    complex number × dressing atoms (drDecompose); a "slash" structure's momenta become a vlc, an
-   "ident" structure is the spinor identity (no token). *)
-(* MEMOISED: called once per dressed-numerator token, so a dense dressed flow makes tens of thousands of
-   calls — but has only a handful of DISTINCT dressed numerators, since the same propagator numerator
-   recurs in every diagram and colour branch. Resolving/decomposing one is expensive, and unmemoised this
-   was the single largest cost in the net-build. Pure given `env` and $ntDressResolve, both fixed for the
-   generation; $dsCache is cleared per generation in mkGenerateKernel alongside $ctCache. *)
+   "ident" structure is the spinor identity (no token).
+   MEMOISED: the same propagator numerator recurs in every diagram and colour branch, and resolving one
+   is expensive. Pure given `env` and $ntDressResolve, both fixed per generation; $dsCache is cleared
+   per generation in mkGenerateKernel alongside $ctCache. *)
 
 $dsCache = <||>;
 
 dressedSlotStr[gf : ntDressedNum[_, _, _], env_] := With[{h = Hash[{gf, $ctCtx}]},
     Lookup[$dsCache, h, $dsCache[h] = dressedSlotStrBody[gf, env]]];
 
-(* Returns one {structStr, num, dr} triple per option: the dressing-free "DSlotOpt{…}" string, the
-   numeric coefficient and the dress-atom ids. The generator (emitNumericGenerator) expands the
-   Cartesian product of the chain's slots' options into one single-option sub-term per combination. *)
+(* Returns one {structStr, num, dr} triple per option: the dressing-free "DSlotOpt{…}" string
+   (coeff 1, no dress atoms), the numeric coefficient (folded into the sub-term scalar) and the
+   dress-atom ids (the sub-term's dressing monomial), so the trace table dedups on structure alone.
+   The generator (emitNumericGenerator) expands the Cartesian product of the chain's slots' options
+   into one single-option sub-term per combination. *)
 dressedSlotStrBody[ntDressedNum[opts_, _, _], env_] := Function[opt,
           Module[{num, dr, vlcStr},
             {num, dr} = drDecompose[$ntDressResolve[opt[[1]]]];
             vlcStr = If[opt[[2, 1]] === "slash", vlcCpp[opt[[2, 2]], env, "dressed slash"], ""];
-            (* LEVER (b): return the STRUCTURE separately from the dressing, as {structStr, num, dr}.
-                     structStr is the dressing-free DSlotOpt (coeff 1, no dress atoms) — ident → empty toks,
-                     slash → one dslash token (netFacs empty: a k=0 propagator numerator has no open leg).
-                     num (numeric Cx) folds into the sub-term scalar and dr (dress-atom ids) becomes the
-                     DPoly key, so the trace table dedups on structure alone. *)
+            (* ident → empty toks; slash → one dslash token. netFacs is empty: a propagator
+               numerator has no open leg. *)
             {"DSlotOpt{Cx{1,0}, {}, {" <>
               If[opt[[2, 1]] === "slash", "dslash(" <> vlcStr <> ")", ""] <> "}, {}}", num, dr}]
         ] /@ opts;
 
-(* ---- general collected Dirac slot → C++ DSlot literal (Stage 4, any open-leg count) ------------
+(* ---- general collected Dirac slot → C++ DSlot literal (any open-leg count) ----------------------
    An ntDiracSlot option keeps its WHOLE structure (Dirac chain × Lorentz-net factors); here we split
    each option into DSlotOpt{coeff, {dress}, {toks}, {netFacs}} — the Dirac chain as a token list
    (dgamma/dslash/dcomm/dg5, open legs = ids of the free Lorentz tokens) and the Lorentz factors as
@@ -830,6 +737,7 @@ dressedSlotStrBody[ntDressedNum[opts_, _, _], env_] := Function[opt,
    has an id and every momentum an env slot (allLabels/momentumOf recurse into the slot via
    Cases[Infinity]); internal legs (the γ↔projector bridge) keep their own distinct ids, closed within
    the option, so no fresh-id allocation is needed. *)
+
 (* Order one OPEN spinor chain din→dout, returning the token-bearing factors (γ/γ5/σ) in chain order;
    δ connectors are followed but carry no token. Walk from the din endpoint (degree 1) along spinor
    adjacency — like orderDiracFacs but seeded at a KNOWN endpoint (the chain is open, not a cycle). *)
@@ -855,10 +763,8 @@ orderOpenChain[facs_, din_] :=
     If[Length[out] =!= nTok, Message[orderOpenChain::open, din, Length[out], nTok, Short[facs, 6]]; Abort[]];
     out];
 
-(* Same keying as compileLorentz (see there): labels resolved through `ids`, generation-fixed context in
-   $ctCtx. The old key also OMITTED `nonzeroCompMask` while taking it as an argument — harmless while the cache
-   lived exactly one generation, but it does not (see the reset in mkGenerateKernel), so a later flow
-   with a different nonzeroCompMask could have hit a stale entry. $ctCtx closes that. *)
+(* Same memo keying as compileLorentz (see the memo-key note there): labels resolved through `ids`,
+   the generation-fixed context (incl. nonzeroCompMask) in $ctCtx. *)
 $dslCache = <||>;
 diracSlotStr[gf : ntDiracSlot[_, _, _, _], ids_, env_, nonzeroCompMask_] := With[{h = Hash[{ntCanonIds[gf, ids, env], $ctCtx}]},
     Lookup[$dslCache, h, $dslCache[h] = diracSlotStrBody[gf, ids, env, nonzeroCompMask]]];
@@ -881,8 +787,7 @@ diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, nonzeroComp
               Message[compileDirac::slottransposed, gf2]; Abort[]];
             fixedTokCpp[gf2, vecOf, ids, env]] /@ orderOpenChain[diracFacs, din];
           netFacs = lorentzElemStr[#, ids, env] & /@ lorFacs;
-          (* LEVER (b): {structStr, num, dr} — dressing-free DSlotOpt (coeff 1, no dress) + the numeric
-                  Cx (num) and dress-atom ids (dr) carried separately by the sub-term. See dressedSlotStrBody. *)
+          (* dressing-free DSlotOpt; num and dr travel separately, as in dressedSlotStrBody *)
           {"DSlotOpt{Cx{1,0}, {}, {" <> StringRiffle[toks, ", "] <> "}, {" <>
             StringRiffle[netFacs, ", "] <> "}}", num, dr}
         ]] /@ opts;
@@ -897,8 +802,8 @@ diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, nonzeroComp
        single-option sub-terms by emitNumericGenerator), else as DiracNet{…};
      - the remaining factors must be Dirac-free (a dressed numerator sum that was neither distributed
        nor collected would otherwise lose or leak its γ structure) and compile through compileLorentz.
-   Not memoised: caching on canonicalised arguments collapses hPhiL's calls only 2.1x, and the key
-   costs more than that saves (measured, net-build 144 s -> 162 s). *)
+   Not memoised: canonicalised calls repeat only ~2x, so the key costs more than it saves (measured
+   as a net loss). *)
 compileDirac[factors_, ids_, env_, nonzeroCompMask_] :=
   ntProfTimed["compileDirac", compileDiracBody[factors, ids, env, nonzeroCompMask]];
 

@@ -98,7 +98,7 @@ emit["fund", Global`deltaFundFlav];
 emit["tflav", (Sqrt[2 Global`Nf] Global`TFlav[0, #1, #2] &)];
 
 (* Belt and braces: the emitted headers must not mention the blind head under any spelling. The
-   textual $ntCppLeakPatterns guard in Codegen.m would already have aborted, but this fixture exists
+   textual $ntCppLeakPatterns guard in CodegenCommon.m would already have aborted, but this fixture exists
    precisely for this class, so it says so itself rather than trusting a guard elsewhere. *)
 Do[With[{txt = Import[FileNameJoin[{$gen, "Kaon_tadpole_" <> t <> "_kernel.hh"}], "Text"]},
     If[StringContainsQ[txt, "flavDelta"] || StringContainsQ[txt, "_Private_"],

@@ -11,7 +11,7 @@
 //   - fold_net == the left fold  (reassociation must not change the VALUE; MPoly/DPoly addition is
 //     exact term collection over Cx, so this is an exact equality, not a tolerance)
 //   - every cache regime: nCache = 0 (nothing resident, all recomputed), 1, n/2, n (all resident)
-//   - a trace beyond nCache is recomputed EXACTLY ONCE (the singleton-eviction assumption: Codegen.m
+//   - a trace beyond nCache is recomputed EXACTLY ONCE (the singleton-eviction assumption: Codegen*.m
 //     only leaves refCount==1 traces uncached, so a recompute must never be duplicated work)
 //   - both backends: MPoly (plain) and DPoly (dressed)
 //   - the degenerate shapes that the binary counter gets wrong if the carry is off by one: 0, 1, 2, 3
@@ -230,7 +230,7 @@ int main()
       }
     }
 
-    // A partition of [0, nNet) into ragged groups — the shape Codegen.m's GatherBy produces.
+    // A partition of [0, nNet) into ragged groups — the shape Codegen*.m's GatherBy produces.
     std::vector<std::vector<int>> groups;
     for (std::size_t d = 0; d < nNet;) {
       const std::size_t k = 1 + (groups.size() % 4);
@@ -292,7 +292,7 @@ int main()
       }
     }
 
-    // The partition checker must actually fire — it is the guard against a future Codegen.m grouping
+    // The partition checker must actually fire — it is the guard against a future Codegen*.m grouping
     // change silently dropping or double-folding a net, and a checker that never reports is no guard.
     check_group_partition(groups, static_cast<long>(nNet)); // clean: does not exit
 

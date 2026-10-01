@@ -3,7 +3,7 @@
    Run from numtracer/:   wolfram -script tests/gen/gen_zaaqbq1_small_numeric.wls
 
    THIS IS THE ONLY FLOW IN THE SUITE THAT EXERCISES THE SUB-TERM DEDUP. The generator contracts one
-   Dirac trace per (net, sub-term), and the global dedup in Codegen.m exists because the SAME trace
+   Dirac trace per (net, sub-term), and the global dedup in CodegenGenerator.m exists because the SAME trace
    recurs across nets. Every other flow in tests/gen has exactly ONE sub-term per net, so the merge,
    the trace cache and the balanced tree fold are no-ops there — a green suite says nothing about
    them. This flow has hundreds of sub-terms per net and real cross-net redundancy, so it does.

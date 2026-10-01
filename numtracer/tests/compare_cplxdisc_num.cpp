@@ -83,7 +83,7 @@ int main()
   }
   if (!(rel < 1e-12)) {
     std::printf("FAIL: the RePart body does not reproduce real(complex body). This is an identity, so "
-                "the re/imaginary projection in Codegen.m (ntProjectIntegrand) is wrong.\n");
+                "the re/imaginary projection in CodegenRealProjection.m (ntProjectIntegrand) is wrong.\n");
     return 1;
   }
   std::printf("cplxdisc: OK\n");

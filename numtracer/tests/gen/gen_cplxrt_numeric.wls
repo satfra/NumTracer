@@ -42,7 +42,7 @@ Get[FileNameJoin[{$repo, "numtracer", "mathematica", "NumTracer.m"}]];
 Global`Nc = 3; (* SetNc lives in TensorBases (not loaded here); NumTrace reads Global`Nc *)
 
 (* The finite-T propagator frame: slot 0 is Euclidean time, so the loop carries a genuine l0. Do NOT
-   hand-roll this — Codegen.m picks the component parametrisation via unitLoopMixedOkQ, which needs
+   hand-roll this — Codegen*.m picks the component parametrisation via unitLoopMixedOkQ, which needs
    the loop's spatial part to be a unit 3-vector times l1. *)
 frame = NumTracer`propFrameFT[Global`p0, Global`p, Global`l0, Global`l1, Global`cos1,
                               Global`pm, Global`lm];

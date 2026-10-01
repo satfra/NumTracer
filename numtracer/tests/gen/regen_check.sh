@@ -194,7 +194,7 @@ if (( CTEST_MODE )); then
 fi
 
 # The density guard below greps the generator's "[cse] sub-terms:" line, which NumTracer emits through
-# ntLog — silent unless $NumTracerVerbose. Codegen.m turns that flag on when NT_GEN_VERBOSE is set, so
+# ntLog — silent unless $NumTracerVerbose. Codegen*.m turns that flag on when NT_GEN_VERBOSE is set, so
 # enable it here (harmless extra [time]/[prof] lines in the other flows' logs).
 export NT_GEN_VERBOSE=1
 
@@ -205,8 +205,8 @@ export NT_GEN_VERBOSE=1
 # emitted C++ failed to COMPILE, where `wrote generator` IS present so a guard keyed on it passes).
 #
 # There are two independent modes, so check both:
-#   1. Codegen.m aborted before emitting  -> no `wrote generator:`, and `::string`/`cppleak` present.
-#   2. Codegen.m emitted but the generator failed to build/run -> `MakeNTKernel::genfail`.
+#   1. Codegen*.m aborted before emitting  -> no `wrote generator:`, and `::string`/`cppleak` present.
+#   2. Codegen*.m emitted but the generator failed to build/run -> `MakeNTKernel::genfail`.
 # `genfail == 0` is the reliable signal. `wrote kernel:` is NOT required — the plain MakeNTKernel test
 # flows legitimately never print it (only the MakeNTKernel/DiFfRG path does), so demanding it would
 # fail honest flows; `wrote generator:` is the marker every numeric flow emits.
@@ -215,7 +215,7 @@ check_flow_log() {
   # 0. the package did not load. A syntax error in mathematica/*.m is a SILENT no-op in Mathematica
   #    (Get returns Null, definitions after the malformed expression are simply absent), so the flow
   #    runs on a half-defined package and fails far downstream in a way that names the wrong thing:
-  #    measured, an unbalanced bracket mid-Codegen.m surfaced only as
+  #    measured, an unbalanced bracket mid-Codegen*.m surfaced only as
   #    `SetOptions::optnf: RuntimeInclude is not a known option for MakeNTKernel` plus a 0.0001 s
   #    numeric backend, and cost a long detour before anyone looked upward in the log. NumTracer.m
   #    now aborts on it (NumTrace::loadsyntax), but `wolfram -script` still exits 0 on Abort[] — same
@@ -226,7 +226,7 @@ check_flow_log() {
   n=$(grep -ac 'genfail' "$log" 2>/dev/null || true)
   (( n == 0 )) || { echo "      genfail x$n — the emitted generator failed to build/run"; bad=1; }
   n=$(grep -acE '::string|cppleak' "$log" 2>/dev/null || true)
-  (( n == 0 )) || { echo "      ::string/cppleak x$n — Codegen.m aborted before emitting"; bad=1; }
+  (( n == 0 )) || { echo "      ::string/cppleak x$n — Codegen*.m aborted before emitting"; bad=1; }
   n=$(grep -ac 'wrote generator:' "$log" 2>/dev/null || true)
   (( n >= 1 )) || { echo "      no 'wrote generator:' — nothing was emitted for this flow"; bad=1; }
   return $bad
@@ -361,7 +361,7 @@ if ctest --test-dir "$BUILD" -LE codegen --output-on-failure; then
 else
   echo
   echo "FAIL — the regenerated kernels differ from the frozen oracles."
-  echo "Before blaming Codegen.m, check whether the ORACLE is the stale side:"
+  echo "Before blaming Codegen*.m, check whether the ORACLE is the stale side:"
   echo "  * the refshim FORM oracles are frozen MANUAL copies of flows/<NAME>/kernel.hh (README.md)"
   echo "  * a FunKit backend/routing change moves the integrand without changing the physics"
   echo "    (FUNKIT_ROUTING_ISSUE.md at the repo root)"

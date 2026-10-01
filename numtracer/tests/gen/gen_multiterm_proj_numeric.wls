@@ -120,7 +120,7 @@ Print["[gen] ok: momentum-free metric-loop kernel emitted"];
 
 (* Assertion G: a CONSTANT colour/flavour component that is a SUM (a Plus of SU(N) heads).
    compileColG split a Times and expanded Power but had no Plus case, so the sum fell through to
-   colFacG — which, alone among the per-head dispatchers in Codegen.m, had neither a Plus branch nor
+   colFacG — which, alone among the per-head dispatchers in Codegen*.m, had neither a Plus branch nor
    a catch-all — and `colFacG[Plus[...], <|...|>]` was ToString'd raw into the generator .cpp.
    Found on the four-quark Fierz flavour structure delta*delta - 4*T*T; reproduced here WITHOUT
    FunKit so the cheap gate covers it.

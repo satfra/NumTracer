@@ -27,7 +27,7 @@ tests/gen/regen_check.sh            # regenerate, rebuild, run the suite
 tests/gen/regen_check.sh --restore  # throw the regenerated kernels away
 ```
 
-Verified to actually bite: injecting a 1e-7 relative error into an emitted coefficient in `Codegen.m`
+Verified to actually bite: injecting a 1e-7 relative error into an emitted coefficient in `Codegen*.m`
 leaves plain `ctest` at **27/27 green** while `ctest -L codegen` **fails**.
 
 ## What is frozen, and what regenerates it

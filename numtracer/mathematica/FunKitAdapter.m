@@ -28,21 +28,16 @@ $ffMap = <|
   (* finite-T transverse split. TensorBases and NumTracer agree on both the argument order
      (momentum, mu, nu) and the conventions: P_E = P_T - P_M = delta_{mu 0} delta_{nu 0}
      + qs_mu qs_nu/|q_vec|^2 - q_mu q_nu/q^2, P_M = delta_{ij} - q_i q_j/|q_vec|^2 with vanishing
-     temporal rows. The engine side (labelsOf/momentumOf/needsInvQ/needsInvSQ in DSL.m,
-     lorentzNetStr -> eproj/mproj in Codegen.m) has been complete and gated by compare_ftproj_num all
-     along; only this table was missing, so every FunKit flow with an E/M-split gluon propagator
-     hit the untranslated-head trap the ROOT-CLASS GUARD below describes. *)
+     temporal rows. *)
   "transProjElectric" -> ntElectricProj, "transProjMagnetic" -> ntMagneticProj,
   "deltaLorentz" -> ntMetric,
   (* Dirac (spinor) sector. FunKit emits a slashed momentum as gamma[mu,..] * vec[q,mu]
      (the gamma carries the Lorentz axis), so ntGamma -> Dirac::gamma_axis. *)
   "gamma" -> ntGamma, "gamma5" -> ntGamma5, "deltaDirac" -> ntDeltaDirac,
-  (* Charge conjugation. FormTracer's Dirac vocabulary is CLOSED — DefineLorentzTensors has nine
-     positional slots and no extension hook — so C cannot be a FORM head, and FunKit/TensorBases
-     never trace it. A model supplies it as an INERT head on a hand-written vertex rule (or on a
-     basis built with "Reduce"->False and "BuildProjectors"->False, the only path that reaches no
-     FORM call), and it is NumTracer that gives it algebra. The name follows the prior art in
-     DiFfRG 1.0's Mathematica layer, which resolved ChargeConj the same way. *)
+  (* Charge conjugation. FormTracer's Dirac vocabulary is closed, so FunKit/TensorBases never
+     trace C. A model supplies it as an INERT head on a hand-written vertex rule (or on a basis
+     built with "Reduce"->False and "BuildProjectors"->False, which reaches no FORM call), and
+     NumTracer gives it algebra. *)
   "ChargeConj" -> ntC,
   (* flavour-TRIVIAL Kronecker delta -> a private head, contracted to a power of Nf below (its
      dimension Nf is symbolic). Correct ONLY for a flavour-blind closed loop (delta^{ii} = Nf,
@@ -55,18 +50,13 @@ $ffMap = <|
      as the Euclidean dot of the components. For Zc/ZA nothing survives PropParam, so
      this is a no-op there. *)
   "sp" -> ntSP,
-  (* finite-T spatial scalar product. Maps to ntSPS, resolved by the frame as the SPATIAL dot
-     (components 1..3) of the momenta. FunKit's component access vec[q, 0] (a literal integer index)
-     rides the "vec" -> ntVec map above and is routed to the scalar temporal component q_0 by the
-     integer-index classification in DSL.m — no special rule needed here. *)
+  (* finite-T spatial scalar product, resolved by the frame as the SPATIAL dot (components 1..3).
+     FunKit's component access vec[q, 0] (literal integer index) needs no rule here: it rides the
+     "vec" -> ntVec map and DSL.m's integer-index classification routes it to q_0. *)
   "sps" -> ntSPS,
-  (* finite-T spatial VECTOR vecs[q, mu] = the spatial part of q as a 4-vector ({0, q_1, q_2, q_3}).
-     Unlike sps — a scalar the frame folds into the coefficient — this is a genuine tensor LEG, so it
-     needs a momentum of its own: ntSpatialVec[q], which NumTrace pushes through sums and hands to
-     the frame with the temporal slot zeroed (DSL.m expandSpatialVecs / spatialVecFrame). The whole
-     point is that nothing downstream has to know: a SPATIAL SLASH vecs[q,mu] gamma[mu,d1,d2] — the
-     dominant use, and what FormTracer's gamma[..., vecs[q], ...] shorthand expands to
-     (FormTracer.m:1362) — is then an ordinary dslash against a different momentum. *)
+  (* finite-T spatial VECTOR vecs[q, mu] = {0, q_1, q_2, q_3}. Unlike sps this is a tensor LEG, so
+     it gets a momentum of its own, ntSpatialVec[q] (DSL.m expandSpatialVecs / spatialVecFrame).
+     Downstream a spatial slash vecs[q,mu] gamma[mu,d1,d2] is then an ordinary dslash. *)
   "vecs" -> (ntVec[ntSpatialVec[#1], #2] &)
 |>;
 
@@ -76,27 +66,16 @@ $ffMap = <|
    nc; the hand-rolled QM-model isospin tokens (the τ Yukawa generator, the pion f^{abc}
    self-coupling, the adjoint/fundamental isospin deltas) build against nf. Both go through the
    SAME four heads — the engine separates the groups by their disjoint contraction ids. *)
-(* A generator carrying a FIXED (numeric) adjoint index — the Cartan directions T^3 / T^8 of a
-   Polyakov / A_0 background, written TCol[3, i, j] exactly as in the FormTracer models. SetNc[3]
-   switches colour to FormTracer`SU3fundexplicit, so TensorBases contracts those correctly on the
-   Wolfram side; but SUNFac has NO pinned adjoint index. Passing the literal straight through as
-   ntSUNT[nc, 3, i, j] makes the 3 an ordinary contraction LABEL, and a repeated label is SUMMED:
-   tr(T^3 T^3) would come out as Σ_a tr(T^a T^a) = 4 instead of 1/2 — silently, with no error.
-   Pin it instead with a diagAdj that keeps only that one adjoint component.
+(* A generator with a FIXED (numeric) adjoint index, e.g. the Cartan direction TCol[3, i, j] of a
+   Polyakov / A_0 background. SUNFac has no pinned adjoint index, and passing the literal through
+   would make it an ordinary contraction LABEL that gets summed (tr(T^3 T^3) -> 4 instead of 1/2,
+   silently). So pin it with a diagAdj that keeps only that one adjoint component.
 
-   THE INDEX IS NOT THE SAME NUMBER IN BOTH ENGINES. TensorBases/FormTracer use the standard
-   Gell-Mann ordering, where the two SU(3) Cartan generators are a = 3 and a = 8. NumTracer builds
-   GENERALIZED Gell-Mann generators with the diagonal (Cartan) ones LAST — verified by printing the
-   generator diagonals: 0-based gen[6] = diag(1/2,-1/2,0) is Gell-Mann T^3 and gen[7] =
-   diag(1,1,-2)/(2 Sqrt[3]) is Gell-Mann T^8, while gen[0..5] are off-diagonal. So Gell-Mann a must
-   be REMAPPED, or the pin silently selects an off-diagonal generator (a bug invisible to any test
-   that sums symmetrically over components — tr(T^a T^a) = 1/2 for EVERY a).
-
-   For SU(N) the diagonal generators are the last N-1, and the Gell-Mann-convention diagonal indices
-   are a = n^2-1 for n = 2..N. Hence 1-based NumTracer component = N^2-N+n-1. SU(3): 3 -> 7, 8 -> 8.
-   SU(2): 3 -> 3 (coincides). Any other fixed index is an off-diagonal generator whose position in
-   the generalized ordering is convention-dependent, so refuse it rather than guess.
-   Verified component-sensitively via tr(T^a D) against a diagonal D. *)
+   The index must be REMAPPED: FormTracer uses Gell-Mann ordering (SU(3) Cartans a = 3, 8), while
+   NumTracer's generalized Gell-Mann generators put the N-1 diagonal ones LAST. Gell-Mann diagonal
+   a = n^2-1 (n = 2..N) is 1-based NumTracer component N^2-N+n-1 (SU(3): 3 -> 7, 8 -> 8; SU(2):
+   3 -> 3). A wrong remap is invisible to symmetric tests (tr(T^a T^a) = 1/2 for every a). Off-
+   diagonal fixed indices are convention-dependent, so they are refused. *)
 FromFunKit::cartan = "a generator with FIXED adjoint index `1` for SU(`2`): only the Cartan (diagonal) directions a = `3` can be pinned; the off-diagonal generators' positions in NumTracer's generalized Gell-Mann ordering are convention-dependent and would silently select the wrong one.";
 
 ntCartanComponent[n_, a_] := Module[{m = Position[Table[k^2 - 1, {k, 2, n}], a]},
@@ -123,32 +102,9 @@ sunMap[nc_, nf_] := <|
   "epsAdjCol" -> (adjEps[nc, ##] &), "epsAdjFlav" -> (adjEps[nf, ##] &)
 |>;
 
-(* ---- adjoint Levi-Civita: SU(2) ONLY ---------------------------------------------------------
-   The adjoint of SU(N) has dimension N^2-1, so its epsilon carries N^2-1 indices: 3 for SU(2), but
-   8 for SU(3). ShowFormTracerDefinitions[] displays `epsAdjCol[a, b, c]` with a generic THREE-index
-   signature, which makes a 3-index adjoint epsilon at Nc=3 look legal. It is not — that is the
-   likely mistake, so the refusal below names it.
-
-   !! SU(2) ONLY !!  At rank 2 (and ONLY at rank 2) the adjoint epsilon coincides with the structure
-   constant: eps^{abc} = f^{abc}, exactly, coefficient +1. This is NOT a general fact — for SU(3),
-   f^{abc} is not an epsilon at all (it is not totally antisymmetric in the same sense and has
-   different nonzero entries), so nothing here may be read as an SU(N) statement.
-
-   The +1 is derived from NumTracer's OWN conventions, not assumed: sun_net.hpp:233-247 builds the
-   N=2 generators as T^a = sigma^a/2 in (x,y,z) order, and sun_net.hpp:225 defines
-   f^{abc} = -2i tr([T^a,T^b] T^c). With [T^a,T^b] = i eps^{abc} T^c and tr(T^c T^d) = delta^{cd}/2
-   this gives f^{abd} = eps^{abd}. It is still pinned by a test (a contraction LINEAR in the
-   coefficient, so a sign flip cannot hide) rather than trusted.
-
-   Rewriting to ntSUNf reuses an already-tested primitive and — unlike a pair-contraction scheme —
-   accepts an UNPAIRED adjoint epsilon (eps^{abc} T^b T^c and friends), which is common and
-   perfectly well-defined. *)
-(* FunKit's DECLARED head vocabulary (ShowFormTracerDefinitions[]). The closed-world list the guard
-   in FromFunKit checks against: every one of these must be mapped, or refused on purpose. *)
-(* NOTE `vecs` is listed even though it IS mapped. That is the point of the list: it is the
-   closed-world guard, and a token that is absent from it is not merely unmapped but INVISIBLE to
-   the guard below — which is exactly how vecs used to reach the emitted C++ as an opaque scalar.
-   Every finite-T token FormTracer declares (FormTracer.m:62) must appear here, mapped or refused. *)
+(* FunKit's DECLARED head vocabulary (ShowFormTracerDefinitions[]): the closed-world list the guard
+   in FromFunKit checks against. Every declared token must appear here, MAPPED OR NOT: a token
+   absent from this list is invisible to the guard and leaks into the C++ as an opaque scalar. *)
 $funKitHeads = {"FEx", "FTerm", "deltaLorentz", "vec", "vecs", "sp", "sps",
   "deltaDirac", "gamma", "gamma5", "ChargeConj", "sigma", "transProj", "longProj",
   "transProjElectric", "transProjMagnetic",
@@ -163,13 +119,10 @@ over the KNOWN nt* heads, so an unknown head is classified as a SCALAR COEFFICIE
 become invisible to labelsOf/freeIdx, the diagram reports spurious free (open) legs, checkLabels \
 accepts it (open legs are legal), and the raw head is CForm'd into the generated C++. This is how \
 epsFundCol/epsFundFlav went undetected. Add a $ffMap/sunMap entry, or refuse the input explicitly.";
-(* epsLorentz is REFUSED on purpose, not mapped: it is the 3D SPATIAL epsilon (O(3) after the
-   heat-bath split), whereas ntEpsilon is 4D and hard-wired to four labels (DSL.m labelsOf,
-   Codegen.m lorentzNetStr and the Length[lst] == 4 reconstruction). Mapping one onto the other is a
-   silent dimension error. The pair route is cheap (2 terms at D=3) but produces SPATIAL deltas, and
-   NumTracer has no spatial-delta head — ntMetric is the 4D Euclidean metric and would wrongly
-   include the temporal component. So the blocker is a missing head, not cost: the fix is a spatial
-   delta, not more epsilon machinery. It falls through to FromFunKit::untranslated. *)
+(* epsLorentz is REFUSED on purpose (it falls through to FromFunKit::untranslated): it is the 3D
+   SPATIAL epsilon, whereas ntEpsilon is 4D (DSL.m labelsOf, CodegenNets.m lorentzNetStr), so
+   mapping one onto the other is a silent dimension error. Supporting it needs a spatial-delta head;
+   ntMetric would wrongly include the temporal component. *)
 
 FromFunKit::flavcount = "the fundamental-flavour sector would be closed against TWO different \
 flavour counts in the same expression: the SU(N) engine uses rank `1` (the \"FlavourGroup\" option, \
@@ -179,7 +132,13 @@ chain that closes cheaply beside a delta web the engine has to finish — so the
 silently mix the two conventions rather than fail. Call SetNf[n] so Nf is the integer you \
 mean, or pass \"FlavourGroup\" -> Nf explicitly.";
 
-FromFunKit::epsadj = "Adjoint Levi-Civita at SU(`1`) with `2` indices. NumTracer supports the \
+(* ---- adjoint Levi-Civita: SU(2) ONLY ----
+   Only at rank 2 does the adjoint epsilon coincide with the structure constant, eps^{abc} = +f^{abc}
+   (from NumTracer's T^a = sigma^a/2 and f^{abc} = -2i tr([T^a,T^b] T^c), sun_net.hpp; pinned by a
+   test linear in the coefficient). Rewriting to ntSUNf also accepts an UNPAIRED epsilon. At rank N
+   it carries N^2-1 indices; ShowFormTracerDefinitions[]' generic 3-index signature makes a 3-index
+   epsAdjCol at Nc=3 look legal, so the refusal names that mistake. *)
+FromFunKit::epsadj ="Adjoint Levi-Civita at SU(`1`) with `2` indices. NumTracer supports the \
 adjoint epsilon ONLY at rank 2, where eps^abc coincides exactly with the structure constant f^abc \
 (T^a = sigma^a/2, f = -2i tr([T^a,T^b]T^c); see sun_net.hpp:225) and is rewritten to ntSUNf[2,...]. \
 That identification is SU(2)-SPECIFIC and does NOT generalise. At SU(`1`) the adjoint epsilon \
@@ -190,16 +149,11 @@ group.";
 adjEps[n_, idx__] := If[n === 2 && Length[{idx}] === 3, ntSUNf[2, idx],
   Message[FromFunKit::epsadj, n, Length[{idx}], n^2 - 1]; Abort[]];
 
-(* ---- the ONE-ARGUMENT slash shorthand --------------------------------------------------------
-   FormTracer accepts a slashed momentum written inside the gamma string — gamma[..., vecs[p], ...]
-   and gamma[..., vec[p], ...], with no Lorentz index — and expands it itself (FormTracer.m:1362,
-   1375). So this normally never reaches us. But the expansion is gated on finiteTenabled for the
-   vecs form, and FunKit's TRACY back-translation (modules/TRACY/Tools.m:95) reconstructs the tokens
-   textually from FORM output, so a shorthand CAN survive. Left alone it would hand ntGamma a nested
-   head in a Lorentz slot: labelsOf returns that whole subexpression as a "label", and the failure
-   surfaces far away. Expand it here, in the token vocabulary, before anything else looks.
-   Dispatch on the head NAME for the same reason the main map does — the FunKit heads live in
-   contexts that need not be on $ContextPath when this file loads. *)
+(* ---- the ONE-ARGUMENT slash shorthand ----
+   gamma[..., vec[p], ...] / gamma[..., vecs[p], ...] (no Lorentz index) is normally expanded by
+   FormTracer itself, but can survive (finiteTenabled gating, FunKit's TRACY back-translation). Left
+   alone it would put a nested head into ntGamma's Lorentz slot, failing far away, so expand it here
+   first. Dispatch on head NAMES, as in the main map. *)
 expandSlashShorthand[e_] := e //. (g_Symbol)[a___, (v_Symbol)[p_], b___] /;
     SymbolName[g] === "gamma" && MemberQ[{"vec", "vecs"}, SymbolName[v]] :>
   With[{mu = Unique["ffslash$"]}, v[p, mu] g[a, mu, b]];
@@ -209,25 +163,17 @@ expandSlashShorthand[e_] := e //. (g_Symbol)[a___, (v_Symbol)[p_], b___] /;
    delta[x,x] -> Nf. The result is a scalar power of Nf that the per-diagram coefficient
    carries (cancelling the projector's 1/Nf for a flavour-trivial flow like Zq).
 
-   A Kronecker delta is SYMMETRIC, so all four index orientations have to be matched. The
-   head-to-tail rule alone leaves delta[x,y] delta[x,z] and delta[y,x] delta[z,x] untouched,
-   so a chain that FunKit happened to emit in the other order silently failed to close.
-   SetAttributes[flavDelta, Orderless] would say this in one rule, but it makes the //.
-   matcher try argument permutations at every attempt on a diagram-sized Times — the blowup
-   DSL.m:466 warns about — so the transposes are spelled out instead: cheap and deterministic.
+   A Kronecker delta is SYMMETRIC, so all index orientations are matched explicitly; Orderless
+   would say this in one rule but makes the //. matcher try permutations on a diagram-sized Times.
 
-   These rules are SOUND but INCOMPLETE, and that is by design. Each rewrite is an exact
-   Kronecker identity, so stopping early is never wrong, only unfinished; whatever is left
-   over is handed to the SU(N) engine by promoteFlavResidue below. A delta WEB (the boson
-   tadpole's delta_ac delta_bd + delta_ad delta_bc against a loop delta) is not a chain and
-   no local rewrite can close it — that is the residue's reason to exist. *)
+   The rules are SOUND but INCOMPLETE by design: each rewrite is an exact identity, and whatever
+   is left (e.g. a delta WEB, not a chain) is handed to the SU(N) engine by promoteFlavResidue. *)
 contractFlavour[e_] := e //. {
   flavDelta[x_, y_] flavDelta[y_, z_] :> flavDelta[x, z],
   flavDelta[y_, x_] flavDelta[y_, z_] :> flavDelta[x, z],
   flavDelta[x_, y_] flavDelta[z_, y_] :> flavDelta[x, z],
   flavDelta[x_, x_] :> Global`Nf,
-  (* delta_{xy}^n = delta_{xy} for EVERY n >= 1, so summed over both indices it is Nf. The rule
-     used to match n === 2 only, so a cube survived and then read as a 3x-repeated label. *)
+  (* delta_{xy}^n = delta_{xy} for EVERY n >= 1, so summed over both indices it is Nf. *)
   Power[flavDelta[x_, y_], n_Integer /; n >= 2] :> Global`Nf
 };
 
@@ -247,18 +193,11 @@ enforces it), so this net was built by an EARLIER FromFunKit call and a later on
 Call NumTrace on a net right after the FromFunKit that built it.";
 
 (* Hand the SU(N) engine whatever contractFlavour could not close.
-   WHY HERE AND NOT IN FromFunKit: contractFlavour runs TWICE. A flavour chain that straddles an
-   eager dressed numerator's Plus is invisible to the first pass (FromFunKit), and only becomes a
-   flat product once rewriteDressedNums has lifted the common delta out — which is why DSL.m runs
-   it a second time. Measured on a qbq-shaped diagram: 3 deltas survive FromFunKit, and all 3 close
-   after rewriteDressedNums. Promoting at the end of FromFunKit would therefore convert a scalar
-   Nf power into an SU(N) net on every dressed quark flow (Zq/ZAqbq*/aqbq147/lambda3d/...), which
-   is exactly the churn this design exists to avoid.
-
-   The no-residue path returns `factors` UNTOUCHED rather than the contracted product: analyseDiagram
-   numbers its axis ids from the ORDER of the tensor factors, so re-splicing the list would renumber
-   them and change the emitted code for flows that are otherwise unaffected. So this is a strict
-   no-op unless there is something the blind rules genuinely could not close. *)
+   It runs from analyseDiagram, not FromFunKit, because contractFlavour runs TWICE: a chain that
+   straddles an eager dressed numerator's Plus only closes after rewriteDressedNums lifts the common
+   delta out. Promoting earlier would turn scalar Nf powers into SU(N) nets on every dressed quark flow.
+   The no-residue path returns `factors` UNTOUCHED: analyseDiagram numbers axis ids by factor ORDER,
+   so re-splicing would change the emitted code of unaffected flows. *)
 promoteFlavResidue[factors_List] := Module[{flav, rest, closed, resid},
   If[FreeQ[factors, flavDelta], Return[factors]];
   flav   = Select[factors, ! FreeQ[#, flavDelta] &];
@@ -290,53 +229,33 @@ Options[FromFunKit] = {"FlavourGroup" -> Automatic, "DressingCollection" -> True
 FromFunKit[expr_, OptionsPattern[]] := Block[{$ntPlusMemo = <||>}, Module[{nf, map, hasIso, isoRewritten, res},
   nf  = OptionValue["FlavourGroup"] /. Automatic :> If[IntegerQ[Global`Nf], Global`Nf, 2];
   map = Join[$ffMap, sunMap[Global`Nc, nf]];
-  (* ISOSPIN GENERATORS (quark-meson flows). The notebook auxiliary `TFlav` is the SU(nf) FUNDAMENTAL
-     flavour generator: TFlav[a, f1, f2] = (T^a)_{f1 f2} for an adjoint index a != 0, and the flavour
-     SINGLET TFlav[0,f1,f2] = deltaFundFlav[f1,f2]/Sqrt[2 Nf]. It is NOT in $ffMap (it is a notebook
-     symbol, not a FunKit token), so without this it leaks through as an opaque scalar and the isospin
-     trace never closes — leaving the external flavour indices dangling (the pion (-I) factors then fail
-     to cancel and a spurious imaginary part survives). Route the WHOLE fundamental-flavour sector into
-     the SU(nf) engine: map TFlav to ntSUNT / ntSUNDeltaFund, and switch the connecting fundamental
-     deltas from the blind `flavDelta` (which only collapses a genuinely CLOSED line to Nf) to the
-     in-engine ntSUNDeltaFund so the generator trace tr(T^a ... T^a) actually contracts. Gated on the
-     presence of TFlav, so flavour-blind flows (Zq/ZA/ZAqbq1/4/7, ...) are byte-identical. *)
-  (* ---- ONE FLAVOUR COUNT, NOT TWO -----------------------------------------------------------
-     The two routes close a flavour loop against DIFFERENT numbers: the blind contractFlavour
-     folds it to Global`Nf, the engine folds it to `nf` (the "FlavourGroup" option, which falls
-     back to 2 when Global`Nf is not a bound integer). Both routes can contribute to ONE diagram
-     — a chain that closes cheaply next to a web that the engine has to finish — so if the two
-     disagree the coefficient silently mixes conventions. That is a wrong number, not a crash,
-     and it is most likely exactly where it hurts: an Nf = 2+1 setup whose light group is SU(2).
-     Refuse instead of guessing. Only checked when a fundamental-flavour delta is actually
-     present; dispatch on the head NAME, as everywhere else in this file. *)
+  (* ONE FLAVOUR COUNT: the blind contractFlavour closes a flavour loop to Global`Nf, the engine
+     to `nf`. Both can contribute to one diagram, so a mismatch would silently mix conventions. *)
   If[! FreeQ[expr, (h_Symbol)[___] /; SymbolName[h] === "deltaFundFlav"] && nf =!= Global`Nf,
     Message[FromFunKit::flavcount, nf, Global`Nf]; Abort[]];
+  (* ISOSPIN GENERATORS (quark-meson flows). The notebook symbol `TFlav` is the SU(nf) fundamental
+     generator, TFlav[a,f1,f2] = (T^a)_{f1 f2}, with the singlet TFlav[0,f1,f2] = delta/Sqrt[2 Nf].
+     When present, route the WHOLE fundamental-flavour sector into the SU(nf) engine (TFlav and the
+     connecting deltas), so tr(T^a ... T^a) contracts; otherwise TFlav would leak as an opaque
+     scalar. Gated on TFlav, so flavour-blind flows are byte-identical. *)
   hasIso = ! FreeQ[expr, Global`TFlav];
   If[hasIso, map["deltaFundFlav"] = (ntSUNDeltaFund[nf, ##] &)];
   isoRewritten = expandSlashShorthand @ If[hasIso,
     expr //. {Global`TFlav[0, f1_, f2_] :> ntSUNDeltaFund[nf, f1, f2]/Sqrt[2 Global`Nf],
               Global`TFlav[a_, f1_, f2_]  :> ntSUNT[nf, a, f1, f2]},
     expr];
-  (* ---- THE ROOT-CLASS GUARD ------------------------------------------------------------------
-     An untranslated FunKit head does NOT fail loudly downstream. DSL.m's scalarQ is a FreeQ over the
-     KNOWN nt* heads, so an unknown head is classified as a SCALAR COEFFICIENT: its indices become
-     invisible to labelsOf/freeIdx, the diagram reports spurious free (open) legs, checkLabels
-     accepts it (open legs are legal), and the raw Mathematica head is CForm'd into the generated
-     C++. That is exactly how epsFundCol/epsFundFlav went undetected through a whole debugging
-     session — the visible symptom was 8 dangling indices three layers away from the cause.
-     So: refuse any head from FunKit's declared vocabulary that has no entry in the map.
-     NOTE the map is completed CONDITIONALLY just above (the hasIso branch promotes deltaFundFlav),
-     so this must read `map`, never $ffMap — reading the wrong one is itself a way to be misled. *)
+  (* UNTRANSLATED-HEAD GUARD: an unknown head is classified downstream as a scalar coefficient and
+     CForm'd into the C++ without any error (see FromFunKit::untranslated), so refuse any declared
+     FunKit head with no map entry. Read `map`, never $ffMap: the hasIso branch above amends it. *)
   With[{present = DeleteDuplicates @ Cases[isoRewritten, (h_Symbol)[___] :> SymbolName[h], {0, Infinity}]},
     With[{leftover = Complement[Intersection[present, $funKitHeads], Keys[map], $ffHandledElsewhere]},
       If[leftover =!= {}, Message[FromFunKit::untranslated, leftover]; Abort[]]]];
   $ntDressCollect = TrueQ[OptionValue["DressingCollection"]];
   $ntFromFunKitDressCollect = $ntDressCollect;   (* NumTrace warns if it is called with the other value *)
   $ntFlavRank     = nf;   (* consumed by promoteFlavResidue, from DSL.m's analyseDiagram *)
-  (* Normalize fixed Lorentz components before expandBridges tests whether a
-     finite-T spatial slash is a collectible dressed Dirac numerator. This is the whole rewrite, so
-     it is bound here and only its timing is logged — see ntExportCpp on why work stays out of
-     ntLog's arguments. *)
+  (* Normalize fixed Lorentz components before expandBridges tests whether a finite-T spatial
+     slash is a collectible dressed Dirac numerator. The work is bound to `res` outside ntLog's
+     arguments (see ntExportCpp in CodegenCommon.m). *)
   With[{ntT = First@AbsoluteTiming[res = contractFlavour @ expandBridges @ expandFixedComponents[
       isoRewritten //. (h_Symbol)[a___] /; KeyExistsQ[map, SymbolName[h]] :> map[SymbolName[h]][a]]]},
     ntLog["[prof] FromFunKit (head rewrite + expandBridges): ", ntT, " s"]];

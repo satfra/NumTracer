@@ -1,7 +1,7 @@
 (* ::Package:: *)
 
 (* NumTracer` — Mathematica front-end that turns a traced tensor network into a
-   C++ kernel driving the compile-time `et` engine (include/numtracer/).
+   C++ kernel (engine headers in include/numtracer/).
 
    Two public entry points:
      NumTrace[net, opts]     builds an intermediate-expression tree (an NTKernel)
@@ -151,21 +151,11 @@ SetNumTracerThreads[] := GetNumTracerThreads[];
 GetNumTracerThreads[] := Replace[ntEnvPosInt /@ {"NT_GEN_MAXW", "NT_GEN_MAXW_B"}, 0 -> Automatic, {1}];
 
 
-(* ---- load the implementation files, LOUDLY -------------------------------------------------
-   A syntax error in one of these is the single most dangerous edit in this package, because
-   Mathematica makes it a SILENT NO-OP: on `Syntax::sntue` Get returns Null (NOT $Failed — checking
-   the return value does not work), every definition BEFORE the malformed expression is installed,
-   and every definition after it — up to the end of the file, since an unbalanced bracket swallows
-   the remainder into one unfinished expression — quietly is not.
-
-   What that looks like downstream, measured: an unbalanced bracket in the middle of Codegen.m left
-   `Options[MakeNTKernel]` undefined 1800 lines later, so a generator script reported
-   `SetOptions::optnf: RuntimeInclude is not a known option for MakeNTKernel`, ran its numeric
-   backend in 0.0001 s, emitted NOTHING, printed "kernels generated" and exited 0. The real cause
-   was one line in the load output, thousands of lines earlier, and nothing connected the two.
-
-   Check with an explicit message list turns that into an abort at load time. It is inert on a clean
-   file (verified against both an unfinished expression and a stray closing bracket). *)
+(* ---- load the implementation files, LOUDLY ----
+   On a syntax error Get returns Null (NOT $Failed), installs every definition before the malformed
+   expression and silently drops the rest of the file, leaving the package half-defined with
+   symptoms far away (e.g. a missing Options[MakeNTKernel]). Check with the Syntax messages turns
+   that into an abort at load time; it is inert on a clean file. *)
 ntLoadPart[file_String] :=
   If[Check[Get[FileNameJoin[{$NumTracerDirectory, file}]], $Failed,
        Syntax::sntue, Syntax::sntx, Syntax::sntxi,

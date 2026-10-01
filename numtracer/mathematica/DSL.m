@@ -1,26 +1,16 @@
 (* ::Package:: *)
 
 (* DSL analysis: classify the heads, split each term into independent contraction
-   components, and allocate the env-id layout the `et` builders consume.
+   components, and allocate the env-id layout the code generator consumes.
 
    Loaded inside NumTracer`Private` by NumTracer.m — public symbols (NumTrace, the
    nt* heads) already exist in the NumTracer` context. *)
 
 (* ---- environment flags ------------------------------------------------------- *)
 
-(* The ONE truth test for every NT_* boolean env flag, in DSL.m because it loads first and Codegen.m
-   shares this private context.
-
-   Three mutually incompatible conventions used to coexist: presence-only (`=!= $Failed`, value
-   ignored), exact-string (`=!= "1"`), and non-empty-string. So `NT_GEN_VERBOSE=0` turned verbosity
-   ON, and — the one that actually mattered — `NT_NO_LABEL_CHECK=0` DISABLED the per-diagram label
-   census, the guard that catches a Lorentz label occurring more than twice. That is not a knob: an
-   uncaught repeated label is a silently wrong contraction, and the variable's own comment said
-   "=1 disables", so setting it to 0 to be explicit did the opposite of what it read like.
-
-   `SetEnvironment["VAR" -> None]` (the reset idiom the fixture generators use, e.g.
-   gen_zaaqbq1_small_numeric.wls) makes Environment[] return $Failed, which must read as OFF — a
-   naive `v =!= "0"` would call that truthy and leave the flag stuck ON for the rest of the session. *)
+(* The ONE truth test for every NT_* boolean env flag (here because DSL.m loads first and the
+   Codegen*.m files share this private context). Only 1/true/yes/on read as ON, so `VAR=0` is OFF,
+   and an unset variable (Environment[] = $Failed, e.g. after SetEnvironment["VAR" -> None]) is OFF. *)
 ntEnvFlag[name_String] :=
   With[{v = Environment[name]},
     StringQ[v] && MemberQ[{"1", "true", "yes", "on"}, ToLowerCase[StringTrim[v]]]];
@@ -61,28 +51,20 @@ ntProfReport[prefix_String] :=
 
 (* ---- head classification ---------------------------------------------------- *)
 
-(* A factor that participates in the tensor contraction (vs. a scalar coefficient).
-   ntEpsilon (the Levi-Civita ε_{μνρσ}) is a Lorentz tensor produced by the γ5 trace theorem
-   (gammaTraceSum5 in Codegen.m); it carries four Lorentz labels like a metric pair. *)
-(* ntVec[q, mu] with a SYMBOLIC label is a tensor leg; ntVec[q, i_Integer] is the scalar component
-   q_i (0-based, 0=temporal), resolved by the frame in the coeff like ntSP — so it is NOT a tensor.
-   Express that by matching only a non-integer second arg here (an integer arg falls through to False). *)
+(* A factor that participates in the tensor contraction (vs. a scalar coefficient). ntEpsilon (the
+   Lorentz Levi-Civita ε_{μνρσ}) carries four Lorentz labels.
+   ntVec[q, mu] with a SYMBOLIC label is a tensor leg; ntVec[q, i_Integer] is the scalar component q_i
+   (0-based, 0 = temporal), resolved by the frame like ntSP, so it is NOT a tensor. *)
 tensorQ[_ntMetric | ntVec[_, Except[_Integer]] | _ntTransProj | _ntLongProj |
         _ntElectricProj | _ntMagneticProj | _ntSUNf | _ntSUNDeltaAdj |
         _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac | _ntSUNT | _ntSUNDeltaFund | _ntEpsilon |
         _ntSUNDiagFund | _ntSUNDiagAdj | _ntEpsFund | _ntDressedNum | _ntDiracSlot] = True;
 tensorQ[_] = False;
 
-(* The 4 SU(N) group heads carry their rank N as the FIRST argument, so colour SU(Nc),
-   flavour/isospin SU(Nf), and any further group coexist in one network at the right rank.
-   Lorentz, Dirac, and the SU(N) groups contract in disjoint index spaces (matched by shared
-   label), so the label sets are treated uniformly while the builders stay distinct. *)
-(* ntSUNDiag{Fund,Adj}[N, i, j, spec] — a group δ that carries a PER-COMPONENT dressing.
-   `spec` is a rules list {c -> expr, ..., Default -> defExpr} of 1-based component indices to scalar
-   dressing expressions (each already evaluated at its own kinematics); unnamed components collapse
-   to Default when given, else drop. They classify exactly like the matching plain δ
-   (fundamental / adjoint) for index bookkeeping; the per-component dressing is folded numerically
-   by sun_value_dressed at codegen time. *)
+(* The SU(N) group heads carry their rank N as the FIRST argument, so several groups coexist in one
+   network. Lorentz, Dirac and the SU(N) groups contract in disjoint index spaces.
+   ntSUNDiag{Fund,Adj} (a per-component-dressed δ, see their ::usage) classify exactly like the
+   matching plain δ; the dressing is folded numerically by sun_value_dressed. *)
 adjointSUNQ[_ntSUNf | _ntSUNDeltaAdj | _ntSUNDiagAdj] = True;  (* group-adjoint heads (bridge with Lorentz) *)
 adjointSUNQ[_] = False;
 fundamentalSUNQ[_ntSUNT | _ntSUNDeltaFund | _ntSUNDiagFund | _ntEpsFund] = True;   (* group-fundamental heads (quark-line) *)
@@ -120,7 +102,7 @@ labelsOf[h_ntEpsFund] := Rest[List @@ h];
    so it exposes only its spinor in/out labels; the dressing collection is folded in C++ (one DPoly
    trace) instead of distributing the numerator into 2^D diagrams. *)
 labelsOf[ntDressedNum[_, din_, dout_]] := {din, dout};
-(* ntDiracSlot[options, din, dout, legs] — a collected Dirac slot (Stage 4 general form): a
+(* ntDiracSlot[options, din, dout, legs] — a collected Dirac slot (general form): a
    coefficient-weighted sum of Dirac structures sharing spinor in/out (din,dout) AND the SAME SET of
    open Lorentz legs `legs` (any count k>=0; k=0 = a propagator numerator, k>=1 = a vertex). `options`
    is a list of {coeffExpr, structureProduct}; the structure's free Lorentz ids are exactly `legs`, so
@@ -129,7 +111,7 @@ labelsOf[ntDressedNum[_, din_, dout_]] := {din, dout};
 labelsOf[ntDiracSlot[_, din_, dout_, legs_]] := Join[legs, {din, dout}];
 
 (* Spinor (Dirac) axis labels of a head — the subset of labelsOf that lives in the
-   spinor index space. Used to give spinor axes a disjoint id range so the et engine
+   spinor index space. Used to give spinor axes a disjoint id range so the engine
    never contracts a spinor axis against a Lorentz/colour axis sharing an id. *)
 spinorLabelsHead[ntGamma[_, din_, dout_]] := {din, dout};
 spinorLabelsHead[ntGamma5[din_, dout_]]   := {din, dout};
@@ -163,17 +145,14 @@ needsInvSQ[_]                  = False;
 
 (* ---- self-trace normalization ----------------------------------------------- *)
 
-(* A tensor with a repeated index is a self-trace (e.g. P^mu_mu). The et engine
+(* A tensor with a repeated index is a self-trace (e.g. P^mu_mu). The engine
    contracts pairwise BETWEEN tensors and never self-contracts one, so we relabel
    the second occurrence and insert the matching identity (Lorentz metric for a
    Lorentz index, adjoint delta for a colour index): P^mu_mu = P^{mu nu} d_{mu nu}.
    This keeps every index appearing on two distinct tensors, as the engine needs. *)
-(* NOTE on Plus: tensorQ[Plus[...]] is False (head-matching with a catch-all), so a SUM vertex takes
-   the `! tensorQ` branch and passes through untouched — a repeated index INSIDE a summand is then
-   never split. That is safe only because a self-trace within one summand of an eager sum has never
-   been produced by a flow; labelCensus's Plus branch would flag the resulting free-index mismatch if
-   it were. Left as-is deliberately: relabelling inside a summand would have to keep every summand's
-   free-index set aligned (the eager add(...) precondition), which this factor-local rewrite cannot see. *)
+(* A SUM vertex (tensorQ[Plus] is False) passes through untouched, so a repeated index INSIDE a
+   summand is never split. No flow produces one, and labelCensus's Plus branch would flag it; fixing
+   it here would need every summand's free-index set kept aligned, which this local rewrite cannot see. *)
 splitSelfTraces[factors_List] := Module[{res = {}, conns = {}},
   Function[f, If[! tensorQ[f], AppendTo[res, f],
     (* The connecting identity reuses the SAME group rank N as the head it closes: an
@@ -210,9 +189,8 @@ freeIdx[e_] := Which[
      so it exposes NO free index. Spelled out rather than left to the True branch below, which
      would return {} for the wrong reason and hide a malformed Power. *)
   Head[e] === Power && IntegerQ[e[[2]]] && e[[2]] >= 2 && ! scalarQ[e], {},
-  (* count == 1 is free; count == 2 is contracted. checkLabels guarantees no label occurs more
-     often, so the old OddQ test was equivalent — but OddQ would silently call a 4x label
-     "contracted" and a 3x label "free" if the guard were ever bypassed. *)
+  (* count == 1 is free; count == 2 is contracted (checkLabels guarantees no label occurs more
+     often). Not OddQ, which would misclassify a 3x/4x label if that guard were bypassed. *)
   Head[e] === Times, Cases[Tally[Flatten[freeIdx /@ (List @@ e)]], {l_, c_} /; c == 1 :> l],
   True,              {}];
 
@@ -252,15 +230,11 @@ orderFactors[fs_List] := Module[{fi = freeIdx /@ fs, byLabel, touched, rem, out,
 
 (* ---- sector-bridge expansion (keep colour and Lorentz contractions separate) ---- *)
 
-(* Eager summation (an add(...) net) is a win only when a structure-sum lives in ONE sector — a sum of
-   Lorentz structures with a single colour factor pulled out (e.g. a 3-gluon vertex) stays one
-   small Lorentz tensor. A SECTOR-BRIDGING sum is different: its colour sum is *correlated* with
-   its Lorentz sum (each term pairs one colour structure with one Lorentz structure, e.g. a
-   4-gluon vertex's f.f ⊗ metric.metric). add(...)-ing those fuses the colour (dim N^2-1) and
-   Lorentz (dim 4) axes into one ETensor whose entry count (and type) explodes — building it alone
-   times out. The cure: DISTRIBUTE such a sum, so each term is colour/Lorentz index-disjoint again
-   — colour folds to a constant, Lorentz stays small. That is linear in the (few) structures, not
-   the product-of-sums blow-up. *)
+(* Eager summation (an add(...) net) is a win only when a structure-sum lives in ONE sector (e.g. a
+   3-gluon vertex: Lorentz structures times one colour factor). A SECTOR-BRIDGING sum pairs each
+   colour structure with a Lorentz one (e.g. a 4-gluon vertex's f.f ⊗ metric.metric); add(...)-ing it
+   fuses colour and Lorentz axes into one tensor whose entry count explodes. So DISTRIBUTE it: each
+   term is sector-disjoint again, at a cost linear in the (few) structures. *)
 sectorBridgeQ[p_] := (! FreeQ[p, _ntSUNf | _ntSUNDeltaAdj | _ntSUNDiagAdj]) &&
                      (! FreeQ[p, _ntMetric | ntVec[_, Except[_Integer]] | _ntTransProj | _ntLongProj |
                                  _ntElectricProj | _ntMagneticProj]);
@@ -274,14 +248,11 @@ scalarCoeffOf[t_] := Times @@ Select[If[Head[t] === Times, List @@ t, {t}], scal
    each Dirac structure must become its own diagram with that dressing as a scalar coeff.
    (Pure-scalar dressing sums — no tensor head — are left intact as coefficients.) *)
 dressedStructureSumQ[p_Plus] := (! scalarQ[p]) && AnyTrue[List @@ p, ! NumericQ[scalarCoeffOf[#]] &];
-(* Symbolic dressing collection: when $ntDressCollect is True a
-   DIRAC dressed structure sum (a propagator numerator like Mq·δ + Z(p)·γ·p, all terms sharing the
-   spinor in/out indices) is NOT distributed — it is kept eager and rewritten to a single ntDressedNum
-   slot (rewriteDressedNums), so the diagram folds to ONE DPoly trace carrying its dressings as
-   `dress` env leaves instead of exploding into 2^D diagrams. A colour↔Lorentz sectorBridge sum still
-   distributes (sectors must split), and a non-Dirac dressed sum (no shared spinor indices) still
-   distributes (the collection only handles the Dirac numerator case here). NumTrace and FromFunKit
-   set $ntDressCollect from their "DressingCollection" option, which defaults to True. *)
+(* Symbolic dressing collection: when $ntDressCollect is True a collectible DIRAC dressed structure
+   sum (e.g. a propagator numerator Mq·δ + Z(p)·γ·p) is kept eager and rewritten to one ntDressedNum /
+   ntDiracSlot token (rewriteDressedNums), so the diagram folds to ONE trace carrying its dressings
+   instead of exploding into 2^D diagrams. Sector-bridging and non-Dirac dressed sums still distribute.
+   NumTrace and FromFunKit set it from their "DressingCollection" option (default True). *)
 $ntDressCollect = False;
 (* The OPEN (free) spinor labels of a summand: spinor indices appearing an odd number of times. *)
 openSpinorOf[t_] := Cases[Tally[Flatten[Cases[t, h_?tensorQ :> spinorLabelsHead[h], {0, Infinity}]]],
@@ -292,47 +263,17 @@ diracNumeratorSumQ[p_Plus] := Module[{terms = List @@ p, opens},
   opens = openSpinorOf /@ terms;
   AllTrue[terms, ! FreeQ[#, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac] &] &&
     AllTrue[opens, Length[#] === 2 &] && SameQ @@ (Sort /@ opens)];
-(* A dressed Dirac sum is collectible only if every term is a propagator numerator we can ACTUALLY
-   decompose (ident / slash, no open gluon leg). diracNumeratorSumQ is the cheap pre-filter (same 2
-   open spinor indices, Dirac structure); dressedNumDecompose =!= $Failed is the exact test — a sum
-   with an open Lorentz leg (a multi-structure quark-gluon / σ vertex) fails it and stays on the
-   distribution path (so it never survives un-distributed AND un-rewritten → no eagernn abort). *)
-(* Collectible if it is EITHER a propagator numerator (k=0, no open leg → ntDressedNum) OR a general
-   Dirac vertex sum (k>=1 open legs → ntDiracSlot). Both require a NON-adjoint (quark-line) colour
-   sector so colour factors out (sectorBridgeQ False) and the eager sum stays in one Lorentz/Dirac
-   sector. The `=!= $Failed` decompose is the exact test in each case. *)
-(* VERTEX collection (k>=1 open-leg ntDiracSlot) is OPT-IN — OFF by default. On a high-combination
-   flow (full-basis ZAAqbq: ~10^6 structure x dressing combinations per net) the codegen expansion
-   materialises the Cartesian product and OOMs the WolframKernel, so such flows MUST distribute (the
-   pre-plan behaviour). The pre-existing PROPAGATOR collection (k=0) is bounded (2 options/propagator)
-   and stays ON unconditionally. Enable the vertex path with NT_VERTEX_COLLECT=1 (or set
-   $ntVertexCollect=True) on the small-P flows where it wins (e.g. za3_147: 8.9 s vs 13.3 s). *)
+(* Collection of DRESSED vertex sums (ntDiracSlot with k>=1 open legs) is OPT-IN via NT_VERTEX_COLLECT:
+   the codegen expansion materialises the structure x dressing product (~10^6 per net on full-basis
+   ZAAqbq) and can OOM the kernel. It wins only on small flows. *)
 $ntVertexCollect := ntEnvFlag["NT_VERTEX_COLLECT"];
-(* ALL-NUMERIC Dirac sums as slots (opt-in). `dressedStructureSumQ` demands at least one NON-numeric
-   summand coefficient, because it was written to decide whether a DRESSING sum must be distributed.
-   A multi-term PROJECTOR is collateral damage: its coefficients are pure numbers, so it fails that
-   test, is therefore never collectible, and survives as a raw Plus all the way to
-   splitColourGroups — where `Expand[Times @@ needExpand]` materialises its Cartesian product with
-   the rest of the diagram, once per diagram, per generation.
-   That is measurably the dominant cost of a projector-heavy flow: transAAqbqMinimal's element 2
-   (~10 Dirac terms, 30 gammas) against element 1 (3 terms, 4 gammas) is 1056 vs 14 distinct emitted
-   DiracNets and 328 s vs 62 s of generation, from two otherwise identical flow definitions.
-   Such a sum satisfies every OTHER condition of the slot path — shared open spinor pair, shared open
-   Lorentz set, colour factoring out (it sits outside the Plus) — so relaxing the gate for the SLOT
-   disjunct alone turns it into one chain with an N-option slot.
-   Scoped deliberately: the k=0 propagator-numerator disjunct keeps `dressedStructureSumQ`, so an
-   all-numeric propagator numerator still distributes exactly as today. And `distributeQ` below is
-   untouched by construction — it tests `dressedStructureSumQ` first, which is False for these sums,
-   so its verdict (do not distribute) is the same either way.
-
-   UNCONDITIONAL, and deliberately NOT gated behind $ntVertexCollect. The two are different risks
-   that happen to share a mechanism. $ntVertexCollect is opt-in because a DRESSED vertex sum
-   multiplies the structure count by the dressing count — the ~10^6 structure x dressing combinations
-   per net that OOMed the kernel. An all-numeric projector sum has no dressing dimension at all (its
-   options carry no dress atoms), so its combination count is bounded by the projector's own term
-   count: measured on ZAAqbq2 the sub-term count is IDENTICAL either way (12,721,032) — the work
-   moves, it does not grow. There is therefore no case in which the legacy distribute path is wanted,
-   and the NT_NO_SLOT_COLLECT_NUMERIC hatch that used to select it (referenced nowhere) is gone. *)
+(* A Dirac Plus is collected (kept eager as one token) iff it is not a sector bridge and EITHER
+   - a dressed propagator numerator (k=0 open legs, ident/slash only) -> ntDressedNum; OR
+   - a Dirac slot (shared spinor pair and open-leg set) -> ntDiracSlot, which for a DRESSED sum
+     requires $ntVertexCollect, and for an ALL-NUMERIC sum (e.g. a multi-term projector) is always on:
+     it has no dressing dimension, so collecting it is bounded, whereas leaving it a raw Plus makes
+     splitColourGroups expand its Cartesian product with the rest of the diagram.
+   The `=!= $Failed` decompositions are the exact tests; the other predicates are cheap pre-filters. *)
 collectibleDiracSumQRaw[p_Plus] := ! sectorBridgeQ[p] &&
   ((dressedStructureSumQ[p] && diracNumeratorSumQ[p] && dressedNumDecompose[p] =!= $Failed) ||
    ((TrueQ[$ntVertexCollect] && dressedStructureSumQ[p]) || ! dressedStructureSumQ[p]) &&
@@ -342,34 +283,23 @@ distributeQRaw[p_] := sectorBridgeQ[p] ||
   (dressedStructureSumQ[p] && ! (TrueQ[$ntDressCollect] && collectibleDiracSumQ[p]));
 
 (* The SET of γ-count parities the diagram's terms would carry IF every EAGER Dirac Plus were
-   distributed — {0}, {1}, or {0,1}. Used for the odd-trace-vanishing verdict: a closed trace is
-   identically zero only when EVERY branch has an odd γ count, i.e. the set is exactly {1}.
-   A diagram-global `Count[_ntGamma, Infinity]` cannot decide this — it sums γ's ACROSS the branches
-   of an eager Plus and so reports a parity no actual term has (e.g. a projector 1 + p̸ against two
-   γ's counts 3 → "odd" → the whole diagram is dropped, taking its non-vanishing even branch with it).
-   Computed WITHOUT Expand: the sets are capped at two elements and fold pairwise, so this is linear
-   in the factor count rather than a product-of-sums blow-up.
-   Only _ntGamma is counted, matching the old test: ntSigma (2 γ) and ntDeltaDirac (0 γ) are both
-   EVEN and so correctly contribute parity 0. ntDressedNum cannot appear yet (rewriteDressedNums runs
-   later, inside analyseDiagram). *)
+   distributed — {0}, {1}, or {0,1}. A closed trace is identically zero only when the set is exactly
+   {1}; a diagram-global γ count would sum ACROSS the branches of an eager Plus (1 + p̸ against two γ's
+   counts 3) and report a parity no actual term has. Computed WITHOUT Expand: the sets are capped at two elements and fold pairwise, so this is linear
+   in the factor count. ntDressedNum cannot appear yet (rewriteDressedNums runs later). *)
 diracParities[e_Plus] := Union @@ (diracParities /@ (List @@ e));
 diracParities[e_Times] := Fold[Union[Flatten[Mod[Outer[Plus, #1, #2], 2]]] &,
                                {0}, diracParities /@ (List @@ e)];
-(* b^n is n copies of b multiplied. Do NOT write this as diracParities[Times @@ ConstantArray[b, n]]:
-   Times immediately re-collapses the copies back to b^n, so that recurses until $RecursionLimit and
-   returns garbage — and it fires on ORDINARY SCALAR powers (sp[p2,p3]^2 in a Gram determinant), not
-   just tensor powers. Fold the parity arithmetically instead: n copies of a definite parity p give
-   n*p mod 2, and if b itself has both parities then so does any power of it. *)
+(* b^n: n copies of a definite parity p give n*p mod 2; if b has both parities, so does b^n. Do NOT
+   recurse on Times @@ ConstantArray[b, n]: Times re-collapses it to b^n (infinite recursion), and
+   this fires on ordinary scalar powers too. *)
 diracParities[Power[b_, n_Integer?Positive]] := With[{s = diracParities[b]},
   If[Length[s] > 1, {0, 1}, {Mod[n * First[s], 2]}]];
-(* {0, Infinity}, NOT Infinity: this catch-all is reached with a BARE factor (a single ntGamma head
-   pulled out of the enclosing Times), and level spec Infinity means {1, Infinity} — it would skip
-   level 0 and count that γ as zero. The old diagram-global test never hit this because it always
-   ran on a whole Times, where every γ sits at level 1. *)
-(* Counts _ntGamma ONLY. ntC is deliberately not counted: C = gamma^2 gamma^4 is two gammas, i.e.
-   0 mod 2, and (like gamma5 and ntSigma) it is block-DIAGONAL in the Weyl basis, so it cannot turn a
-   vanishing odd trace into a non-vanishing one. The C++ parity counters agree — see the "keep in
-   step" note on nAntidiag in numeric_contract.hpp / network/dirac.hpp. *)
+(* {0, Infinity}, NOT Infinity: this catch-all can receive a BARE ntGamma head, which level spec
+   Infinity (= {1, Infinity}) would skip.
+   Counts _ntGamma ONLY: ntSigma (2 γ), ntDeltaDirac, ntC (= γ^2 γ^4) and γ5 are all parity-even
+   (block-diagonal in the Weyl basis). Keep in step with the C++ counter nAntidiag
+   (numeric_contract.hpp / network/dirac.hpp). *)
 diracParities[e_] := {Mod[Count[e, _ntGamma, {0, Infinity}], 2]};
 
 (* The odd-trace verdict itself: a γ5-free diagram every one of whose branches is an odd closed
@@ -442,12 +372,12 @@ rewriteDressedNums[factors_List] := If[! TrueQ[$ntDressCollect], factors,
      With[{r = With[{r0 = dressedNumDecompose[f]}, If[r0 =!= $Failed, r0, diracSlotDecompose[f]]]},
        If[r === $Failed, {f}, If[Head[r] === Times, List @@ r, {r}]]], {f}]] /@ factors]];
 
-(* ---- general collected Dirac slot (Stage 4, ANY open-leg count) --------------------------------
+(* ---- general collected Dirac slot (ANY open-leg count) --------------------------------
    A collected Dirac slot is a coefficient-weighted sum of Dirac structures that all share the spinor
    in/out pair AND the SAME SET of open Lorentz legs `{μ...}` (k>=0). k=0 is the propagator numerator
    (handled by the ntDressedNum path); k>=1 is a vertex with k open gluon legs (Aqbq: 1; AAqbq: 2; …).
-   The C++ engine already closes an arbitrary number of open legs against the net, so the front end
-   only has to keep the sum EAGER and package each structure as one option. Unlike the propagator
+   The engine closes any number of open legs, so the front end only keeps the sum EAGER and packages
+   each structure as one option. Unlike the propagator
    collection, an option's structure is kept WHOLE (its Dirac chain × its Lorentz-net factors, e.g. the
    gluon propagator on the open leg); the codegen backend splits it into Dirac tokens vs net factors. *)
 
@@ -480,20 +410,14 @@ diracSlotDecomposeRaw[p_Plus] := Module[
   If[! diracSlotSumQ[p], Return[$Failed]];
   legs   = Sort @ openLorentzOf[First[terms]];
   opens  = openSpinorOf[First[terms]];
-  (* ORIENTED din/dout: the chain runs din→dout. Each Dirac head is an (in,out) spinor edge; the open
-     in-leg is the open spinor label that is some head's `in` but no head's `out` (dout is the reverse).
-     Orientation matters — the option's tokens are spliced in chain order, so a reversed din/dout would
-     emit the trace backwards. *)
+  (* ORIENTED din/dout: each Dirac head is an (in,out) spinor edge; the chain runs din→dout. *)
   io = Cases[If[Head[First[terms]] === Times, List @@ First[terms], {First[terms]}],
         ntGamma[_, a_, b_] | ntGamma5[a_, b_] | ntC[a_, b_] | ntDeltaDirac[a_, b_] |
         ntSigma[_, _, a_, b_] :> {a, b}];
   ins = io[[All, 1]]; outs = io[[All, 2]];
-  (* ORIENTATION GUARD. An open chain has EXACTLY ONE open spinor label that is some head's `in` and
-     no head's `out` — that is what "the chain runs din→dout" means. Two such labels (both ends are
-     `in`, an anomalous qq vertex) or none (both are `out`, its q̄q̄ conjugate) means the slot has no
-     well-defined orientation. The old `SelectFirst[..., First[opens]]` default silently picked one
-     anyway, and since the option's tokens are spliced into the surrounding loop IN CHAIN ORDER, a
-     wrongly-oriented slot emits that segment backwards with no diagnostic. Refuse instead. *)
+  (* ORIENTATION GUARD: din must be the UNIQUE open label that is some head's `in` and no head's `out`.
+     Zero or two candidates (q̄q̄ / qq vertex) have no orientation, and since the tokens are spliced in
+     CHAIN ORDER a guess would silently emit the segment backwards. *)
   dinCands = Select[opens, MemberQ[ins, #] && ! MemberQ[outs, #] &];
   If[Length[dinCands] =!= 1,
     Message[NumTrace::slotorient, Length[dinCands], Short[opens, 4], Short[First[terms], 6]]; Abort[]];
@@ -519,12 +443,10 @@ diracSlotDecompose[_] := $Failed;
 
 (* ---- per-call memo for the Plus classifiers ------------------------------------------------------
    FunKit reuses index names across diagrams, so one vertex sum is the SAME expression in every diagram
-   that contains it (ZA4_147: 2631 Plus factors, 40 distinct), and expandBridges, collectibleDiracSumQ
-   and rewriteDressedNums each re-ask the same questions of it. The four functions below (and
+   that contains it (ZA4_147: 2631 Plus factors, 40 distinct). The four functions below (and
    labelCensus on a Plus) are pure in {p, $ntDressCollect, $ntVertexCollect}, so NumTrace and
-   FromFunKit Block $ntPlusMemo to <||> and
-   share the answers for one call. Outside such a Block (direct calls from tests) nothing is cached.
-   The store happens only after f[p] returns, so an Abort (slotorient) is never memoised. *)
+   FromFunKit Block $ntPlusMemo to <||> and share the answers for one call; outside such a Block
+   nothing is cached. The store happens only after f[p] returns, so an Abort is never memoised. *)
 $ntPlusMemo = None;
 ntPlusMemo[tag_, f_, p_] :=
   If[$ntPlusMemo === None,
@@ -546,14 +468,10 @@ expandBridges[e_Times] := Module[{factors = List @@ e, bridge},
   If[MissingQ[bridge],
     Times @@ (expandBridges /@ factors),
     expandBridges[Plus @@ (Times @@ Append[DeleteCases[factors, bridge, {1}, 1], #] & /@ (List @@ bridge))]]];
-(* Times is Flat+Orderless and auto-collects identical factors, so two byte-identical bridging sums
-   become Power[sum, 2] BEFORE we ever see them. The selector above matches p_Plus only, so such a
-   Power is never chosen as a bridge and would fall through the catch-all below UN-DISTRIBUTED —
-   fusing the colour and Lorentz axes into one giant ETensor (the exact blow-up expandBridges
-   exists to prevent), or worse being read by compileLorentz as a closed self-contraction. It cannot
-   simply be re-expanded here: Times would immediately re-collapse the copies unless their labels
-   were freshened first, and two vertices that legitimately share every label are themselves a bug.
-   No known flow produces this; fail loudly if one ever does. *)
+(* Times auto-collects two byte-identical bridging sums into Power[sum, 2], which the p_Plus selector
+   above never picks, so it would pass through UN-DISTRIBUTED (or be read by compileLorentz as a
+   closed self-contraction). Two vertices sharing every label are malformed anyway, and Times would
+   re-collapse a naive expansion. No known flow produces this; fail loudly. *)
 NumTrace::bridgepow = "expandBridges: a colour<->Lorentz-bridging sum appears raised to the power \
 `1`, i.e. as `1` byte-identical factors sharing every index label. Such a sum cannot be distributed \
 (and identical labels on two distinct vertices are themselves malformed). Offending base:\n`2`";
@@ -563,25 +481,18 @@ expandBridges[e_] := e;
 
 (* ---- fixed Lorentz components (the finite-T γ0/γi split) ---------------------
 
-   The four-quark Fierz bases (and any finite-T 3+1 split) are written with Lorentz indices pinned
-   to a CONCRETE component: ntGamma[0, d1, d2] is γ^0, not "γ^μ with a label named 0". The DSL's
-   label machinery has no such notion — labelsOf[ntGamma[mu,...]] returns {mu,...} unconditionally
-   — so that literal 0 was read as an ordinary contraction label, appeared in a dozen factors at
-   once, and checkLabels aborted with the (correct but baffling) `privclash`.
-
-   The fix is a REWRITE, not new machinery: a fixed component is a contraction with the constant
-   unit basis vector e_i, so
+   The four-quark Fierz bases (and any finite-T 3+1 split) pin Lorentz indices to a CONCRETE
+   component: ntGamma[0, d1, d2] is γ^0. The label machinery has no such notion (it would read the 0
+   as a contraction label), so a fixed component is REWRITTEN as a contraction with the constant unit
+   basis vector e_i:
 
        γ^i          ->  ntGamma[μ, d1, d2] ntVec[ntUnitVec[i], μ]     (μ a fresh private dummy)
        g^{i ν}      ->  ntVec[ntUnitVec[i], ν]
        g^{i j}      ->  δ_ij                                          (Euclidean metric)
        σ's free leg ->  the existing SLASH leg against ntUnitVec[i]
 
-   ntUnitVec[i] is an ordinary MOMENTUM symbol (momentumOf picks it up, buildEnv gives it a Base),
-   whose frame components NumTrace injects as UnitVector[4, i+1]. Downstream nothing changes:
-   compileDirac's vecOf already turns a γ whose μ carries an ntVec into `dslash({{1.0, base}})`,
-   which is exactly γ contracted with that vector. So this needs NO new DFac kind and NO C++ change
-   — a fixed-component γ IS a slash, and frameMask prunes the three zero components for free.
+   ntUnitVec[i] is an ordinary MOMENTUM symbol whose frame components NumTrace injects as
+   UnitVector[4, i+1], so a fixed-component γ is emitted as an ordinary slash, with no C++ change.
 
    Applied BEFORE expandBridges/checkLabels, so no integer Lorentz slot ever reaches the label
    machinery and tensorQ/labelsOf/freeIdx/labelCensus stay untouched. (ntVec[q, i_Integer] is NOT
@@ -612,25 +523,14 @@ NumTrace::fixcomp = "Fixed Lorentz component `1` is out of range: a component in
 
 (* ---- finite-T SPATIAL vectors (FormTracer's `vecs`) -------------------------------------------
 
-   vecs[q, mu] is the spatial part of q as a 4-vector: components {0, q_1, q_2, q_3}. FromFunKit
-   rewrites it to ntVec[ntSpatialVec[q], mu], so a SPATIAL SLASH vecs[q,mu] gamma[mu,d1,d2] is an
-   ordinary slash against a different momentum — compileDirac's vecOf emits `dslash({{1.0, base}})`
-   for it unchanged. Exactly the ntUnitVec trick above: a new momentum LEAF, no new DFac kind, no C++
-   change. The zero temporal component costs nothing either: it is a structural zero in the frame
-   spec's component table, so it never becomes a term. (It also lowers the momentum's frameMask, but
-   do not read anything into that — the numeric backend's `lvec<Lbl,Base,Mask>` ignores its Mask
-   argument entirely, and a slash carries no mask at all.)
+   vecs[q, mu] is the spatial part of q as a 4-vector, {0, q_1, q_2, q_3}. FromFunKit rewrites it to
+   ntVec[ntSpatialVec[q], mu], a new momentum LEAF, so a spatial slash is an ordinary slash (as with
+   ntUnitVec above); the zero temporal component is a structural zero in the frame spec. ntSPS, the
+   spatial scalar product, needs no leaf; gen_spatialvec_numeric.wls pins that the two agree.
 
-   Contrast ntSPS, the spatial scalar PRODUCT: that is a scalar coefficient the frame resolves as a
-   components-1..3 dot, so it needs no leaf at all. The two must agree, which the codegen gate
-   gen_spatialvec_numeric.wls pins.
-
-   LINEARITY first. The spatial projection is linear, so push it through sums and numeric factors
-   (FormTracer does the same, FormTracer.m:888-889) BEFORE anything else looks at the momentum. Two
-   reasons: (i) only BASE momenta then become frame keys, so ntSpatialVec[p - l] does not mint a
-   third leaf whose components duplicate those of ntSpatialVec[p] and ntSpatialVec[l]; (ii) the leaf
-   is then an atom by the time canonicalizeMomentumSigns' negMomQ inspects it, so the sign
-   convention applies to the spatial momentum itself rather than to whatever sat inside it. *)
+   The projection is linear, so push it through sums and numeric factors FIRST: then only BASE
+   momenta become frame keys (no duplicate leaf for ntSpatialVec[p - l]), and the leaf is an atom by
+   the time canonicalizeMomentumSigns' negMomQ inspects it. *)
 expandSpatialVecs[e_] := e //. {
   ntSpatialVec[ntSpatialVec[q_]]      :> ntSpatialVec[q],   (* idempotent: the bar of a bar *)
   ntSpatialVec[0]                     :> 0,
@@ -649,15 +549,11 @@ frame key or a linear combination of frame keys.";
    with the temporal slot zeroed. Call AFTER unitVecFrame has joined the frame, so that a spatial
    vector of a unit basis vector resolves too.
 
-   These entries make the spatial vector a first-class frame/env citizen — buildEnv gives it a Base,
-   resolveComponents resolves it, frameMask masks it. They are NOT what the numeric backend computes
-   with (measured by mutation: perturbing them leaves every emitted kernel byte-identical, because
-   `lvec` drops its Mask and a slash never had one): the component table comes from the frame SPEC
-   (Codegen.m unitLoopFrameSpec /
-   unitLoopMixedFrameSpec / polyFrameSpec), where a spatial vector is likewise derived from its
-   parent with slot 1 zeroed — sharing the parent's ntU$ unit group rather than minting a duplicate.
-   Two derivations, one invariant ("the parent's components, temporal slot zeroed"), which is why
-   they cannot drift apart. *)
+   These entries make the spatial vector a frame/env citizen (buildEnv gives it a Base). The numeric
+   backend does NOT compute with them (mutating them is byte-identical-inert): its component table
+   comes from the frame SPEC (CodegenFrames.m unitLoopFrameSpec / unitLoopMixedFrameSpec /
+   polyFrameSpec), which derives the spatial vector from its parent the same way. Keep the two
+   derivations in step. *)
 spatialVecFrame[net_, frame_] := Association[
   Function[sv, Module[{c = resolveComponents[First[sv], frame]},
       If[! MatchQ[c, {_, _, _, _}],
@@ -667,43 +563,29 @@ spatialVecFrame[net_, frame_] := Association[
 
 (* ---- SU(N) FUNDAMENTAL Levi-Civita -------------------------------------------
 
-   ntEpsFund[N, i1, ..., iN] is the totally antisymmetric invariant of SU(N) in the FUNDAMENTAL
-   space, so it carries exactly N indices (colour SU(3): 3; isospin SU(2): 2). It reaches us from
-   FunKit's epsFundCol/epsFundFlav, which the four-quark Fierz bases use for their diquark /
-   colour-antisymmetric channels.
-
-   Like the fixed-component gamma, this is a REWRITE into primitives the engine already has, not a
-   new engine token: an epsilon is contracted ONLY in pairs (a lone epsilon is not an SU(N)
-   invariant), and a pair folds to a determinant of Kronecker deltas,
+   ntEpsFund[N, i1, ..., iN] (exactly N indices) comes from FunKit's epsFundCol/epsFundFlav (the
+   four-quark Fierz bases' diquark channels). It is a REWRITE, not an engine token: an epsilon is
+   contracted ONLY in pairs (a lone one is not an SU(N) invariant), and a pair folds to a determinant
+   of Kronecker deltas,
 
        eps_{a1..ak c1..cm} eps_{a1..ak d1..dm}  =  k! * det( delta_{c_p d_q} )        (m = N - k)
 
-   which is exactly ntSUNDeltaFund. So there is NO C++ change: SUNFac's fixed 3-slot layout never
-   has to represent an N-index object. The result is a Plus of delta products with numeric
-   coefficients, which lands on the constant-colour branch-list path (compileColourSum in Codegen.m).
-
+   i.e. a Plus of ntSUNDeltaFund products with numeric coefficients, which lands on the
+   constant-colour branch-list path (compileColourSum in CodegenNets.m).
    Applied BEFORE expandBridges/checkLabels so the object those validate is the one that compiles.
+   ntEpsFund is deliberately NOT registered in the codegen colour tables (ctHeads / colourFacStr /
+   labelDimAssoc), so a survivor of this rewrite fails (MakeNTKernel::colleak) instead of emitting. *)
 
-   WHY THE HEAD IS DELIBERATELY NOT REGISTERED IN Codegen's colour tables (ctHeads / colourFacStr /
-   labelDimAssoc): an ntEpsFund that somehow survives this rewrite must FAIL, not be emitted. It then
-   trips colourFacStr's catch-all (MakeNTKernel::colleak) and, behind that, ntExportCpp's nt*-head regex. *)
-
-(* The dimension of the index space an epsilon head lives in. One line today; the single point a
-   hypothetical adjoint epsilon (dimension N^2-1) would extend. *)
+(* The dimension of the index space an epsilon head lives in. *)
 epsDimOf[ntEpsFund[n_, __]] := n;
 
-(* The pair contraction, written DIMENSION-PARAMETRIC (dim and the delta constructor are the only
-   things that were N-specific). That makes it unit-testable at dim = 2..5 against LeviCivitaTensor
-   without any head existing at those dimensions — see the gate's brute-force oracle. *)
 $ntEpsMaxPairTerms = 720;   (* 6!; 7! = 5040 would breach $ntColSumMaxBranches (4096) on its own *)
 
 NumTrace::spinorbase = "A diagram carries `1` Lorentz/colour axis labels, which reaches the spinor axis id base `2`. Axis ids are how the engine decides what contracts with what, so the two ranges meeting means a Lorentz axis and a spinor axis share an id and get fused into one contraction — a silently WRONG number, not an error. Raise NumTracer`Private`$ntSpinorIdBase above the label count (the ids are dictionary keys, so a larger base costs nothing). Aborting instead.";
 
 (* First axis id handed to a SPINOR (Dirac) label. Lorentz/colour labels are numbered from 0 upward,
-   so this is the ceiling on how many of those one diagram may carry; see analyseDiagram, which
-   aborts rather than let the two ranges meet. 100 is far above any real diagram (the dense 4-point
-   quark flows peak in the low tens) and costs nothing — the ids are dictionary keys, not array
-   indices, so a sparse range is free. *)
+   so this caps their count per diagram (analyseDiagram aborts before the ranges meet). Real diagrams
+   peak in the low tens; the ids are dictionary keys, so a large base is free. *)
 $ntSpinorIdBase = 100;
 NumTrace::epsbig = "expandFundEps: an epsilon pair in dimension `1` sharing `2` index/indices \
 expands to `3`! = `4` Kronecker-delta terms (limit `5`). Emitting these would hand the colour \
@@ -712,6 +594,8 @@ branch-list lowering a list it would either reject far downstream with an opaque
 nothing pointing at a Levi-Civita as the cause. Contract more indices between the two epsilons, or \
 raise $ntEpsMaxPairTerms if a flow genuinely needs this.";
 
+(* The pair contraction, written DIMENSION-PARAMETRIC (dim and the delta constructor), so it is
+   unit-testable at dim = 2..5 against LeviCivitaTensor. *)
 epsPairExpand[dim_Integer, uu_List, vv_List, deltaOf_] := Module[
   {shared, cA, cB, posA, posB, sgn, k, m},
   shared = Intersection[uu, vv];
@@ -756,24 +640,19 @@ expandFundEps[e_] := Module[{res},
 
 expandFundEpsRec[e_Plus] := expandFundEpsRec /@ e;
 (* eps^2 is a self-contraction of an epsilon with itself: every index is shared, so k = N, m = 0 and
-   the value is N!. Compute it ARITHMETICALLY — do NOT write this as expandFundEpsRec[b b], because
-   Times immediately re-collapses two identical factors back to b^2 and the rule recurses until
-   $IterationLimit. (Exactly the trap the diracParities Power clause documents.) Anything above the
-   square is an odd/malformed count and falls through to the epsodd guard. *)
+   the value is N!. Compute it ARITHMETICALLY: expandFundEpsRec[b b] would re-collapse to b^2 and
+   recurse forever. Higher powers fall through to the epsodd guard. *)
 expandFundEpsRec[Power[b_ntEpsFund, 2]] := Module[{idx = Rest[List @@ b], d = epsDimOf[b]},
   If[Length[idx] =!= d, Message[NumTrace::epsrank, Length[idx], d, b]; Abort[]];
   If[Length[DeleteDuplicates[idx]] =!= Length[idx], 0,
      epsPairExpand[d, idx, idx, ntSUNDeltaFund[d, #1, #2] &]]];
 expandFundEpsRec[e_Times] := Module[{fs, eps, rest, cand, pair, uu, vv, plusEps, host, others},
   (* recurse into the factors FIRST: an epsilon pair frequently lives inside a Plus factor (a
-     multi-term projector), and pairing only at this level would leave it untouched — the survivors
-     then trip the epsodd guard, which is correct but unhelpful. *)
+     multi-term projector). *)
   fs = expandFundEpsRec /@ (List @@ e);
   eps = Cases[fs, _ntEpsFund];
-  (* Times @@ fs, NOT e: the factors were just recursed into (a Plus factor typically had its own
-     pairs contracted), so returning the original here would silently discard that work. The test is
-     FreeQ over all of fs, not just the bare factors: an epsilon may still sit inside a Plus factor
-     awaiting a partner from out here (the straddle case handled at the bottom). *)
+  (* Times @@ fs, NOT e, so the recursion's work is kept. FreeQ over all of fs: an epsilon inside a
+     Plus factor may still await a partner from out here (the straddle case at the bottom). *)
   If[FreeQ[fs, _ntEpsFund], Return[Times @@ fs, Module]];
   (* validate arity, and kill a degenerate epsilon (a repeated index) before anything else *)
   Function[h, With[{idx = Rest[List @@ h]},
@@ -785,13 +664,8 @@ expandFundEpsRec[e_Times] := Module[{fs, eps, rest, cand, pair, uu, vv, plusEps,
      the fewest terms ((N-k)!). Any pairing WITHIN ONE INDEX SPACE gives the same VALUE — eps.eps =
      k! det(delta) is an identity that holds whatever else multiplies it — so only the term count
      depends on the choice.
-     Candidates are restricted to EQUAL RANK. Pairing two epsilons of different rank is not a weaker
-     identity, it is nonsense: epsPairExpand would build a determinant sized by one partner's rank
-     and silently DROP the surplus indices of the other. That is exactly how a rank-2 flavour epsilon
-     got contracted against a rank-3 colour one in the four-quark Fierz diquark vertex — one colour
-     leg vanished, the two summands of the eager vertex sum ended up exposing DIFFERENT free indices,
-     and the failure surfaced far downstream as NumTrace::plusfree. Unequal ranks are left unpaired
-     here and reported by the epsodd guard, which names them. *)
+     Candidates are restricted to EQUAL RANK: across ranks epsPairExpand would silently drop the
+     surplus indices of one partner. Unequal ranks are left unpaired for the epsodd guard. *)
   While[Length[eps] >= 2,
     cand = Select[Subsets[Range[Length[eps]], {2}],
              epsDimOf[eps[[#[[1]]]]] === epsDimOf[eps[[#[[2]]]]] &];
@@ -802,8 +676,7 @@ expandFundEpsRec[e_Times] := Module[{fs, eps, rest, cand, pair, uu, vv, plusEps,
     (* Equal rank is necessary but NOT sufficient to identify partners: at Nc == Nf a colour and a
        flavour epsilon carry the same rank. Sharing an index proves they meet; sharing none leaves it
        undetermined, so a zero-overlap choice is only safe when it is FORCED (exactly two of this
-       rank left — under a well-formed input each space carries an even count, so two survivors of
-       one rank must be partners). Otherwise refuse. *)
+       rank left). Otherwise refuse. *)
     If[Intersection[uu, vv] === {} &&
        Count[eps, h_ /; epsDimOf[h] === epsDimOf[eps[[pair[[1]]]]]] > 2,
       Message[NumTrace::epsambig,
@@ -816,11 +689,9 @@ expandFundEpsRec[e_Times] := Module[{fs, eps, rest, cand, pair, uu, vv, plusEps,
   (* STRADDLE: an epsilon's partner may sit inside an eager Plus factor (or in a DIFFERENT Plus
      factor) rather than out here, so no amount of pairing at one multiplicative level can join
      them — e.g. eps_col[a,A1,A3] eps_flav[F1,F3] * (eps_col[a,A2,A4] eps_flav[F2,F4] D1 - ...),
-     the diquark vertex of the four-quark Fierz bases. eps.eps = k! det(delta) is only applicable
-     where both partners multiply each other, so distribute the remaining factors into ONE such sum
-     and recurse; each step removes one epsilon-bearing Plus, so this terminates.
-     Times, never Expand: a summand's own internal sums (the Dirac structure sum here) stay intact,
-     so this costs the epsilon-bearing sum's width and nothing more. *)
+     the four-quark diquark vertex. Distribute the remaining factors into ONE such sum and recurse;
+     each step removes one epsilon-bearing Plus, so this terminates. Times, never Expand, so the
+     summands' own internal sums stay intact. *)
   If[eps =!= {} || ! FreeQ[rest, _ntEpsFund],
     plusEps = Select[rest, Head[#] === Plus && ! FreeQ[#, _ntEpsFund] &];
     If[plusEps =!= {},
@@ -832,19 +703,12 @@ expandFundEpsRec[e_] := e;
 
 (* ---- momentum sign canonicalisation ----------------------------------------- *)
 
-(* buildEnv keys momentum Bases on the momentum EXPRESSION, so `q` and `-q` used to get separate
-   Bases and separate Inv slots — measured on with_mesons' lambda1L3D: 6 exact ± pairs among 16
-   bases, and 14 inv slots holding only 7 distinct values. Worse than the wasted slots, the sign
-   twins block the global sub-term dedup and the emitted-body dedup (both key on the emitted net
-   source, which names the base): the two-momentum flow deduped only 7% of its trace bodies vs 30%
-   for its fast-path sibling. Every momentum-carrying head is either LINEAR in its momentum (a
-   vector/slash leg: vec(-q) = -vec(q), the -1 surfacing as an ordinary scalar factor in the
-   diagram's Times/Plus tree) or EVEN (the projectors and their 1/q² inv atoms), so a canonical
-   sign representative is exact. The convention: flip iff the coefficient of the FIRST variable
-   (canonical Sort order) is numerically negative — deterministic, and maps each ± pair to one rep.
-
-   NT_NO_SIGN_CANON: escape hatch back to expression-keyed bases; exists for grading (the
-   lambda3d_small control kernel) and as the rollback. *)
+(* buildEnv keys momentum Bases on the momentum EXPRESSION, so `q` and `-q` would get separate Bases
+   and Inv slots, and the sign twins would block the sub-term and emitted-body dedup (both key on the
+   base name). Every momentum-carrying head is LINEAR in its momentum (vec(-q) = -vec(q)) or EVEN
+   (the projectors, 1/q²), so a canonical sign is exact: flip iff the coefficient of the first
+   variable (Sort order) is negative.
+   NT_NO_SIGN_CANON: escape hatch back to expression-keyed bases (used by the lambda3d_small control). *)
 
 negMomQ[q_] := Module[{vars = Sort[Variables[q]], c},
   vars =!= {} && (c = Coefficient[q, First[vars]]; NumericQ[c] && c < 0)];
@@ -880,22 +744,13 @@ buildEnv[momenta_List, invMomenta_List, invSMomenta_List] := Module[{env = <||>,
   {env, inv}  (* inv is now the total env size NEnv *)
 ];
 
-(* Per-momentum component mask: bit i set <=> component i is structurally nonzero in
-   the frame. Drives the et builder Mask template arg (zero components prune away). *)
+(* Per-momentum component mask: bit i set <=> component i is structurally nonzero in the frame. *)
 frameMask[components_List] := FromDigits[Reverse[Boole[# =!= 0 && # =!= 0.] & /@ components], 2];
 
 (* ---- NumTrace --------------------------------------------------------------- *)
 
-(* NOTE (do not re-attempt): running analyseDiagram / labelCensus over Wolfram SUBKERNELS was tried
-   and REMOVED. Both are pure per-diagram maps, so parallelism is trivially correct — but it is
-   marshalling-bound, not compute-bound: the kernel serialises every diagram AND its result across
-   processes, costing about as much as the work. Measured on full-basis ZAAqbq (3350 diagrams):
-   NumTrace 55 s serial vs 55 s parallel, and the label census got *slower* (it is too cheap to beat
-   the transfer). It also had a correctness trap — the subkernels needed every collection global
-   ($ntDressCollect, $ntVertexCollect, …) pushed to them by hand, and a flow that sets one by symbol
-   assignment rather than by environment variable would silently analyse differently on the workers.
-   The real front-end lever is NT_NO_LABEL_CHECK (skip the census, ~14%). See
-   NUMTRACER_TRACE_PERF_FINDINGS.md. *)
+(* NumTrace is deliberately serial: mapping analyseDiagram / labelCensus over Wolfram subkernels is
+   marshalling-bound (55 s serial vs 55 s parallel on full-basis ZAAqbq). *)
 
 (* Each SU(N) group head carries its own rank N as the first argument (baked in when the
    network is built — Global`Nc for colour, the FromFunKit "FlavourGroup" option for the
@@ -912,16 +767,13 @@ own setting; pass the same value to both.";
 
 NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose], $ntProf = <||>, $ntPlusMemo = <||>}, Module[
   {frame, args, dress, badRanks, net2, diagrams, allMom, invMom, invSMom, env, nenv, diags, ntT0},
-(* WHOLE-NumTrace wall clock, next to the stage timers ([prof] expandBridges / checkLabels /
-   analyseDiagram) and the per-part accumulators ([prof]   NumTrace part …), so a gap between the
-   total and the parts is visible. *)
+  (* whole-NumTrace wall clock, so a gap between the total and the [prof] parts is visible *)
   ntT0   = AbsoluteTime[];
   frame  = OptionValue["Frame"];
   args   = OptionValue["Args"];
   dress  = OptionValue["Dressings"];
-  (* symbolic dressing collection: keep dressed Dirac numerators eager (one DPoly trace) instead of
-     distributing into 2^D diagrams. Set here so expandBridges (distributeQ) and analyseDiagram
-     (rewriteDressedNums) both see it; each NumTrace call sets it from its option (default True). *)
+  (* symbolic dressing collection (see $ntDressCollect); set here so expandBridges and analyseDiagram
+     both see it *)
   $ntDressCollect = TrueQ[OptionValue["DressingCollection"]];
   If[BooleanQ[$ntFromFunKitDressCollect] && $ntFromFunKitDressCollect =!= $ntDressCollect,
     Message[NumTrace::dresscollect, $ntDressCollect, $ntFromFunKitDressCollect]];
@@ -934,17 +786,13 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
     ! (IntegerQ[#] && # >= 1) &];
   If[badRanks =!= {},
     Message[NumTrace::sunrank, badRanks]; Abort[]];
-  (* A closed quark flavour loop folds to Global`Nf. When SetNf[n] has been called Global`Nf is
-     an integer and has already folded into the coefficients (nothing to check). Only when it is
-     still the unset symbol AND it appears in the network is the flavour count genuinely undefined
-     — check for the symbol then (guarding so the integer value is not mistaken for a literal). *)
+  (* A closed quark flavour loop folds to Global`Nf; it is undefined only if Nf is still a symbol
+     AND appears in the network. *)
   If[! IntegerQ[Global`Nf] && ! FreeQ[net, Global`Nf],
     Message[NumTrace::nfsym]; Abort[]];
 
-  (* FIXED LORENTZ COMPONENTS (γ^0 & co, the finite-T 3+1 split used by the four-quark Fierz bases)
-     are rewritten into contractions with constant unit basis vectors FIRST, so that no integer
-     Lorentz slot ever reaches the label machinery below. See expandFixedComponents. The unit
-     vectors join the frame as ordinary momenta, so every existing frame builder stays untouched. *)
+  (* Fixed Lorentz components (γ^0 & co) are rewritten FIRST, so no integer Lorentz slot reaches the
+     label machinery (see expandFixedComponents); the unit vectors join the frame as momenta. *)
   net2 = ntProfTimed["canonicalizeMomentumSigns", canonicalizeMomentumSigns @
            ntProfTimed["expandFundEps", expandFundEps @
              ntProfTimed["expandSpatialVecs", expandSpatialVecs @
@@ -958,37 +806,21 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
      resolve. See expandSpatialVecs / spatialVecFrame. *)
   frame = Join[frame, spatialVecFrame[net2, frame]];
 
-  (* the top-level sum is the (linear) sum of DIAGRAMS; keep single-sector vertex sums eager
-     as an eager add(...), but distribute colour<->Lorentz-bridging sums so the two sectors never fuse
-     into one giant ETensor. *)
+  (* the top-level sum is the (linear) sum of DIAGRAMS; single-sector vertex sums stay eager, while
+     colour<->Lorentz-bridging sums are distributed (see sectorBridgeQ). *)
   With[{ntT = First@AbsoluteTiming[
   diagrams = With[{ex = expandBridges[net2]}, If[Head[ex] === Plus, List @@ ex, {ex}]];]},
     ntLog["[prof] NumTrace expandBridges: ", ntT, " s"]];
-  (* odd-trace vanishing: a closed Dirac trace of an ODD number of gammas is identically zero
-     (and would otherwise carry a spurious imaginary I^odd coefficient from the vertex/basis
-     normalizations). Drop such diagrams. (gamma5-bearing traces are exempt from the rule.)
-     The verdict is PER BRANCH (diracParities), not on a diagram-global gamma count: an EAGER Dirac
-     Plus left standing by expandBridges can carry a VARIABLE gamma parity, and summing the count
-     across its branches yields a parity no actual term has. Two ways that bites:
-       * a COLLECTIBLE dressed propagator sum (Mq·δ + Z·γ·p̸, kept eager under collection) — its δ
-         ("ident") branch has 0 gammas, its γ·p̸ ("slash") branch 1. (e.g. struct-4 `l̸1 γ^ρ` + a
-         propagator counts 3 γ → "odd" → the diagram was dropped, killing its non-zero Mq·δ branch
-         — the 1/4/7 collection bug.)
-       * a MULTI-TERM PROJECTOR's Plus — all-numeric coefficients and single-sector, so distributeQ
-         is False (left eager) AND collectibleDiracSumQ is False (that predicate needs a NON-numeric
-         coefficient). It was exempted by neither, so the oblique-metric dual projector for e.g.
-         AqbqDirect8 structure 7 traced to an identically-zero kernel with no error raised.
-     Only an ALL-odd-branch diagram is dropped; a mixed-parity one is KEPT, and the per-branch
-     matrix-product trace zeroes its odd-gamma branches on its own (splitColourGroups expands any
-     γ-bearing Plus and compiles each branch separately, so this filter is purely a pruning
-     optimisation sitting upstream of already-correct code). *)
+  (* odd-trace vanishing: a γ5-free closed Dirac trace of an ODD number of gammas is zero, so drop
+     such diagrams. The verdict is PER BRANCH (diracParities): an eager Dirac Plus (a collected
+     propagator Mq·δ + Z·p̸, a multi-term projector) can mix parities, and a diagram-global count
+     would drop non-vanishing even branches. Only all-odd diagrams are dropped; this is pure pruning,
+     since the per-branch trace zeroes odd branches on its own. *)
   diagrams = ntProfTimed["oddTracePrune", Select[diagrams, ! vanishingOddTraceQ[#] &]];
 
-  (* Validate every distributed diagram BEFORE analyseDiagram assigns axis ids: it gives ONE id
-     per DISTINCT label (see below), so a label occurring 4x becomes four axes sharing an id and
-     the et engine mis-pairs them into a silently wrong number. Checked per diagram (not on the
-     raw net): only after expandBridges is each diagram a flat Times in which "1 = free,
-     2 = contracted" is the actual invariant. *)
+  (* Validate every distributed diagram BEFORE analyseDiagram assigns axis ids (one id per DISTINCT
+     label), per diagram because only after expandBridges is "1 = free, 2 = contracted" the
+     invariant. See the label-validation section below. *)
   With[{ntT = First@AbsoluteTiming[
   With[{frees = If[TrueQ[$ntCheckLabels],
       (* the census (labelCensus) is pure; the abort/Message validation is kept separate so a
@@ -1000,33 +832,22 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
       DeleteDuplicates[Sort /@ frees]]];]},
     ntLog["[prof] NumTrace checkLabels: ", ntT, " s"]];
 
-  (* global env layout: every distinct momentum, and which ones need a 1/q^2 slot *)
-  (* net2, not net: the unit basis vectors introduced by expandFixedComponents — and the spatial
-     vectors introduced by expandSpatialVecs — are ordinary momenta and MUST get an env Base, or
-     compileDirac's slash emission finds them absent. *)
-  (* one scan for the distinct tensor heads; deduplicating them first keeps each momentum's
-     first-occurrence order (needsInvQ/needsInvSQ heads are tensor heads) *)
+  (* global env layout: every distinct momentum, and which ones need a 1/q^2 slot. Scan net2, not net:
+     the unit and spatial vectors introduced above are momenta that need an env Base. Deduplicating
+     the heads first keeps each momentum's first-occurrence order. *)
   ntProfTimed["buildEnv", With[{tens = DeleteDuplicates @ Cases[net2, _?tensorQ, Infinity]},
     allMom = DeleteDuplicates[momentumOf /@ tens] // DeleteCases[None];
     invMom = DeleteDuplicates[momentumOf /@ Select[tens, needsInvQ]];
     invSMom = DeleteDuplicates[momentumOf /@ Select[tens, needsInvSQ]];
     {env, nenv} = buildEnv[allMom, invMom, invSMom]]];
 
-(* The text of this line is a CONTRACT: tests/gen/regen_check.sh's flow_counts() seds the diagram
-   count out of it. Same literal fragments, same order. *)
+  (* The text of this log line is a CONTRACT: tests/gen/regen_check.sh's flow_counts() parses it. *)
   With[{ntT = First@AbsoluteTiming[diags = analyseDiagram /@ diagrams]},
     ntLog["[prof] NumTrace analyseDiagram (", Length[diagrams], " diagrams): ", ntT, " s"]];
 
-  (* ---- NO FLAVOUR DELTA MAY LEAVE HERE -------------------------------------------------------
-     This is the first point at which the fundamental-flavour residue is final: both contractFlavour
-     passes have run and promoteFlavResidue has had its chance. A flavDelta that is still standing is
-     neither contracted nor in the engine, and it fails SILENTLY downstream — scalarQ is a FreeQ over
-     the nt* heads, so it is classified as a scalar COEFFICIENT, its indices become invisible to
-     labelsOf/freeIdx/checkLabels, and CForm prints it into the kernel as
-     `NumTracer_Private_flavDelta(F1, F2)`: a bare identifier both GCC and Clang accept as an
-     undeclared call. Refuse it here, where the diagram is still nameable, rather than three layers
-     away in a compiler error. (The textual $ntCppLeakPatterns entry in Codegen.m is the backstop for
-     the same class; this one gives the better message.) *)
+  (* NO FLAVOUR DELTA MAY LEAVE HERE: both contractFlavour passes and promoteFlavResidue have run,
+     and a surviving flavDelta would be classified as a scalar and leak into the C++ (see
+     NumTrace::flavleak). $ntCppLeakPatterns (CodegenCommon.m) is the textual backstop. *)
   With[{leak = DeleteDuplicates @ Cases[diags, _flavDelta, {0, Infinity}]},
     If[leak =!= {}, Message[NumTrace::flavleak, Short[leak, 8]]; Abort[]]];
 
@@ -1045,27 +866,17 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
 
 (* One diagram -> {pure-scalar coeff, axis-id map, tensor components}. Components keep
    their factors un-expanded (heads, Plus-vertices, Times-structures); the recursive
-   net builder in Codegen (compileLorentz) turns Plus -> add(...), Times -> contract(...). *)
+   net builder (CodegenNets.m compileLorentz) turns Plus -> add(...), Times -> contract(...). *)
 analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
   factors = ntProfTimed["rewriteDressedNums", rewriteDressedNums @
     ntProfTimed["splitSelfTraces", splitSelfTraces[If[Head[diagram] === Times, List @@ diagram, {diagram}]]]];
-  (* LAST CHANCE to close the fundamental-flavour deltas, and the last point at which promoting the
-     residue into the SU(N) engine still works. rewriteDressedNums (just above) is what lifts a
-     flavour delta out of an eager dressed numerator's Plus, so this is the first point at which a
-     straddling chain is a flat product — and the partition below is the last point at which a
-     promoted head can still be handed an axis id. A no-op unless the blind rules left something
-     genuinely unclosable, so flows whose flavour lines close stay byte-identical. *)
+  (* Promote unclosable flavour deltas into the SU(N) engine: after rewriteDressedNums (which flattens
+     straddling chains) and before the axis-id partition below. A no-op when every line closes. *)
   factors = ntProfTimed["promoteFlavResidue", promoteFlavResidue[factors]];
   tensorF = Select[factors, ! scalarQ[#] &];
-  (* Partition labels by sector: spinor (Dirac) axes get a disjoint high id range (>= $ntSpinorIdBase)
-     so the engine — which contracts axes by MATCHING ID — never fuses a spinor axis with a
-     Lorentz/colour axis that happened to be numbered the same.
-
-     Disjointness is not structural, it is arithmetic: it holds only while the non-spinor labels stay
-     below the base. Exceed it and axis $ntSpinorIdBase is BOTH the first spinor axis and the
-     ($ntSpinorIdBase+1)-th Lorentz axis, so the engine contracts two unrelated legs and returns a
-     wrong number with no diagnostic — the failure class every other guard in this file exists to
-     make loud. So check it. *)
+  (* Partition labels by sector: spinor axes get ids >= $ntSpinorIdBase, so the engine (which
+     contracts by MATCHING ID) never fuses a spinor axis with a Lorentz/colour one. This holds only
+     while the non-spinor count stays below the base, hence the check. *)
   ids     = With[{labs = DeleteDuplicates @ Flatten[allLabels /@ tensorF],
                   spn  = DeleteDuplicates @ Flatten[allSpinorLabels /@ tensorF]},
               With[{nonsp = DeleteCases[labs, Alternatives @@ spn]},
@@ -1074,31 +885,16 @@ analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
                 Join[AssociationThread[nonsp -> Range[0, Length[nonsp] - 1]],
                      AssociationThread[spn -> Range[$ntSpinorIdBase, $ntSpinorIdBase - 1 + Length[spn]]]]]];
   <|
-    (* contractFlavour collapses any flavour-δ chain that the dressing collection factored out of an
-       eager numerator into the coeff (it straddled the Plus before, so FromFunKit could not). A no-op
-       when collection is off / no flavour δ survives. *)
+    (* second contractFlavour pass: closes flavour-δ chains the dressing collection factored out of an
+       eager numerator (FromFunKit's pass could not see them) *)
     "Coeff"      -> If[TrueQ[$ntDressCollect], contractFlavour[Times @@ Select[factors, scalarQ]],
                        Times @@ Select[factors, scalarQ]],
     "Ids"        -> ids,
-    (* "Constant" is consumed by Codegen's per-component dispatch, where it means not merely
-       "momentum-free" but "a constant SU(N) component": it is handed to compileColour, which only
-       understands group heads. A momentum-free DIRAC structure (a bare closed spinor δ-loop, tr[1] = 4,
-       with no ntVec/projector to carry momentum) is momentum-free yet carries no colour meaning, so
-       compileColour emitted it as raw Mathematica (`colourFacStr[ntDeltaDirac[d2,d3], <|a1 -> 0, ...|>]`)
-       into the generator .cpp — an instant clang failure. Reproduce with <P_2,T_2> of AqbqDirect8.
-       Listing the Dirac heads here makes such a component NON-constant, routing it to
-       splitColourGroups/compileDirac like any other Dirac structure. NOTE this is only correct
-       together with the collapsed-loop tr(1)=4 restoration in compileDirac (see nEmptyLoops there):
-       orderDiracFacs drops δ connectors, so the loop arrives token-free and the runtime's split_loops
-       would otherwise discard it, giving a kernel 4x too small.
-       The SAME reasoning covers the pure-LORENTZ heads. A momentum-free closed metric loop
-       (g_{μν} g^{μν} = D, the "ZAAqbq metric leak" shape) or a fully-contracted ntEpsilon pair from a
-       γ5 trace is likewise momentum-free but not colour, and was emitted as
-       `colourFacStr[ntMetric[v1,v2], <|v1 -> 0, ...|>]` straight into the generator .cpp. Reproduced with
-       ntMetric[v1,v2] ntMetric[v2,v1] × ntVec[q1,a1] ntVec[ql,a1]. compileLorentz/lorentzNetStr already
-       handle both heads, so making the component non-constant is all that is needed.
-       In short: "Constant" must mean "a constant SU(N) component", so EVERY non-SU(N) tensor head
-       belongs in this list — it is not merely a momentum test. *)
+    (* "Constant" means "a constant SU(N) component": such a component is handed to compileColour,
+       which understands only group heads. So EVERY non-SU(N) tensor head belongs in this list, not
+       just the momentum-carrying ones: a momentum-free Dirac δ-loop or closed metric loop would
+       otherwise be emitted as raw Mathematica. The Dirac case relies on compileDirac restoring
+       tr(1) = 4 for token-free loops (CodegenNets.m). *)
     "Components" -> (<|"Factors" -> ntProfTimed["orderFactors", orderFactors[#]],
                        "Constant" -> FreeQ[#, _ntVec | _ntTransProj | _ntLongProj |
                                               _ntElectricProj | _ntMagneticProj | _ntDressedNum | _ntDiracSlot |
@@ -1112,17 +908,12 @@ analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
    Run on ONE diagram AFTER expandBridges (a flat Times whose factors are heads, eager
    single-sector Plus vertices, Powers and scalars). The invariant, per diagram:
      * a label occurring ONCE  is a free (external) index of the whole trace;
-     * a label occurring TWICE is contracted — the et engine pairs the two axes by id;
-     * a label occurring 3+ times is MALFORMED. analyseDiagram assigns ONE id per DISTINCT
-       label, make_eplan (axplan.hpp) pairs axes first-match-wins between exactly TWO
-       operands, and contract_all is a LEFT FOLD — so four axes sharing an id silently
-       contract as two independent pairs. No crash, just a wrong number. That is why this
-       must Abort rather than Message.
-   A Plus factor needs care and is why the old whole-net Cases[...,Infinity] count was
-   useless: an eager vertex sum's summands LEGITIMATELY repeat the same free labels. A Plus
-   is counted ONCE, via the free set its summands must agree on — that agreement is itself
-   the eager add(...) alignment precondition freeIdx[_Plus] assumes without checking. A summand's
-   internal dummies are private and must not appear anywhere else. *)
+     * a label occurring TWICE is contracted — the engine pairs the two axes by id;
+     * a label occurring 3+ times is MALFORMED: axes sharing an id are silently mis-paired into
+       a wrong number, so this must Abort rather than Message.
+   An eager Plus is counted ONCE, via the free set its summands must agree on (the add(...)
+   alignment precondition freeIdx[_Plus] assumes). A summand's internal dummies are private and
+   must not appear anywhere else. *)
 
 NumTrace::flavleak = "a fundamental-flavour Kronecker delta survived BOTH contractFlavour passes \
 and the promotion into the SU(N) engine. It is now neither contracted nor a tensor: scalarQ is a \
@@ -1184,9 +975,7 @@ labelCensusPlus[e_Plus] := Module[{sub = labelCensus /@ (List @@ e), frees},
    Join[Join @@ sub[[All, 3]],
         If[Length[DeleteDuplicates[frees]] > 1, {{frees, "plus-free-mismatch"}}, {}]]}];
 
-(* Escape hatch: NT_NO_LABEL_CHECK=1 disables (the census is O(net), not a hot path). Anything
-   falsy — unset, "", "0", "false" — leaves the check ON, which is the safe direction: this guard
-   catches a label occurring more than twice, which otherwise becomes a silently wrong contraction. *)
+(* Escape hatch: NT_NO_LABEL_CHECK=1 disables the label census; anything falsy leaves it ON. *)
 $ntCheckLabels := !ntEnvFlag["NT_NO_LABEL_CHECK"];
 
 (* Validate a PRECOMPUTED census and return the diagram's free-index set. Split from labelCensus so

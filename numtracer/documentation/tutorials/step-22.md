@@ -21,7 +21,7 @@ about a change to `numtracer/mathematica/` — you can break code generation com
 every test pass.
 
 This is not a theoretical concern. It has been verified to bite: injecting a $10^{-7}$ relative
-error into an emitted coefficient in `Codegen.m` leaves plain `ctest` **green** while
+error into an emitted coefficient in `Codegen*.m` leaves plain `ctest` **green** while
 `ctest -L codegen` fails.
 
 The real gate is opt-in, needs Wolfram, and takes about eight minutes:
@@ -169,7 +169,7 @@ what. A benchmark is a measurement, not a fact.
 ## Possibilities for extensions
 
 1. **Prove the blind spot to yourself.** Inject a $10^{-7}$ relative error into an emitted
-   coefficient in `Codegen.m`. Run plain `ctest` — green. Run `ctest -L codegen` — red. Ten minutes,
+   coefficient in `Codegen*.m`. Run plain `ctest` — green. Run `ctest -L codegen` — red. Ten minutes,
    and you will never again trust a green run after a front-end change.
 
 2. **Build a mutation harness.** Introduce a sign flip in a projector, a swapped parameter, a

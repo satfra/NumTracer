@@ -19,12 +19,10 @@
    or after NumTracer. *)
 
 (* ---- DiFfRG chatter capture ------------------------------------------------------------------
-   DiFfRG's generators Print a line per emitted file plus a "Please run UpdateFlows[]" nudge. Under
-   NumTracer that nudge is actively WRONG: bare UpdateFlows regenerates flows/CMakeLists.txt from
-   DiFfRG's template and drops the NumTracer patch (find_package + link libs + UNITY_BUILD OFF) —
-   UpdateNTFlows exists to do both atomically. So capture the chatter, print one NumTracer-native line
-   instead, and keep the raw lines behind $NumTracerVerbose for debugging.
-   Internal`InheritedBlock scopes the Print override, so it is restored even if DiFfRG aborts. *)
+   DiFfRG Prints a line per emitted file plus a "Please run UpdateFlows[]" nudge, which is WRONG here:
+   bare UpdateFlows drops the NumTracer CMake patch (use UpdateNTFlows). So capture the chatter, print
+   one NumTracer line instead, and keep the raw lines behind $NumTracerVerbose.
+   Internal`InheritedBlock restores Print even if DiFfRG aborts. *)
 
 SetAttributes[ntCapturePrint, HoldFirst];
 
@@ -41,9 +39,8 @@ ntCapturePrint[expr_] :=
     {res, lines}
   ];
 
-(* Does flows/CMakeLists.txt still need an UpdateNTFlows pass for this flow? DiFfRG nudges every time;
-   we only nudge when it is actually true — the file is missing, has lost the NumTracer patch, or does
-   not yet mention this flow (i.e. a newly added one). *)
+(* Does flows/CMakeLists.txt still need an UpdateNTFlows pass for this flow? True when the file is
+   missing, has lost the NumTracer patch, does not mention this flow, or DiFfRG wrote files. *)
 
 ntCMakeStaleQ[flowDir_, name_String, wrote_] :=
   Module[{f = FileNameJoin[{flowDir, "CMakeLists.txt"}], txt},
@@ -69,20 +66,13 @@ ntReportDiFfRG[name_String, flowDir_, lines_List] :=
     wrote
   ];
 
-(* ---- DiFfRG flow directory (public delayed symbol, trailing slash) -------------------------- *)
-
 (* Resolve the "MatsubaraVar" option to a symbol name (or None). Automatic follows DiFfRG's own
    convention — the Matsubara frequency is the LAST integration variable, which is what MakeKernel
    reads for its "MatsubaraEven" option — so a flow declaring
    "IntegrationVariables" -> {"l1", "cos1", "phi", "f0"} needs no extra option to get the check.
-   A flow whose frame names the frequency something else passes it explicitly; None opts out.
-   An empty variable list yields None rather than a Last[] error, so vacuum flows are unaffected.
-
-   Automatic is gated on the integrator actually being a finite-T one. Without that gate a VACUUM
-   flow's last integration variable is an angle ("cos1"), which is a perfectly good frame symbol —
-   so the check would run, and a kernel that happens to be even in cos1 would be stamped
-   `matsubara_even`. Inert today (no vacuum integrator reads the trait) but exactly the kind of
-   latent mis-binding that surfaces later as wrong physics. *)
+   None opts out; an empty variable list yields None.
+   Automatic applies only to finite-T ("_fT") integrators: a vacuum flow's last variable is an angle,
+   and a kernel even in cos1 would otherwise be stamped `matsubara_even`. *)
 ntMatsubaraVar[None, _, _] := None;
 ntMatsubaraVar[Automatic, _, {}] := None;
 ntMatsubaraVar[Automatic, integrator_, vars_List] :=
@@ -95,6 +85,7 @@ ntMatsubaraVar[Automatic, integrator_, vars_List] :=
         True, ToString[v]]]];
 ntMatsubaraVar[v_, _, _] := v;
 
+(* ---- DiFfRG flow directory: an explicit path, or DiFfRG's session flowDir ---- *)
 ntFlowDir[dir_String] :=
   dir;
 
@@ -128,21 +119,11 @@ Options[MakeNTKernelDiFfRG] =
     ,(* REQUIRED flow name, e.g. "ZA" -> dir flows/ZA, class ZA_kernel *)
     "Integrator" -> Automatic
     ,(* REQUIRED DiFfRG integrator template, e.g. "Integrator_p2_1ang" *)
-(* Name of the Matsubara-frequency symbol, for a finite-T flow. It asks NumTracer to PROVE whether
-   the kernel is even in that frequency and, if so, emit DiFfRG's `matsubara_even` trait: the
-   integrator then evaluates the kernel once per Matsubara mode instead of twice, halving both that
-   work and the number of inlined kernel copies per launch.
-
-   Automatic = Last["IntegrationVariables"], the same convention DiFfRG's own MakeKernel uses for
-   its "MatsubaraEven" option. Give an explicit symbol name to override, or None to skip the check
-   entirely. If the name matches no symbol in the flow's frame, NumTracer says so loudly and emits
-   no trait rather than quietly skipping the optimisation.
-
-   This cannot be delegated to MakeKernel's "MatsubaraEven" option: on the numeric path MakeKernel
-   is handed the placeholder `body = 0.` (NumTracer overwrites kernel.hh afterwards), so its
-   symbolic check is trivially satisfied for EVERY flow and would stamp the trait on kernels that
-   are not even -- silently dropping the odd half of the Matsubara sum. The verdict has to come
-   from the polynomials, which is where NumTracer proves it. *)
+(* Name of the Matsubara-frequency symbol, for a finite-T flow. NumTracer PROVES whether the kernel
+   is even in it and, if so, emits DiFfRG's `matsubara_even` trait (one evaluation per mode instead
+   of two). Automatic = Last["IntegrationVariables"] (see ntMatsubaraVar); None skips the check; a
+   name matching no frame symbol is reported loudly. MakeKernel's own "MatsubaraEven" cannot be used:
+   it sees the placeholder `body = 0.`, so it would stamp the trait on every kernel. *)
     "MatsubaraVar" -> Automatic,
 (* Passed straight through to MakeNTKernel; see the options there. Together they decide whether the
    `matsubara_finite_extent` trait is emitted, i.e. whether DiFfRG replaces the Gaussian Matsubara rule
@@ -186,8 +167,7 @@ Options[MakeNTKernelDiFfRG] =
      "Regulator" -> "DiFfRG::RationalExpRegulator",
      "RegulatorOpts" -> {"REGOPTS", "struct REGOPTS { static constexpr int order = 8; ... };"}
 
-   to bake a custom one. Without this passthrough every NumTracer-emitted kernel silently inherited
-   MakeKernel's default, so an app could not choose its own regulator at all. *)
+   to bake a custom one. *)
     "Regulator" -> "DiFfRG::PolynomialExpRegulator"
     ,
     "RegulatorOpts" -> {"", ""}
@@ -207,10 +187,8 @@ Options[MakeNTKernelDiFfRG] =
     ,(* deprecated spelling of "ComputeType" *)
     "Type" -> "double"
     ,
-(* Fuse every trace into one shared CSE program (`trace_all`) instead of emitting one function per
-   trace. Off by default, as in MakeNTKernel. Note the design comment in Codegen.m: GlobalCollect
-   (on by default) is said to subsume it -- but nothing in the code enforces that, so the two are
-   independently settable and the combination is worth measuring rather than assuming. *)
+(* Fuse every trace into one shared CSE program (`trace_all`) instead of one function per trace.
+   Off by default, as in MakeNTKernel; GlobalCollect (on by default) largely subsumes it. *)
     "CrossTraceCSE" -> False,
     "Decorator" -> Automatic
     ,(* Automatic -> derived from Device *)
@@ -221,16 +199,12 @@ Options[MakeNTKernelDiFfRG] =
     (* Offline by default: emitting a flow writes the generator/probe sources and a numtrace.json
        switch set to 0, and the `numtrace` CMake target (wired in by UpdateNTFlows) compiles and runs
        them when the flows library is built — keeping the notebook out of the C++ build and giving the
-       generation `make -j` parallelism across every flow at once. Pass "Offline" -> False (or set
-       NT_OFFLINE=0) to generate inline as before. *)
+       generation `make -j` parallelism across flows. "Offline" -> False (or NT_OFFLINE=0) generates
+       inline. *)
     "Offline" -> True,
-    (* Forwarded to MakeNTKernel, and DELIBERATELY still False here. A DiFfRG flow consumer really is
-       real-valued — the integrator instantiates KERNEL::kernel(...) into a `double` accumulator, so a
-       verdict-0 flow does not merely waste a lowered body, it fails to compile at all (a concept wall
-       in QuadratureIntegrator, naming the integrator rather than the flow). It is therefore tempting
-       to default this to True here. Do not: with the complex body gone, verdict 0 silently becomes
-       Re[Integral[flow]], and choosing to truncate the flow equation belongs to whoever is doing the
-       physics, not to the scaffolding. Set it explicitly when that is what you mean. *)
+    (* Forwarded to MakeNTKernel, DELIBERATELY False even though DiFfRG integrators are real-valued
+       (a complex verdict-0 kernel fails to compile there): True silently turns verdict 0 into
+       Re[Integral[flow]], and truncating the flow equation is the user's call, not the scaffold's. *)
     "RealOutput" -> False,
     (* Forwarded to MakeNTKernel. Finite-density denominators such as l0 + I muq
        are not polynomial in the imaginary unit stand-in used by the symbolic
@@ -255,7 +229,7 @@ MakeNTKernelDiFfRG::mixtype = "Parameters declare more than one interpolator typ
 
 (* ---- k-only lookup hoisting: patch the DiFfRG-generated wrappers ---------------------------
    When MakeNTKernel hoisted M loop-constant dressing lookups ("HoistCount" of ntMakeNTKernel, see
-   "HoistLoopConstLookups" in Codegen.m), the kernel signature carries M trailing `const double&
+   "HoistLoopConstLookups" in CodegenKernel.m), the kernel signature carries M trailing `const double&
    nthk<i>` parameters and the kernel class a static host evaluator ntHoisted(k, scalars...,
    dressings...). The integrator forwards its args... verbatim into the kernel call, so the ONLY
    remaining wiring is the wrapper TUs DiFfRG's MakeKernel scaffold already wrote:
@@ -273,11 +247,9 @@ MakeNTKernelDiFfRG::mixtype = "Parameters declare more than one interpolator typ
 ntPatchHoistWrappers[kernelDir_String, name_String, m_Integer] :=
   Module[{kcls = name <> "_kernel<Regulator>", idxs, files, txt, patched, nPatched = 0, hdr, hdrTxt, hdrPatched},
     idxs = StringRiffle[("_nth[" <> ToString[#] <> "]")& /@ Range[0, m - 1], ", "];
-(* Older MakeKernel scaffolds unpacked the dressing tuple BY VALUE in the <name>.hh forwarders
-   (`const auto...t`), handing ntHoisted a full copy of every interpolator per call. Current
-   DiFfRG interpolators are shallow-copyable (Kokkos views, host AND device buffers survive a
-   copy), so this is no longer a correctness matter — but the copies are pure cost, and current
-   scaffolds already emit `const auto&...t`, in which case this rewrite is a no-op. *)
+(* Make the <name>.hh tuple forwarders take the dressings by reference (`const auto&...t`), so
+   ntHoisted gets no interpolator copies. A pure cost fix (DiFfRG interpolators are shallow-copyable);
+   a no-op on scaffolds that already emit the reference form. *)
     hdr = FileNameJoin[{kernelDir, name <> ".hh"}];
     If[FileExistsQ[hdr],
       hdrTxt = Import[hdr, "Text"];
@@ -307,13 +279,12 @@ ntPatchHoistWrappers[kernelDir_String, name_String, m_Integer] :=
     Print["[NumTracer] ", name, ": k-only hoist — ", m, " lookup(s) hoisted; ", nPatched,
       " wrapper TU(s) patched to pass host-evaluated values."]];
 
-(* Positional second argument: the constant, mirroring DiFfRG's MakeKernel[kernelExpr, constExpr, ...].
-   `constExpr` is a plain Mathematica expression in p/k and the dressing names (e.g. ZA[p]), NOT an
-   NTKernel — the integrand still comes from `ntk`. Pass the constant EITHER positionally OR via the
-   "Constant" option; if both are given the positional argument wins (it is spliced ahead of opts). *)
-
 (* A plain real scalar parameter (k, T, etaQ, ...), as opposed to a dressing's interpolator type. *)
 ntScalarTypeQ[t_] := MemberQ[{"double", "float"}, t];
+
+(* Positional second argument: the constant, mirroring DiFfRG's MakeKernel[kernelExpr, constExpr, ...].
+   `constExpr` is a plain expression in p/k and the dressing names (e.g. ZA[p]), NOT an NTKernel.
+   If it is also given as "Constant", the positional argument wins (it is spliced ahead of opts). *)
 
 MakeNTKernelDiFfRG[ntk_NTKernel, constExpr_ /; Head[constExpr] =!= Rule && Head[constExpr] =!= NTKernel, opts : OptionsPattern[]] :=
   MakeNTKernelDiFfRG[ntk, "Constant" -> constExpr, opts];
@@ -356,18 +327,10 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
     (* auto-derive the dressing names + their common interpolator type from the non-scalar params *)
     dress = Cases[params, a_?AssociationQ /; !ntScalarTypeQ[a["Type"]] :> a["Name"]];
     dressTys = DeleteDuplicates[Cases[params, a_?AssociationQ /; !ntScalarTypeQ[a["Type"]] :> a["Type"]]];
-(* Interpolator index sharing (NumTracer's "ShareInterpolatorIndex"): a flow evaluates several
-   dressings at the SAME momentum, and each lookup otherwise repeats the coordinate transform --
-   a fp64 log1p for a logarithmic axis, ~200 of the ~210 fp64 instructions a lookup costs. The
-   compiler cannot share it, because every interpolator owns its own `coordinates` members. Paying
-   it once measured 1.13-1.26x on the YangMills flow set, results bit-identical
-   (numtracer/gpubench/FINDINGS.md).
-
-   This is a DiFfRG-side capability, which is why NumTracer keeps the pass opt-in and it is enabled
-   HERE. All five DiFfRG interpolators are split: the 1-D ones return a scalar index, the 2-D/3-D
-   and stack ones return a device::array of indices, so the emitted `const auto _ixN = h.index(...)`
-   is uniform and the rewrite needs no per-arity special case. The pass is still all-or-nothing per
-   kernel, so any dressing handle NOT in this list opts the whole kernel out. *)
+(* Interpolator index sharing (NumTracer's "ShareInterpolatorIndex"): dressings evaluated at the SAME
+   momentum share one coordinate transform (a fp64 log1p, the bulk of a lookup's cost; 1.13-1.26x on
+   the YangMills flows). It needs DiFfRG's split index()/at() interface, which all five interpolators
+   below provide; the pass is all-or-nothing per kernel, so any other dressing type opts it out. *)
     shareInterpIdx =
       dressTys =!= {} &&
         AllTrue[dressTys,
@@ -386,17 +349,10 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
           First[dressTys]
         ,
         _,
-(* Mixed interpolator types are legitimate: a flow may read most dressings off 1-D momentum grids
-   and one or two off a 3-D vertex grid (S0,S1,SPhi). Taking the first would declare the 3-D grid as
-   a 1-D spline and the kernel would fail to compile at the first three-argument call.
-
-   Pass the types through PER PARAMETER rather than collapsing them. `const auto&` would also bind
-   all of them, but it turns every kernel into an abbreviated function template, and nvcc's front end
-   cannot handle that inside a class template -- it dies with
-       internal error: assertion failed at: "symbol_ref.c", line 1629
-       in check_name_hiding_by_template_parameters
-   (reproducible in ~20 lines: a class template whose static member takes `const auto&` params).
-   The parameter list already carries each declared type, so there is nothing to infer. *)
+(* Mixed interpolator types (e.g. 1-D momentum grids plus a 3-D vertex grid) are passed through PER
+   PARAMETER. `const auto&` would also bind them, but makes the kernel an abbreviated function
+   template inside a class template, which crashes nvcc's front end (internal error in
+   check_name_hiding_by_template_parameters). *)
           Association[Cases[params, a_?AssociationQ /; !ntScalarTypeQ[a["Type"]] :>
             (ntParamName[a["Name"]] -> a["Type"])]]
       ];
@@ -422,18 +378,12 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
       ];
     (* resolve paths *)
     flowDir = ntFlowDir[OptionValue["FlowDirectory"]];
-    (* create the flows/ directory up front if it does not exist yet. This must precede the gen dir
-       computation: WL14.3's ParentDirectory[dir] returns UNEVALUATED for a non-existent dir (rather
-       than doing pure-string path math), which used to poison genDir — and every genFile/tracesFile
-       derived from it — with a held expression, so the whole emission failed on a fresh checkout. We
-       sidestep ParentDirectory entirely (pure-string parent below), but still ensure flows/ exists so
-       the DiFfRG scaffold and the kernel/manifest writes below have somewhere to land. *)
+    (* create flows/ up front so the DiFfRG scaffold and the kernel/manifest writes have a target *)
     If[!DirectoryQ[flowDir],
       CreateDirectory[flowDir, CreateIntermediateDirectories -> True]
     ];
-    (* gen/ as a sibling of flows/, computed by string surgery (no ParentDirectory — see above):
-       FileNameDrop[..,-1] drops the last path segment, tolerating a trailing slash and preserving the
-       filesystem root (a plain split+DeleteCases[""] would strip the leading root marker). *)
+    (* gen/ as a sibling of flows/, by string surgery: ParentDirectory returns UNEVALUATED for a
+       non-existent dir. FileNameDrop tolerates a trailing slash and preserves the filesystem root. *)
     genDir = OptionValue["GenDirectory"] /. Automatic :> FileNameJoin[{FileNameDrop[flowDir, -1], "gen"}];
     If[!DirectoryQ[genDir],
       CreateDirectory[genDir, CreateIntermediateDirectories -> True]
@@ -448,26 +398,17 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
 (* (1) DiFfRG scaffold FIRST: lays down flows/<name>/ incl. the integrator TUs + a placeholder kernel.hh.
    Its per-file Prints are captured and replaced by one NumTracer line (see ntReportDiFfRG).
 
-   flowDir is BLOCKED across the call. DiFfRG's MakeKernel has no output-directory option — it writes to
-   FileNameJoin[DiFfRG`CodeTools`Directory`flowDir, name] — so without this our "FlowDirectory" option
-   would redirect only NumTracer's own writes (step 2) while the scaffold silently kept landing in the
-   session-global flow directory. That is a live footgun, not a hypothetical: emitting one flow into a
-   scratch directory then overwrote the REAL committed kernel.hh of the same-named flow in the default
-   tree with the `body = 0.` placeholder — valid C++ that contributes zero to the flow, with nothing
-   saying so. Scoping it makes "FlowDirectory" mean what it says for both halves of the emission. *)
+   flowDir is BLOCKED across the call: MakeKernel has no output-directory option and writes to
+   DiFfRG`CodeTools`Directory`flowDir, so otherwise "FlowDirectory" would redirect only step (2)
+   while the `body = 0.` placeholder overwrote the same-named flow in the session's flow tree. *)
     Internal`InheritedBlock[{DiFfRG`CodeTools`Directory`flowDir},
       DiFfRG`CodeTools`Directory`flowDir = flowDir;
       ntReportDiFfRG[name, flowDir, Last @ ntCapturePrint[DiFfRG`CodeTools`MakeKernel`MakeKernel[body, "Name" -> name, "Integrator" -> OptionValue["Integrator"], "d" -> OptionValue["d"], "AD" -> OptionValue["AD"], "ComputeType" -> computeType, "Device" -> device, "Type" -> OptionValue["Type"], "Parameters" -> params, "IntegrationVariables" -> OptionValue["IntegrationVariables"], "Coordinates" -> OptionValue["Coordinates"], "CoordinateArguments" -> OptionValue["CoordinateArguments"], "Regulator" -> OptionValue["Regulator"], "RegulatorOpts" -> OptionValue["RegulatorOpts"]]]]];
 (* (2) NumTracer overwrites kernel.hh + writes kernels.hh with the real, numerically-traced kernel.
 
-   Guarded, because step (1) has already written a PLACEHOLDER kernel.hh whose body is literally
-   `0.`. If step (2) does not complete — a leak detected at the emission chokepoint, a singular Gram,
-   an interrupt, an OOM — that placeholder is what stays on disk, and it is valid C++: the flow
-   builds cleanly and contributes ZERO to the RG flow, with nothing anywhere saying so. A silent zero
-   is the worst failure this pipeline can produce, so on any non-completion we replace the file with
-   a `#error`, which turns it into a loud compile failure naming the flow. The manifest is not
-   written in that case either (MakeNTKernel writes it last), so `make numtrace` also still owes the
-   kernels. *)
+   Guarded: if step (2) does not complete, step (1)'s placeholder kernel.hh (body `0.`) would stay
+   on disk as valid C++ contributing a silent ZERO. So on any non-completion it is replaced by a
+   `#error` naming the flow. The manifest is not written either (MakeNTKernel writes it last). *)
     hoistCount = 0;
     If[TrueQ @ CheckAbort[
          hoistCount = ntMakeNTKernel[ntk, genFile, kernelFile, tracesFile, "ComputeType" -> computeType, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "SymbolDefs" -> OptionValue["SymbolDefs"], "Decorator" -> decor, "DeviceTarget" -> (device === "GPU"), "Dressings" -> dress, "DressingType" -> dressTy, "ShareInterpolatorIndex" -> shareIdxOpt, "HoistLoopConstLookups" -> hoistOpt, "CrossTraceCSE" -> OptionValue["CrossTraceCSE"], "RealOutput" -> OptionValue["RealOutput"], "ComplexRuntimeProjection" -> OptionValue["ComplexRuntimeProjection"], "ComplexEndProjection" -> OptionValue["ComplexEndProjection"], "ScalarParams" -> scalarParams, "ADParams" -> adParams, "ParameterOrder" -> parameterOrder, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"], "MatsubaraVar" -> ntMatsubaraVar[OptionValue["MatsubaraVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]], "DecayingRegulators" -> OptionValue["DecayingRegulators"], "MatsubaraFiniteExtent" -> OptionValue["MatsubaraFiniteExtent"], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True]["HoistCount"];
@@ -486,30 +427,17 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
 (* ============================================================================================
    NTFlowGate — per-flow selection, so one derivation file can be sliced across processes.
 
-   A derivation file emits every flow it defines, top to bottom, in one kernel. That is fine until
-   the file is big: with_mesons/QCD.wl spends ~63% of a ~30 min regeneration on nine four-fermion
-   channels that differ only in a projector index. Nothing in the Wolfram layer is parallel (the
-   generator's own phases and its compile are, but they run later, under the `numtrace` target), so
-   the only lever on wall clock is to run the FILE several times over disjoint flow subsets.
-
-   That works because aggregation is filesystem-based: DiFfRG's UpdateFlows rebuilds
-   flows/CMakeLists.txt from `FileNames["*", flowDir, 1]`, not from an in-process registry. So the
-   workers need share nothing, and a single UpdateNTFlows afterwards — in any process — sees them all.
-
-   The gate must wrap the WHOLE flow, FunKit derivative and NumTrace included. Gating only the
-   MakeNTKernelDiFfRG call would skip the emission and still pay the front end, and that is not a
-   rounding error: measured on the four-fermion channels it is 35-43 s (of which NumTrace alone is
-   18-21 s), against a whole-flow cost of 83-210 s. Hence HoldRest.
+   The Wolfram layer is serial, so the wall-clock lever for a big derivation file is to run it several
+   times over disjoint flow subsets. Aggregation is filesystem-based (UpdateFlows rebuilds
+   flows/CMakeLists.txt from the flow directory), so a single UpdateNTFlows afterwards sees them all.
+   The gate must wrap the WHOLE flow, FunKit derivative and NumTrace included (the front end is a
+   large share of a flow's cost), hence HoldRest.
    ============================================================================================ *)
 
-(* The selection, re-read on every call (delayed, like every other env-derived flag here — with an
-   immediate `=` the value would latch at Get[] time and SetEnvironment from a driver .wls would
-   silently do nothing). All = no selection = emit everything, so an ungated file is unaffected. *)
-(* With, not Module: this runs once per gate per flow, and a Module would mint a fresh `s$nnn` each
-   time, bumping $ModuleNumber and renaming every Module local below the gates relative to an ungated
-   run. Nothing observable was traced to that -- the gate is byte-inert either way (verified: seven
-   flows regenerate identically to a serial run) -- but a scoping construct on a hot path should not
-   churn a global counter for a binding that is never captured. Matches ntEnvFlag in DSL.m. *)
+(* The selection, re-read on every call (delayed: an immediate `=` would latch at Get[] time and
+   ignore a later SetEnvironment). All = no selection = emit everything.
+   With, not Module, so the gate does not bump $ModuleNumber (which would rename every later Module
+   local relative to an ungated run). *)
 $ntFlowSelection :=
   With[{s = Environment["NT_FLOWS"]},
     If[! StringQ[s] || StringTrim[s] === "",

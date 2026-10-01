@@ -231,7 +231,7 @@ recipe below silently ineffective.)
 | `NT_GEN_HORNER_ORDERS` | lowering | 8, auto-reduced by size | Force N trial Horner orderings instead of the size-scaled default (3 above 500 monomials, 1 above 2000). |
 | `NT_GEN_SNAP_DIGITS` | lowering | 14 | Decimal digits emitted coefficients are snapped to. `0` disables snapping; outside `[0,17]` falls back to the default. |
 | `NT_GEN_POLYSTATS` | lowering | off | `=1` monomial/SSA counts to stderr; `=2` dumps every monomial key instead (pipe through `sort -u` to count distinct monomials across traces). |
-| `NT_GEN_DEVICE` | emission | sniffed from the decorator | Declare the emitted kernel DEVICE code, which is what enables the size-gated `__noinline__`. Set by `Codegen.m` online and by the manifest offline; the decorator sniff is a back-compat fallback that no production flow reaches. |
+| `NT_GEN_DEVICE` | emission | sniffed from the decorator | Declare the emitted kernel DEVICE code, which is what enables the size-gated `__noinline__`. Set by `Codegen*.m` online and by the manifest offline; the decorator sniff is a back-compat fallback that no production flow reaches. |
 
 ### Deployment configuration
 

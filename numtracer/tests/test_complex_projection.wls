@@ -1,11 +1,11 @@
 #!/usr/bin/env wolframscript
 (* Unit gate for the real/imaginary projections of a complex integrand — ntProjectIntegrand and
-   friends in mathematica/Codegen.m.
+   friends in mathematica/CodegenRealProjection.m.
 
    WHY IT IS A UNIT TEST AND NOT A FLOW FIXTURE. Every other check of this machinery (cplxdisc_num,
    and the numeric probe that every complex flow runs) goes through a full generation: Wolfram
    tracing, a C++ generator, a compile. That takes minutes, so it lives behind NT_RUN_CODEGEN and is
-   effectively never run while editing Codegen.m. The properties below are pure symbolic algebra and
+   effectively never run while editing Codegen*.m. The properties below are pure symbolic algebra and
    take under a second, so this runs in a PLAIN ctest — it is the first fast test that can see a
    change to mathematica/.
 
@@ -47,7 +47,7 @@ check[label_, cond_] := (
   Print[If[TrueQ[cond], "  PASS  ", "  FAIL  "], label];
   If[! TrueQ[cond], $fail++]);
 
-(* Abort[] is how every guard in Codegen.m reports; CheckAbort turns that into a value so one
+(* Abort[] is how every guard in Codegen*.m reports; CheckAbort turns that into a value so one
    refusal does not tear down the rest of the file. Quiet suppresses only the message we expect.
    HoldRest is load-bearing: without it `MakeNTKernel::cplxnest` evaluates to the message TEXT before
    Quiet ever sees it, Quiet rejects it (Quiet::mgre) and the abort is not caught — the check then
@@ -73,7 +73,7 @@ check["ntIiUnsafeParts isolates the offending factor",
 
 Print[""];
 Print["=== 2. one-pass ntRePartLinear === the per-token-Coefficient reference ==="];
-(* The implementation this replaced, verbatim. Kept HERE rather than in Codegen.m: its only remaining
+(* The implementation this replaced, verbatim. Kept HERE rather than in Codegen*.m: its only remaining
    purpose is to be the oracle for the byte-identity claim. *)
 refRePartLinear[integrand_] := Module[{toks = Union[Cases[integrand, _String, Infinity]], tsym, lin, ii},
   tsym = AssociationThread[toks -> Table[Unique["tr$"], {Length[toks]}]];
