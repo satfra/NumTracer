@@ -52,7 +52,7 @@ Begin["NumTracer`Private`"];
 
 (* Total number of check[] calls below. An Abort escaping mid-file would otherwise leave a passing
    tally simply because the remaining checks never executed; asserting the count closes that. *)
-$nExpected = 26;
+$nExpected = 27;
 $fail = 0; nRan = 0;
 check[label_, cond_] := (
   nRan++;
@@ -131,6 +131,11 @@ Block[{$ntFlavRank = 2},
 Block[{$ntFlavRank = Automatic},
   check["no rank available -> refuses instead of emitting a symbolic rank",
     abortsQ[Hold[promoteFlavResidue[{web}]], NumTrace::flavrank]]];
+(* A later FromFunKit[other, "FlavourGroup" -> 3] overwrote the hand-off; promoting this net at rank 3
+   while Nf = 2 would be a silently wrong number. *)
+Block[{$ntFlavRank = 3, Global`Nf = 2},
+  check["a rank that differs from Nf (stale hand-off) is refused",
+    abortsQ[Hold[promoteFlavResidue[{web}]], NumTrace::flavrankstale]]];
 
 Print[""];
 Print["=== 5. FromFunKit routes the whole fundamental-flavour sector, generators or not ==="];

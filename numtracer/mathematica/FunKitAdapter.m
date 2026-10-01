@@ -97,12 +97,11 @@ $ffMap = <|
    SU(2): 3 -> 3 (coincides). Any other fixed index is an off-diagonal generator whose position in
    the generalized ordering is convention-dependent, so refuse it rather than guess.
    Verified component-sensitively via tr(T^a D) against a diagonal D. *)
+FromFunKit::cartan = "a generator with FIXED adjoint index `1` for SU(`2`): only the Cartan (diagonal) directions a = `3` can be pinned; the off-diagonal generators' positions in NumTracer's generalized Gell-Mann ordering are convention-dependent and would silently select the wrong one.";
+
 ntCartanComponent[n_, a_] := Module[{m = Position[Table[k^2 - 1, {k, 2, n}], a]},
   If[m === {},
-    Print["[NumTracer] ERROR: FromFunKit got a generator with FIXED adjoint index ", a,
-      " for SU(", n, "). Only the Cartan (diagonal) directions a = ", Table[k^2 - 1, {k, 2, n}],
-      " can be pinned: the off-diagonal generators' positions in NumTracer's generalized",
-      " Gell-Mann ordering are convention-dependent and would silently select the wrong one."];
+    Message[FromFunKit::cartan, a, n, Table[k^2 - 1, {k, 2, n}]];
     Abort[]];
   n^2 - n + (m[[1, 1]] + 1) - 1];
 
@@ -242,6 +241,11 @@ must be handed to the SU(N) engine, but no flavour rank is available (FromFunKit
 so $ntFlavRank is unset). This should be unreachable: flavDelta is produced by exactly one \
 $ffMap entry. Offending delta(s):\n`1`";
 
+NumTrace::flavrankstale = "the flavour rank `1` handed over by the most recent FromFunKit call differs \
+from Nf = `2`. A net that carries a fundamental-flavour delta always has rank Nf (FromFunKit::flavcount \
+enforces it), so this net was built by an EARLIER FromFunKit call and a later one replaced the rank. \
+Call NumTrace on a net right after the FromFunKit that built it.";
+
 (* Hand the SU(N) engine whatever contractFlavour could not close.
    WHY HERE AND NOT IN FromFunKit: contractFlavour runs TWICE. A flavour chain that straddles an
    eager dressed numerator's Plus is invisible to the first pass (FromFunKit), and only becomes a
@@ -263,6 +267,9 @@ promoteFlavResidue[factors_List] := Module[{flav, rest, closed, resid},
   If[resid === {}, Return[factors]];
   If[! (IntegerQ[$ntFlavRank] && $ntFlavRank >= 1),
     Message[NumTrace::flavrank, Short[resid, 6]]; Abort[]];
+  (* $ntFlavRank is a hand-off from the LAST FromFunKit call, not from the one that built this net *)
+  If[IntegerQ[Global`Nf] && $ntFlavRank =!= Global`Nf,
+    Message[NumTrace::flavrankstale, $ntFlavRank, Global`Nf]; Abort[]];
   (* A residue nested inside an eager Plus is promoted in place; the enclosing factor then fails
      scalarQ and correctly joins the tensor factors as an SU(N) Plus-vertex (compileColourSum). *)
   closed = closed /. flavDelta[i_, j_] :> ntSUNDeltaFund[$ntFlavRank, i, j];
@@ -324,6 +331,7 @@ FromFunKit[expr_, OptionsPattern[]] := Block[{$ntPlusMemo = <||>}, Module[{nf, m
     With[{leftover = Complement[Intersection[present, $funKitHeads], Keys[map], $ffHandledElsewhere]},
       If[leftover =!= {}, Message[FromFunKit::untranslated, leftover]; Abort[]]]];
   $ntDressCollect = TrueQ[OptionValue["DressingCollection"]];
+  $ntFromFunKitDressCollect = $ntDressCollect;   (* NumTrace warns if it is called with the other value *)
   $ntFlavRank     = nf;   (* consumed by promoteFlavResidue, from DSL.m's analyseDiagram *)
   (* Normalize fixed Lorentz components before expandBridges tests whether a
      finite-T spatial slash is a collectible dressed Dirac numerator. This is the whole rewrite, so

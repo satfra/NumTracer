@@ -34,7 +34,7 @@ Begin["NumTracer`Private`"];
    new dispatchers appear, and a literal count would turn every such addition into a spurious
    failure — which is how a counted-check guard gets "fixed" by deleting it. Still catches what it
    is for: an Abort escaping mid-file leaves nRan short of this. *)
-$nExpected = 26 + Length[$ntLeakHeads];
+$nExpected = 31 + Length[$ntLeakHeads];
 $fail = 0; nRan = 0;
 check[label_, cond_] := (
   nRan++;
@@ -133,6 +133,26 @@ check["probe will run -> pass 1 emits unpruned",
   ntkPruneSpec[{1, 2 + 3 I}, {{0}, {1}}, True, False, True, True, True]["realOnlyG"] === {}];
 check["probe will run is False when offline",
   ntkPruneSpec[{1, 2 + 3 I}, {{0}, {1}}, True, True, True, True, True]["probeWillRun"] === False];
+
+Print["=== a pure-scalar product compiles to no net, not to contract() ==="];
+check["2 zz[x] -> {\"\", 2 zz[x]}", compileLorentzBody[2 Global`zz[Global`x], <||>, <||>, 15] === {"", 2 Global`zz[Global`x]}];
+
+Print["=== the dedup merge keeps every sum that is not provably zero ==="];
+check["symbolic sums survive, an exact cancellation is dropped",
+  ntMergeNetTerms[{1, 2, 1, 3, 3}, {10, 20, 10, 30, 30}, {0, 0, 0, 0, 0}, {Global`x, Global`y, Global`x, 1/2, -1/2}] ===
+    {{10, 20}, {0, 0}, {2 Global`x, Global`y}}];
+check["packed numeric sums: a cancellation is dropped",
+  ntMergeNetTerms[{1, 2, 1}, {10, 20, 10}, {0, 0, 0}, Developer`ToPackedArray[{1. + 0. I, 2. + 0. I, -1. + 0. I}]] ===
+    {{20}, {0}, {2. + 0. I}}];
+
+Print["=== NumTrace warns when its DressingCollection differs from the last FromFunKit's ==="];
+With[{net = ntVec[Global`q, Global`a] ntVec[Global`q, Global`a]},
+  check["a mismatch warns",
+    Block[{$ntFromFunKitDressCollect = True},
+      Check[NumTrace[net, "DressingCollection" -> False]; False, True, NumTrace::dresscollect]]];
+  check["the same value is silent",
+    Block[{$ntFromFunKitDressCollect = True},
+      Check[NumTrace[net]; True, False, NumTrace::dresscollect]]]];
 
 Print["=== unknown MakeNTKernel option names are refused, however the rule is written ==="];
 check["a known option passes", ! abortsQ[Hold[ntAssertKnownOptions[{"Name" -> "k", "RealProbe" :> True}]], MakeNTKernel::optname]];

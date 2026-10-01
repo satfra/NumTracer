@@ -303,6 +303,9 @@ scaleStr[str_, 1.] := str;
 
 scaleStr[str_, s_] := "sc<numtracer::Lit<numtracer::Cx{" <> cppNum[s] <> ", 0.0}>>(" <> str <> ")";
 
+(* no tensor factor at all (a pure-scalar product): no net, like compileLorentz's scalar branch *)
+wrapContract[{}] := "";
+
 wrapContract[{one_}] := one;
 
 wrapContract[many_] := "contract(" <> StringRiffle[many, ", "] <> ")";
@@ -801,10 +804,7 @@ resolveGenCxx[] := Module[{env = Environment["NT_GEN_CXX"], path, comps, clangPi
     clangPick = SelectFirst[comps, StringContainsQ[ToString @ Lookup[#, "Name", ""], "Clang", IgnoreCase -> True]&, None];
     If[clangPick =!= None,
       full = FileNameJoin[{Lookup[clangPick, "CompilerInstallation"], "clang++"}];
-      Return[
-        If[FileExistsQ[full],
-          full,
-          "clang++"]]];
+      If[FileExistsQ[full], Return[full]]];   (* else: clang++ on PATH, or the g++ fallback below *)
     (* 2) prefer clang++ on PATH even if CCompilerDriver did not enumerate it *)
     path = Environment["PATH"];
     If[StringQ[path] && AnyTrue[StringSplit[path, ":"], FileExistsQ[FileNameJoin[{#, "clang++"}]]&],
@@ -1201,6 +1201,8 @@ diracSpinorSymmetricQ[_]             := False;
    spinor-δ (`ntDeltaDirac[d1,d2]`, e.g. the σL scalar external projector), whose two labels carry no
    orientation, regardless of start/orientation (the trace is cyclic). *)
 
+orderDiracFacs::open = "the spinor-loop walk consumed `1` of `2` token-bearing Dirac factors — a spinor loop did not close, and emitting it would silently drop γ structure (a collapsed trace). Loop factors:\n`3`";
+
 orderDiracFacs[facs_] :=
   Module[{nodeFacs = Association[], cur = 1, prevLabel, out = {}, seen = {}, labels, exitLabel, nexts, nTok, revs = {}, fwds = {}, revQ},
     Do[
@@ -1244,7 +1246,7 @@ orderDiracFacs[facs_] :=
    wrong kernel. The δ-only "connector" factors carry no token, so they are excluded from the count. *)
     nTok = Count[facs, _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDressedNum | _ntDiracSlot];
     If[Length[out] =!= nTok,
-      Print["[NumTracer] ERROR: orderDiracFacs walk consumed ", Length[out], " of ", nTok, " token-bearing Dirac factors — a spinor loop did not close (would silently drop γ ", "structure → collapsed trace). Loop factors:\n  ", facs];
+      Message[orderDiracFacs::open, Length[out], nTok, facs];
       Abort[]];
 (* Guard 2 (orientation) is GONE, and deliberately so. Reversed factors are marked `ntTransposed`
    above and transposed by the engine — fixed tokens via DFac::transposed, collected slots via
@@ -1310,11 +1312,17 @@ $ntDressResolve = Identity;
    one aborts rather than print a Missing[...] into the generator. *)
 $diracHeadPat = _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot;
 
+compileDirac::slottransposed = "a transposed token reached the collected-slot emitter, which cannot represent one (orderOpenChain never marks a transpose). Token:\n`1`";
+
+compileDirac::diracleak = "un-handled Dirac structure in a non-Dirac factor: a dressed propagator-numerator sum was NEITHER distributed NOR collected into ntDressedNum, so the numeric backend would silently drop or leak its gamma structure (a collapsed trace or untranslated C++). This is a front-end collection gap (collectibleDiracSumQ rejected a sum that distributeQ also skipped). Offending factor(s):\n`1`";
+
 compileDirac::badtok = "compileDirac: `1` is not a Dirac chain token (expected ntGamma, ntGamma5, ntC, ntSigma, a slot, or ntTransposed of one). Aborting rather than emit it as a gamma.";
+
+compileDirac::envmiss = "`1` momentum `2` is absent from env `3`.";
 
 envBaseStr[q_, env_, what_] := (
   If[! KeyExistsQ[env, q],
-    Print["[NumTracer] ERROR: ", what, " momentum ", q, " absent from env ", Keys[env]];
+    Message[compileDirac::envmiss, what, q, Keys[env]];
     Abort[]];
   ToString[env[q]["Base"]]);
 
@@ -1396,11 +1404,16 @@ dressedSlotStrBody[ntDressedNum[opts_, _, _], env_] := Function[opt,
 (* Order one OPEN spinor chain din→dout, returning the token-bearing factors (γ/γ5/σ) in chain order;
    δ connectors are followed but carry no token. Walk from the din endpoint (degree 1) along spinor
    adjacency — like orderDiracFacs but seeded at a KNOWN endpoint (the chain is open, not a cycle). *)
+orderOpenChain::open = "a collected Dirac slot's chain `1` -> ... could not be walked: `2` of its `3` token-bearing factor(s) were reached. The chain's spinor labels do not connect din to its tokens, so emitting them in input order would multiply them in the wrong order. Factors:\n`4`";
+
 orderOpenChain[facs_, din_] :=
-  Module[{nodeFacs = <||>, cur, prevLabel = din, out = {}, seen = {}, exitLabel, nexts, start},
+  Module[{nodeFacs = <||>, cur, prevLabel = din, out = {}, seen = {}, exitLabel, nexts, start,
+          nTok = Count[facs, _ntGamma | _ntGamma5 | _ntC | _ntSigma]},
     Do[(nodeFacs[#] = Append[Lookup[nodeFacs, #, {}], i]) & /@ spinorLabelsHead[facs[[i]]], {i, Length[facs]}];
     start = Lookup[nodeFacs, din, {}];
-    If[start === {}, Return[Select[facs, MatchQ[#, _ntGamma | _ntGamma5 | _ntC | _ntSigma] &]]]; (* fallback: no din endpoint *)
+    If[start === {},
+      If[nTok == 0, Return[{}]];   (* an option with no Dirac token: an empty chain *)
+      Message[orderOpenChain::open, din, 0, nTok, Short[facs, 6]]; Abort[]];
     cur = First[start];
     While[! MemberQ[seen, cur],
       AppendTo[seen, cur];
@@ -1410,6 +1423,7 @@ orderOpenChain[facs_, din_] :=
       nexts = Select[DeleteCases[Lookup[nodeFacs, exitLabel, {}], cur], ! MemberQ[seen, #] &];
       If[nexts === {}, Break[]];
       prevLabel = exitLabel; cur = First[nexts]];
+    If[Length[out] =!= nTok, Message[orderOpenChain::open, din, Length[out], nTok, Short[facs, 6]]; Abort[]];
     out];
 
 (* Same keying as compileLorentz (see there): labels resolved through `ids`, generation-fixed context in
@@ -1435,8 +1449,7 @@ diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, nonzeroComp
              one), so orderOpenChain never marks a transpose and the slot emitter cannot express one. *)
           toks = Function[gf2,
             If[MatchQ[gf2, _ntTransposed],
-              Print["[NumTracer] ERROR: a transposed token reached the slot emitter, which cannot ",
-                    "represent one (see orderOpenChain). Token:\n  ", gf2]; Abort[]];
+              Message[compileDirac::slottransposed, gf2]; Abort[]];
             fixedTokCpp[gf2, vecOf, ids, env]] /@ orderOpenChain[diracFacs, din];
           netFacs = lorentzElemStr[#, ids, env] & /@ lorFacs;
           (* LEVER (b): {structStr, num, dr} — dressing-free DSlotOpt (coeff 1, no dress) + the numeric
@@ -1476,7 +1489,7 @@ compileDiracBody[factors_, ids_, env_, nonzeroCompMask_] := Module[
                       ntGamma[mu_, _, _] /; KeyExistsQ[vecOf, mu] :> ntVec[vecOf[mu], mu]];
     restFacs = DeleteCases[factors, Alternatives @@ Join[diracFacs, slashVecs]];
     If[! FreeQ[restFacs, $diracHeadPat],
-      Print["[NumTracer] ERROR: un-handled Dirac structure in a non-Dirac factor — a dressed ", "propagator-numerator sum was NEITHER distributed NOR collected into ntDressedNum, so the ", "numeric backend would silently drop/leak its gamma structure (collapsed trace or ", "untranslated C++). This is a front-end collection gap (collectibleDiracSumQ rejected a sum ", "that distributeQ also skipped). Offending factor(s):\n  ", Select[restFacs, ! FreeQ[#, $diracHeadPat] &]];
+      Message[compileDirac::diracleak, Select[restFacs, ! FreeQ[#, $diracHeadPat] &]];
       Abort[]];
     restCompiled = compileLorentz[Times @@ restFacs, ids, env, nonzeroCompMask];
     (* A loop of δ connectors only (a closed spinor δ-loop) has no token, so its segment is empty and
@@ -1826,7 +1839,7 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
    (trace, dress channel) key in first-appearance order (I3: PositionIndex), zero sums dropped.
    A packed numeric scalar column takes the vectorised path: singletons are copied, pairs are added
    elementwise (identical to Total of two), larger groups use Total. Anything else (a symbolic
-   scalar) keeps the per-group path and its `!= 0` filter. *)
+   scalar) keeps the per-group path, which keeps every sum not provably zero. *)
 ntMergeNetTerms[ck_, tks_, drs_, scs_] := Module[{g = Values[PositionIndex[ck]], f, sums, len, keep},
   f = g[[All, 1]];
   If[Developer`PackedArrayQ[scs],
@@ -1840,7 +1853,7 @@ ntMergeNetTerms[ck_, tks_, drs_, scs_] := Module[{g = Values[PositionIndex[ck]],
     keep = Unitize[Abs[sums]];
     {Pick[tks[[f]], keep, 1], Pick[drs[[f]], keep, 1], Pick[sums, keep, 1]},
     sums = Total[scs[[#]]] & /@ g;
-    keep = If[TrueQ[# != 0], 1, 0] & /@ sums;
+    keep = If[TrueQ[# == 0], 0, 1] & /@ sums;
     {Pick[tks[[f]], keep, 1], Pick[drs[[f]], keep, 1], Pick[sums, keep, 1]}]];
 
 ntGenDedupJoin::bigkey = "The packed sub-term key range `1` exceeds 2^62; the dedup join stays exact but runs on unpacked bignum columns (slow). Consider re-ranking the key columns to dense ids.";
@@ -3614,6 +3627,10 @@ $ntComplexRuntimeProjection = False;
    in the kernel body so a shared sub-expression (the sqrt) is computed once rather than inlined
    per occurrence. *)
 
+MakeNTKernel::endproj = "ComplexEndProjection requires RealOutput -> True; otherwise the consumer would receive a complex kernel return value instead of the requested endpoint real projection.";
+
+MakeNTKernel::nonnumeric = "the integrand is not numeric: it contains `1` Indeterminate/Infinity value(s), which would be emitted as bare Mathematica symbols in the generated C++ (e.g. `return Indeterminate;`). This almost always means a SINGULAR Gram at the chosen kinematics: the basis's structures are linearly dependent there, so the inverse metric, and every dual projector built from it, carries 0/0. Check Det[TBGetMetric[basis]] under the frame's kinematics (e.g. the symmetric point), and project with a restricted sub-basis whose Gram is non-degenerate. Offending value(s): `2`";
+
 mkGenerateKernel::genfail = "Generator compile/run failed: `1`";
 mkGenerateKernel::pruneoff = "PruneRealTraces ignored: the RealProbe cannot run in this mode (Offline or RunGenerator->False), so pruned traces could not be probe-validated. Emitting all-complex traces; set RealProbe->False to assert the flow is safe to prune without a probe.";
 
@@ -4548,6 +4565,10 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                         Do[
                           Module[{compEntries = factorComps[[ci]], fid = nNetAcc},
                             scalarleakCheck[compEntries];
+                            (* here the entry scalar e[[3]] is folded into the rest scalars below, so it
+                               must be numeric too *)
+                            Do[If[! NumericQ[ee[[3]]], Message[mkGenerateKernel::scalarleak, d, ee[[3]]]; Abort[]],
+                              {ee, compEntries}];
                             AppendTo[factorIds, fid];
                             Do[appendRec[{e[[1]], e[[2]], 1, ({#[[1]], #[[2]] e[[3]]}&) /@ e[[4]], None, fid}], {e, compEntries}]
                           ],
@@ -4707,9 +4728,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    that generates many. See the "ComplexRuntimeProjection" note above. *)
     endProject = TrueQ[OptionValue["ComplexEndProjection"]];
     If[endProject && !TrueQ[OptionValue["RealOutput"]],
-      Print["[NumTracer] ERROR: ComplexEndProjection requires RealOutput -> True; otherwise the ",
-        "consumer would receive a complex kernel return value instead of the requested endpoint real ",
-        "projection."];
+      Message[MakeNTKernel::endproj];
       Abort[]];
     $ntComplexRuntimeProjection = TrueQ[OptionValue["ComplexRuntimeProjection"]] || endProject;
 (* diagData is passed IN, not read from an enclosing scope — see ntkPruneSpec. *)
@@ -4891,7 +4910,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    the flows project with a restricted sub-basis. Refuse rather than emit. *)
     With[{bad = Cases[integrand, Indeterminate | _DirectedInfinity | ComplexInfinity, {0, Infinity}]},
       If[bad =!= {},
-        Print["[NumTracer] ERROR: the integrand is not numeric — it contains ", Length[bad], " ", "Indeterminate/Infinity value(s), which would be emitted as bare Mathematica symbols in ", "the generated C++ (e.g. `return Indeterminate;`).\n", "  This almost always means a SINGULAR Gram at the chosen kinematics: the basis's ", "structures are linearly dependent there, so the inverse metric — and every dual ", "projector built from it — carries 0/0. Check Det[TBGetMetric[basis]] under the frame's ", "kinematics (e.g. the symmetric point), and project with a restricted sub-basis whose ", "Gram is non-degenerate. Offending value(s): ", Short[DeleteDuplicates[bad], 4]];
+        Message[MakeNTKernel::nonnumeric, Length[bad], Short[DeleteDuplicates[bad], 4]];
         Abort[]]];
 (* FINITE-EXTENT PARTITION. The kernel is a flat sum of per-diagram terms, so classification is a
    Select, not a rewrite. Three outcomes:

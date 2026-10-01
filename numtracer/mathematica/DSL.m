@@ -902,6 +902,14 @@ frameMask[components_List] := FromDigits[Reverse[Boole[# =!= 0 && # =!= 0.] & /@
    isospin group), so NumTrace itself takes no group option. *)
 Options[NumTrace] = {"Frame" -> <||>, "Args" -> {}, "Dressings" -> {}, "DressingCollection" -> True};
 
+(* the "DressingCollection" value of the most recent FromFunKit call; None = no FromFunKit yet *)
+$ntFromFunKitDressCollect = None;
+NumTrace::sunrank = "every SU(N) head must carry an integer rank N >= 1 as its first argument (got `1`). Set Nc (SetNc[3]) before tracing colour heads, and pass \"FlavourGroup\" -> n to FromFunKit for the isospin group.";
+NumTrace::nfsym = "the flavour count Nf is not a defined integer (a symbolic Nf is present in the network). Call SetNf[2] (TensorBases) before generating.";
+NumTrace::dresscollect = "NumTrace runs with \"DressingCollection\" -> `1`, but the most recent FromFunKit \
+call used `2`. FromFunKit already kept (or distributed) the dressed Dirac numerators according to its \
+own setting; pass the same value to both.";
+
 NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose], $ntProf = <||>, $ntPlusMemo = <||>}, Module[
   {frame, args, dress, badRanks, net2, diagrams, allMom, invMom, invSMom, env, nenv, diags, ntT0},
 (* WHOLE-NumTrace wall clock, next to the stage timers ([prof] expandBridges / checkLabels /
@@ -915,6 +923,8 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
      distributing into 2^D diagrams. Set here so expandBridges (distributeQ) and analyseDiagram
      (rewriteDressedNums) both see it; each NumTrace call sets it from its option (default True). *)
   $ntDressCollect = TrueQ[OptionValue["DressingCollection"]];
+  If[BooleanQ[$ntFromFunKitDressCollect] && $ntFromFunKitDressCollect =!= $ntDressCollect,
+    Message[NumTrace::dresscollect, $ntDressCollect, $ntFromFunKitDressCollect]];
 
   (* SU(N) ranks must be compile-time integers (they pick the correct-dimension typed-out
      group matrices). Every group head's leading argument N is checked up front, so an
@@ -923,16 +933,13 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
     Cases[net, h : (_ntSUNf | _ntSUNDeltaAdj | _ntSUNT | _ntSUNDeltaFund | _ntSUNDiagFund | _ntSUNDiagAdj | _ntEpsFund) :> sunRankOf[h], Infinity],
     ! (IntegerQ[#] && # >= 1) &];
   If[badRanks =!= {},
-    Print["NumTrace: every SU(N) head must carry an integer rank N >= 1 as its first argument ",
-          "(got ", badRanks, "). Set Global`Nc (SetNc[3]) before tracing colour heads, and pass ",
-          "\"FlavourGroup\" -> n to FromFunKit for the isospin group."]; Abort[]];
+    Message[NumTrace::sunrank, badRanks]; Abort[]];
   (* A closed quark flavour loop folds to Global`Nf. When SetNf[n] has been called Global`Nf is
      an integer and has already folded into the coefficients (nothing to check). Only when it is
      still the unset symbol AND it appears in the network is the flavour count genuinely undefined
      — check for the symbol then (guarding so the integer value is not mistaken for a literal). *)
   If[! IntegerQ[Global`Nf] && ! FreeQ[net, Global`Nf],
-    Print["NumTrace: flavour Nf is not a defined integer (symbolic Nf present in the network). ",
-          "Call SetNf[2] (TensorBases) before generating."]; Abort[]];
+    Message[NumTrace::nfsym]; Abort[]];
 
   (* FIXED LORENTZ COMPONENTS (γ^0 & co, the finite-T 3+1 split used by the four-quark Fierz bases)
      are rewritten into contractions with constant unit basis vectors FIRST, so that no integer

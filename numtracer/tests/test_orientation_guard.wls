@@ -92,5 +92,14 @@ check["anomalous collected slot is refused (slotorient)",
   CheckAbort[NumTracer`Private`diracSlotDecompose[slot], "ABORTED"],
   "ABORTED"];
 
+(* --- F. An open slot chain must reach every token from its din end, or refuse. --------------- *)
+oc = NumTracer`Private`orderOpenChain;
+check["open chain din -> two tokens, in walk order",
+  CheckAbort[oc[{ntGamma[c2, e2, e3], ntGamma[c1, e1, e2]}, e1], "ABORTED"],
+  {ntGamma[c1, e1, e2], ntGamma[c2, e2, e3]}];
+check["an option with no token is an empty chain", CheckAbort[oc[{ntDeltaDirac[e1, e3]}, e1], "ABORTED"], {}];
+check["a din that reaches no token is refused",
+  CheckAbort[Quiet[oc[{ntGamma[c1, e2, e3]}, e1]], "ABORTED"], "ABORTED"];
+
 If[fail, Print["orientation guard: FAILED"]; Exit[1]];
 Print["orientation guard: all checks passed"];
