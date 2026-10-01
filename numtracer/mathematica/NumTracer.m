@@ -176,7 +176,21 @@ ntLoadPart["DSL.m"];
 
 ntLoadPart["Frames.m"];
 
-ntLoadPart["Codegen.m"];
+ntLoadPart["CodegenCommon.m"];
+
+ntLoadPart["CodegenNets.m"];
+
+ntLoadPart["CodegenFrames.m"];
+
+ntLoadPart["CodegenRealProjection.m"];
+
+ntLoadPart["CodegenBuild.m"];
+
+ntLoadPart["CodegenProbe.m"];
+
+ntLoadPart["CodegenGenerator.m"];
+
+ntLoadPart["CodegenKernel.m"];
 
 ntLoadPart["FunKitAdapter.m"];
 
