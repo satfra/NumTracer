@@ -430,8 +430,9 @@ ntCanonIds[e_, ids_, env_] :=
    magnitude more calls than it has distinct arguments. $ctCache is cleared per generation in
    mkGenerateKernel. Output-preserving (a pure function of its inputs); the recursion is memoised too. *)
 
-compileLorentz[e_, ids_, env_, nonzeroCompMask_] := With[{h = Hash[{ntCanonIds[e, ids, env], $ctCtx}]},
-    Lookup[$ctCache, h, $ctCache[h] = compileLorentzBody[e, ids, env, nonzeroCompMask]]];
+compileLorentz[e_, ids_, env_, nonzeroCompMask_] := ntProfTimed["compileLorentz",
+  With[{h = Hash[{ntCanonIds[e, ids, env], $ctCtx}]},
+    Lookup[$ctCache, h, $ctCache[h] = compileLorentzBody[e, ids, env, nonzeroCompMask]]]];
 
 compileLorentzBody[e_, ids_, env_, nonzeroCompMask_] := Which[
     tensorQ[e],
@@ -1513,7 +1514,10 @@ diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, nonzeroComp
    net-build 143.8 s -> 162.3 s. compileColour collapses better (82093 -> 15177) but is only 13.8 s to
    begin with and did not pay for itself either. *)
 
-compileDirac[factors_, ids_, env_, nonzeroCompMask_] := Module[
+compileDirac[factors_, ids_, env_, nonzeroCompMask_] :=
+  ntProfTimed["compileDirac", compileDiracBody[factors, ids, env, nonzeroCompMask]];
+
+compileDiracBody[factors_, ids_, env_, nonzeroCompMask_] := Module[
     {diracFacs, loops, loopStrs, loopStrsBare, nEmptyLoops, slashVecs = {}, tokenOf, restFacs, restCompiled, legStr, sigStr, slots = {}, slotN = 0, dressed, vecOf},
 (* μ -> the momentum q of an ntVec[q,μ] factor, built ONCE per call: tokenOf would otherwise rescan the
    whole factor list for every gamma token, which is quadratic in the factor count. Reverse before
@@ -4668,10 +4672,11 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
     Module[{bInvNets = Internal`Bag[], bInvRest = Internal`Bag[], bColourNets = Internal`Bag[], bColToks = Internal`Bag[], bDiagData = Internal`Bag[], bLorFacOf = Internal`Bag[], bFactorNets = Internal`Bag[], nNetAcc = 0},
 (* The net build itself is bound here, not passed as an ntLog argument: it is the work, not a
    diagnostic. See ntExportCpp for why load-bearing work must stay outside ntLog. *)
+      $ntProf = <||>;
       With[{ntT =
         First @
           AbsoluteTiming[
-            MapIndexed[
+            Block[{$ntProfOn = TrueQ[$NumTracerVerbose]}, MapIndexed[
               Function[{diag, di},
                 Module[{coeff, colBr, constAcc = {}, colTok = "", entries = {}, d = di[[1]] - 1, pureLorAcc = {}, nNonConst = 0, nNCDirCol = 0, diracComps = {}},
 (* cache this diagram's canonicalisation rules for ntCanonIds (see there) — one Dispatch per
@@ -4714,7 +4719,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                             If[colourEntangledQ[comp["Factors"]] || !FreeQ[comp["Factors"], _ntGamma | _ntGamma5 | _ntC | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot],
                               (
                                 nNCDirCol++;
-                                AppendTo[diracComps, splitColourGroups[comp["Factors"], diag["Ids"], env, nonzeroCompMask]]
+                                AppendTo[diracComps, ntProfTimed["splitColourGroups", splitColourGroups[comp["Factors"], diag["Ids"], env, nonzeroCompMask]]]
                               ),
                               pureLorAcc = Join[pureLorAcc, comp["Factors"]]])]]],
                     diag["Components"]];
@@ -4725,7 +4730,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                   colBr =
                     If[constAcc === {},
                       {{"SUNNet{}", 1}},
-                      compileColourSum[Times @@ constAcc, diag["Ids"]]];
+                      ntProfTimed["compileColourSum", compileColourSum[Times @@ constAcc, diag["Ids"]]]];
 (* ---- assemble the diagram's nets from its non-constant components -----------------------------
    A diagram with K disconnected non-constant components is a PRODUCT of K independent closed
    scalars (each a Dirac/colour trace or a pure-Lorentz scalar): `coeff * Times @@ toks`.
@@ -4775,7 +4780,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                             nDir == 1,
                               diracComps[[1]],
                             hasLor,
-                              ({"SUNNet{}", {#[[1]]}, #[[2]], {{"", 1}}}& /@ chunkLorentz[Times @@ pureLorAcc, diag["Ids"], env, nonzeroCompMask]),
+                              ({"SUNNet{}", {#[[1]]}, #[[2]], {{"", 1}}}& /@ ntProfTimed["chunkLorentz", chunkLorentz[Times @@ pureLorAcc, diag["Ids"], env, nonzeroCompMask]]),
                             True,
                               {}]},
                         scalarleakCheck[baseEntries];
@@ -4814,9 +4819,10 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    so the expensive component traces are computed once and shared. *)
                         Do[appendRec[{cb[[1]], {"konst(1.0)"}, coeff cb[[2]], {{"", 1}}, factorIds, None}], {cb, colBr}]
                       )]]]],
-              k["Diagrams"]]]},
+              k["Diagrams"]]]]},
         ntLog[
           "[prof] per-diagram net-build (", Length[k["Diagrams"]], " diagrams): ", ntT, " s"]];
+      ntProfReport["[prof]   net-build part "];
       (* materialise the bags once — everything downstream indexes these as plain lists *)
       invNets = Internal`BagPart[bInvNets, All];
       invRest = Internal`BagPart[bInvRest, All];

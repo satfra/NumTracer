@@ -25,6 +25,34 @@ ntEnvFlag[name_String] :=
   With[{v = Environment[name]},
     StringQ[v] && MemberQ[{"1", "true", "yes", "on"}, ToLowerCase[StringTrim[v]]]];
 
+(* ---- [prof] accumulators -----------------------------------------------------
+   ntProfTimed[key, expr] evaluates expr. While $ntProfOn is True it also adds the wall time to
+   $ntProf[key] = {calls, inclusive s, exclusive s}: a key already on the stack (recursion) is timed at
+   its outermost call only, and exclusive time excludes nested timed keys. Callers Block $ntProfOn and
+   $ntProf around a stage and print the result with ntProfReport. Off, it costs ~0.3 µs per call; on,
+   ~9 µs, which is visible on stages with ~10^5 timed calls (compileDirac). *)
+$ntProfOn = False;
+$ntProf = <||>;
+$ntProfStack = {};
+$ntProfChild = 0.;
+SetAttributes[{ntProfTimed, ntProfRun}, HoldRest];
+ntProfTimed[key_, expr_] := If[$ntProfOn, ntProfRun[key, expr], expr];
+ntProfRun[key_, expr_] :=
+  If[MemberQ[$ntProfStack, key],
+    expr,
+    Module[{t, res, child},
+      Block[{$ntProfStack = Append[$ntProfStack, key], $ntProfChild = 0.},
+        {t, res} = AbsoluteTiming[expr];
+        child = $ntProfChild];
+      $ntProfChild += t;
+      $ntProf[key] = Lookup[$ntProf, key, {0, 0., 0.}] + {1, t, t - child};
+      res]];
+
+ntProfReport[prefix_String] :=
+  KeyValueMap[
+    ntLog[prefix, #1, ": ", #2[[1]], " calls, ", #2[[2]], " s incl, ", #2[[3]], " s excl"] &,
+    ReverseSortBy[$ntProf, #[[2]] &]];
+
 (* ---- head classification ---------------------------------------------------- *)
 
 (* A factor that participates in the tensor contraction (vs. a scalar coefficient).
@@ -851,13 +879,11 @@ frameMask[components_List] := FromDigits[Reverse[Boole[# =!= 0 && # =!= 0.] & /@
    isospin group), so NumTrace itself takes no group option. *)
 Options[NumTrace] = {"Frame" -> <||>, "Args" -> {}, "Dressings" -> {}, "DressingCollection" -> True};
 
-NumTrace[net_, OptionsPattern[]] := Module[
+NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose], $ntProf = <||>}, Module[
   {frame, args, dress, badRanks, net2, diagrams, allMom, invMom, invSMom, env, nenv, diags, ntT0},
-(* WHOLE-NumTrace wall clock. The stage timers below ([prof] expandBridges / checkLabels /
-   analyseDiagram) do not add up to the call: canonicalizeMomentumSigns, expandFundEps,
-   expandSpatialVecs, expandFixedComponents, the odd-trace prune and buildEnv are all untimed.
-   Without the total there is no way to tell "the untimed remainder is noise" from "the untimed
-   remainder IS the flow's cost", which is exactly the question a profiling run is asked. *)
+(* WHOLE-NumTrace wall clock, next to the stage timers ([prof] expandBridges / checkLabels /
+   analyseDiagram) and the per-part accumulators ([prof]   NumTrace part …), so a gap between the
+   total and the parts is visible. *)
   ntT0   = AbsoluteTime[];
   frame  = OptionValue["Frame"];
   args   = OptionValue["Args"];
@@ -890,7 +916,10 @@ NumTrace[net_, OptionsPattern[]] := Module[
      are rewritten into contractions with constant unit basis vectors FIRST, so that no integer
      Lorentz slot ever reaches the label machinery below. See expandFixedComponents. The unit
      vectors join the frame as ordinary momenta, so every existing frame builder stays untouched. *)
-  net2 = canonicalizeMomentumSigns @ expandFundEps @ expandSpatialVecs @ expandFixedComponents[net];
+  net2 = ntProfTimed["canonicalizeMomentumSigns", canonicalizeMomentumSigns @
+           ntProfTimed["expandFundEps", expandFundEps @
+             ntProfTimed["expandSpatialVecs", expandSpatialVecs @
+               ntProfTimed["expandFixedComponents", expandFixedComponents[net]]]]];
   With[{bad = DeleteDuplicates @ Cases[net2, ntUnitVec[i_] :> i, {0, Infinity}]},
     If[! AllTrue[bad, IntegerQ[#] && 0 <= # <= 3 &],
       Message[NumTrace::fixcomp, Select[bad, ! (IntegerQ[#] && 0 <= # <= 3) &]]; Abort[]]];
@@ -924,7 +953,7 @@ NumTrace[net_, OptionsPattern[]] := Module[
      matrix-product trace zeroes its odd-gamma branches on its own (splitColourGroups expands any
      γ-bearing Plus and compiles each branch separately, so this filter is purely a pruning
      optimisation sitting upstream of already-correct code). *)
-  diagrams = Select[diagrams, ! vanishingOddTraceQ[#] &];
+  diagrams = ntProfTimed["oddTracePrune", Select[diagrams, ! vanishingOddTraceQ[#] &]];
 
   (* Validate every distributed diagram BEFORE analyseDiagram assigns axis ids: it gives ONE id
      per DISTINCT label (see below), so a label occurring 4x becomes four axes sharing an id and
@@ -935,8 +964,8 @@ NumTrace[net_, OptionsPattern[]] := Module[
   With[{frees = If[TrueQ[$ntCheckLabels],
       (* the census (labelCensus) is pure; the abort/Message validation is kept separate so a
          failure reports the diagram index (see checkLabels) *)
-      With[{census = labelCensus /@ diagrams},
-        MapThread[checkLabels[#1, #2, #3] &, {diagrams, census, Range[Length[diagrams]]}]],
+      With[{census = ntProfTimed["labelCensus", labelCensus /@ diagrams]},
+        ntProfTimed["checkLabels", MapThread[checkLabels[#1, #2, #3] &, {diagrams, census, Range[Length[diagrams]]}]]],
       ConstantArray[{}, Length[diagrams]]]},
     ntLog["[labels] ", Length[diagrams], " diagram(s) validated; free-index set(s) = ",
       DeleteDuplicates[Sort /@ frees]]];]},
@@ -946,10 +975,11 @@ NumTrace[net_, OptionsPattern[]] := Module[
   (* net2, not net: the unit basis vectors introduced by expandFixedComponents — and the spatial
      vectors introduced by expandSpatialVecs — are ordinary momenta and MUST get an env Base, or
      compileDirac's slash emission finds them absent. *)
-  allMom = DeleteDuplicates @ Cases[net2, f_?tensorQ :> momentumOf[f], Infinity] // DeleteCases[None];
-  invMom = DeleteDuplicates @ Cases[net2, f_?(needsInvQ) :> momentumOf[f], Infinity];
-  invSMom = DeleteDuplicates @ Cases[net2, f_?(needsInvSQ) :> momentumOf[f], Infinity];
-  {env, nenv} = buildEnv[allMom, invMom, invSMom];
+  ntProfTimed["buildEnv",
+    allMom = DeleteDuplicates @ Cases[net2, f_?tensorQ :> momentumOf[f], Infinity] // DeleteCases[None];
+    invMom = DeleteDuplicates @ Cases[net2, f_?(needsInvQ) :> momentumOf[f], Infinity];
+    invSMom = DeleteDuplicates @ Cases[net2, f_?(needsInvSQ) :> momentumOf[f], Infinity];
+    {env, nenv} = buildEnv[allMom, invMom, invSMom]];
 
 (* The text of this line is a CONTRACT: tests/gen/regen_check.sh's flow_counts() seds the diagram
    count out of it. Same literal fragments, same order. *)
@@ -969,6 +999,7 @@ NumTrace[net_, OptionsPattern[]] := Module[
   With[{leak = DeleteDuplicates @ Cases[diags, _flavDelta, {0, Infinity}]},
     If[leak =!= {}, Message[NumTrace::flavleak, Short[leak, 8]]; Abort[]]];
 
+  ntProfReport["[prof]   NumTrace part "];
   ntLog["[prof] NumTrace TOTAL (", Length[diags], " diagrams): ", AbsoluteTime[] - ntT0, " s"];
 
   NTKernel[<|
@@ -979,20 +1010,21 @@ NumTrace[net_, OptionsPattern[]] := Module[
     "Args"      -> args,
     "Dressings" -> dress
   |>]
-];
+]];
 
 (* One diagram -> {pure-scalar coeff, axis-id map, tensor components}. Components keep
    their factors un-expanded (heads, Plus-vertices, Times-structures); the recursive
    et compiler in Codegen turns Plus -> et::add, Times -> contract_all. *)
 analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
-  factors = rewriteDressedNums @ splitSelfTraces[If[Head[diagram] === Times, List @@ diagram, {diagram}]];
+  factors = ntProfTimed["rewriteDressedNums", rewriteDressedNums @
+    ntProfTimed["splitSelfTraces", splitSelfTraces[If[Head[diagram] === Times, List @@ diagram, {diagram}]]]];
   (* LAST CHANCE to close the fundamental-flavour deltas, and the last point at which promoting the
      residue into the SU(N) engine still works. rewriteDressedNums (just above) is what lifts a
      flavour delta out of an eager dressed numerator's Plus, so this is the first point at which a
      straddling chain is a flat product — and the partition below is the last point at which a
      promoted head can still be handed an axis id. A no-op unless the blind rules left something
      genuinely unclosable, so flows whose flavour lines close stay byte-identical. *)
-  factors = promoteFlavResidue[factors];
+  factors = ntProfTimed["promoteFlavResidue", promoteFlavResidue[factors]];
   tensorF = Select[factors, ! scalarQ[#] &];
   (* Partition labels by sector: spinor (Dirac) axes get a disjoint high id range (>= $ntSpinorIdBase)
      so the engine — which contracts axes by MATCHING ID — never fuses a spinor axis with a
@@ -1036,12 +1068,12 @@ analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
        handle both heads, so making the component non-constant is all that is needed.
        In short: "Constant" must mean "a constant SU(N) component", so EVERY non-SU(N) tensor head
        belongs in this list — it is not merely a momentum test. *)
-    "Components" -> (<|"Factors" -> orderFactors[#],
+    "Components" -> (<|"Factors" -> ntProfTimed["orderFactors", orderFactors[#]],
                        "Constant" -> FreeQ[#, _ntVec | _ntTransProj | _ntLongProj |
                                               _ntElectricProj | _ntMagneticProj | _ntDressedNum | _ntDiracSlot |
                                               _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac |
                                               _ntMetric | _ntEpsilon]|> &
-                     /@ connectedComponents[tensorF])
+                     /@ ntProfTimed["connectedComponents", connectedComponents[tensorF]])
   |>
 ];
 
