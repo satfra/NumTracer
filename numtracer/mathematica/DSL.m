@@ -219,25 +219,27 @@ allLabels[e_] := DeleteDuplicates @ Flatten @ Cases[e, h_?tensorQ :> labelsOf[h]
 (* Group tensor factors (heads OR Plus-vertices) into independent sub-networks: two
    factors are connected if their free indices intersect. Each component contracts to
    a scalar (colour stays a separate constant); keeps every contraction small. *)
-connectedComponents[factors_List] := Module[{verts, edges, graph},
-  verts = Range[Length[factors]];
-  edges = Select[Subsets[verts, {2}],
-    IntersectingQ[freeIdx[factors[[#[[1]]]]], freeIdx[factors[[#[[2]]]]]] &];
-  graph = Graph[verts, UndirectedEdge @@@ edges];
-  factors[[#]] & /@ (ConnectedComponents[graph])
+connectedComponents[factors_List] := Module[{byLabel, edges},
+  (* label -> the factors carrying it; every pair of those is an edge. Union keeps the edge list in
+     the lexicographic order Subsets gives, so the Graph (and its component order) is unchanged. *)
+  byLabel = GroupBy[
+    Join @@ MapIndexed[Function[{ls, i}, {#, First[i]} & /@ ls], freeIdx /@ factors],
+    First -> Last];
+  edges = Union @@ (Subsets[Union[#], {2}] & /@ Values[byLabel]);
+  factors[[#]] & /@ ConnectedComponents[Graph[Range[Length[factors]], UndirectedEdge @@@ edges]]
 ];
 
 (* Greedy contraction order: keep each successive factor sharing a free index with the
    running set, so contract_all's intermediates stay low-rank (never outer-product the
    whole thing). *)
-orderFactors[fs_List] := Module[{rem = fs, out, used},
+orderFactors[fs_List] := Module[{fi = freeIdx /@ fs, rem, out, used},
   If[fs === {}, Return[{}]];
-  out = {First[rem]}; used = freeIdx[First[rem]]; rem = Rest[rem];
+  out = {1}; used = fi[[1]]; rem = Range[2, Length[fs]];
   While[rem =!= {},
-    With[{pick = SelectFirst[rem, IntersectingQ[freeIdx[#], used] &, First[rem]]},
-      AppendTo[out, pick]; used = Union[used, freeIdx[pick]];
+    With[{pick = SelectFirst[rem, IntersectingQ[fi[[#]], used] &, First[rem]]},
+      AppendTo[out, pick]; used = Union[used, fi[[pick]]];
       rem = DeleteCases[rem, pick, {1}, 1]]];
-  out];
+  fs[[out]]];
 
 (* ---- sector-bridge expansion (keep colour and Lorentz contractions separate) ---- *)
 
@@ -322,12 +324,12 @@ $ntVertexCollect := ntEnvFlag["NT_VERTEX_COLLECT"];
    count: measured on ZAAqbq2 the sub-term count is IDENTICAL either way (12,721,032) — the work
    moves, it does not grow. There is therefore no case in which the legacy distribute path is wanted,
    and the NT_NO_SLOT_COLLECT_NUMERIC hatch that used to select it (referenced nowhere) is gone. *)
-collectibleDiracSumQ[p_Plus] := ! sectorBridgeQ[p] &&
+collectibleDiracSumQRaw[p_Plus] := ! sectorBridgeQ[p] &&
   ((dressedStructureSumQ[p] && diracNumeratorSumQ[p] && dressedNumDecompose[p] =!= $Failed) ||
    ((TrueQ[$ntVertexCollect] && dressedStructureSumQ[p]) || ! dressedStructureSumQ[p]) &&
      diracSlotSumQ[p] && diracSlotDecompose[p] =!= $Failed);
 collectibleDiracSumQ[_] := False;
-distributeQ[p_] := sectorBridgeQ[p] ||
+distributeQRaw[p_] := sectorBridgeQ[p] ||
   (dressedStructureSumQ[p] && ! (TrueQ[$ntDressCollect] && collectibleDiracSumQ[p]));
 
 (* The SET of γ-count parities the diagram's terms would carry IF every EAGER Dirac Plus were
@@ -399,7 +401,7 @@ commonFactorMultiset[factLists_] := Module[{cnts = Counts /@ factLists, keys},
   keys = Intersection @@ (Keys /@ cnts);
   Flatten[Function[k, ConstantArray[k, Min[(Lookup[#, k, 0] &) /@ cnts]]] /@ keys]];
 
-dressedNumDecompose[p_Plus] := Module[
+dressedNumDecomposeRaw[p_Plus] := Module[
    (* Flatten only this local numerator sum. At finite T, psdash[p] contains
       gamma.mu vecs[p, mu]; after fixed-component normalization the temporal
       subtraction must become a separate slash option rather than making the
@@ -464,7 +466,7 @@ diracSlotSumQ[_] := False;
    factor is not common across terms (then the sum is left to distribute). *)
 NumTrace::slotorient = "diracSlotDecompose: a collected Dirac slot has `1` candidate in-legs, not 1. A slot is an OPEN chain din->dout, so exactly one of its open spinor labels must be some head's IN leg and no head's OUT leg; two means both ends are IN (an anomalous qq vertex), zero means both are OUT (its q̄q̄ conjugate). Either way the chain has no orientation, and the slot's tokens are spliced into the surrounding spinor loop IN CHAIN ORDER — so guessing one would emit that segment backwards, silently. Open spinor labels: `2`. First term: `3`. Aborting instead of guessing.";
 
-diracSlotDecompose[p_Plus] := Module[
+diracSlotDecomposeRaw[p_Plus] := Module[
   {terms = List @@ Expand[p], legs, opens, din, dout, io, ins, outs, dinCands, rows, cols, common, scals, commonScal, opts},
   If[! diracSlotSumQ[p], Return[$Failed]];
   legs   = Sort @ openLorentzOf[First[terms]];
@@ -505,6 +507,24 @@ diracSlotDecompose[p_Plus] := Module[
      {Times @@ Fold[DeleteCases[#1, #2, {1}, 1] &, sf, commonScal], Times @@ r[[3]]}], {rows, scals}];
   (Times @@ common) * (Times @@ commonScal) * ntDiracSlot[opts, din, dout, legs]];
 diracSlotDecompose[_] := $Failed;
+
+(* ---- per-call memo for the Plus classifiers ------------------------------------------------------
+   FunKit reuses index names across diagrams, so one vertex sum is the SAME expression in every diagram
+   that contains it (ZA4_147: 2631 Plus factors, 40 distinct), and expandBridges, collectibleDiracSumQ
+   and rewriteDressedNums each re-ask the same questions of it. The four functions below are pure in
+   {p, $ntDressCollect, $ntVertexCollect}, so NumTrace and FromFunKit Block $ntPlusMemo to <||> and
+   share the answers for one call. Outside such a Block (direct calls from tests) nothing is cached.
+   The store happens only after f[p] returns, so an Abort (slotorient) is never memoised. *)
+$ntPlusMemo = None;
+ntPlusMemo[tag_, f_, p_] :=
+  If[$ntPlusMemo === None,
+    f[p],
+    With[{key = {tag, p, TrueQ[$ntDressCollect], TrueQ[$ntVertexCollect]}},
+      Lookup[$ntPlusMemo, Key[key], $ntPlusMemo[key] = f[p]]]];
+distributeQ[p_]              := ntPlusMemo["dq", distributeQRaw, p];
+collectibleDiracSumQ[p_Plus] := ntPlusMemo["cds", collectibleDiracSumQRaw, p];
+dressedNumDecompose[p_Plus]  := ntPlusMemo["dnd", dressedNumDecomposeRaw, p];
+diracSlotDecompose[p_Plus]   := ntPlusMemo["sd", diracSlotDecomposeRaw, p];
 
 (* `redistDiagram` used to live here, with its private helpers `expandDiracSlot` and
    `expandDressedNum` (the latter defined further up): it re-distributed one COLLECTED diagram back to the non-collected form so the
@@ -879,7 +899,7 @@ frameMask[components_List] := FromDigits[Reverse[Boole[# =!= 0 && # =!= 0.] & /@
    isospin group), so NumTrace itself takes no group option. *)
 Options[NumTrace] = {"Frame" -> <||>, "Args" -> {}, "Dressings" -> {}, "DressingCollection" -> True};
 
-NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose], $ntProf = <||>}, Module[
+NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose], $ntProf = <||>, $ntPlusMemo = <||>}, Module[
   {frame, args, dress, badRanks, net2, diagrams, allMom, invMom, invSMom, env, nenv, diags, ntT0},
 (* WHOLE-NumTrace wall clock, next to the stage timers ([prof] expandBridges / checkLabels /
    analyseDiagram) and the per-part accumulators ([prof]   NumTrace part …), so a gap between the
