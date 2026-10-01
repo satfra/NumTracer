@@ -1369,6 +1369,57 @@ orderDiracLoopsBody[facs_] := If[Length[facs] <= 1,
 
 $ntDressResolve = Identity;
 
+(* ---- Dirac chain tokens -> C++ ------------------------------------------------------------------
+   Shared by compileDirac (closed loops), diracSlotStrBody (an open chain inside a collected slot) and
+   dressedSlotStrBody. Every slash momentum is a literal ntVec momentum, hence an env key; a missing
+   one aborts rather than print a Missing[...] into the generator. *)
+$diracHeadPat = _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot;
+
+compileDirac::badtok = "compileDirac: `1` is not a Dirac chain token (expected ntGamma, ntGamma5, ntC, ntSigma, a slot, or ntTransposed of one). Aborting rather than emit it as a gamma.";
+
+envBaseStr[q_, env_, what_] := (
+  If[! KeyExistsQ[env, q],
+    Print["[NumTracer] ERROR: ", what, " momentum ", q, " absent from env ", Keys[env]];
+    Abort[]];
+  ToString[env[q]["Base"]]);
+
+(* a linear combination of momenta {{c1,q1},{c2,q2},…} -> the C++ vlc {{c1,Base1},{c2,Base2},…} *)
+vlcCpp[pairs_List, env_, what_] :=
+  "{" <> StringRiffle[("{" <> cppNum[#[[1]]] <> "," <> envBaseStr[#[[2]], env, what] <> "}") & /@ pairs, ", "] <> "}";
+
+(* an ntSigma leg: a free open Lorentz leg (its axis id) or a slashed leg (a vlc) *)
+sigmaLegCpp[{"slash", pairs_List}, ids_, env_] := vlcCpp[pairs, env, "σ slash leg"];
+sigmaLegCpp[{"free", mu_}, ids_, env_] := ToString[ids[mu]];
+$sigmaBuilder = <|{"free", "free"} -> "dcomm(", {"slash", "slash"} -> "dcomm_ss(",
+                  {"free", "slash"} -> "dcomm_fs(", {"slash", "free"} -> "dcomm_sf("|>;
+
+(* the bare DFac of one fixed token. A γ whose Lorentz leg is contracted with an ntVec[q,μ] factor
+   (vecOf: μ -> q) is a slash, otherwise a free leg. ntTransposed marks a factor the spinor walk
+   traversed against its declared direction: the engine multiplies its transpose. *)
+fixedTokCpp[ntTransposed[g_], vecOf_, ids_, env_] := "dtr(" <> fixedTokCpp[g, vecOf, ids, env] <> ")";
+fixedTokCpp[_ntGamma5, __] := "dg5()";
+fixedTokCpp[_ntC, __] := "dc()";
+fixedTokCpp[ntSigma[a_, b_, __], vecOf_, ids_, env_] :=
+  $sigmaBuilder[{a[[1]], b[[1]]}] <> sigmaLegCpp[a, ids, env] <> ", " <> sigmaLegCpp[b, ids, env] <> ")";
+fixedTokCpp[ntGamma[mu_, _, _], vecOf_, ids_, env_] :=
+  If[KeyExistsQ[vecOf, mu],
+    "dslash({{1.0," <> envBaseStr[vecOf[mu], env, "slash"] <> "}})",
+    "dgamma(" <> ToString[ids[mu]] <> ")"];
+fixedTokCpp[g_, __] := (Message[compileDirac::badtok, g]; Abort[]);
+
+(* one token of a closed chain. A slot (dressed numerator or collected Dirac slot) is a DChainTok
+   referencing the slot list, which is Sow'n under "slot" in chain order; a transposed slot is
+   dtrslot(k) (reversed at the dress_enumerate splice). In a dressed chain every fixed DFac is
+   wrapped as dtfix(DFac), so a transposed one reads dtfix(dtr(…)). *)
+chainTokCpp[g : (_ntDressedNum | _ntDiracSlot), dressed_, vecOf_, ids_, env_, mask_] := (
+  Sow[If[Head[g] === ntDressedNum, dressedSlotStr[g, env], diracSlotStr[g, ids, env, mask]], "slot"];
+  "dtslot(" <> ToString[$ntSlotN++] <> ")");
+chainTokCpp[ntTransposed[g : (_ntDressedNum | _ntDiracSlot)], rest__] :=
+  StringReplace[chainTokCpp[g, rest], StartOfString ~~ "dtslot(" -> "dtrslot("];
+chainTokCpp[g_, dressed_, vecOf_, ids_, env_, mask_] :=
+  If[dressed, "dtfix(" <> fixedTokCpp[g, vecOf, ids, env] <> ")", fixedTokCpp[g, vecOf, ids, env]];
+$ntSlotN = 0;
+
 (* the C++ DSlot literal for one ntDressedNum: a sum of DSlotOpt{Cx coeff, {dress ids}, slash?, vlc}.
    Each option's scalar coefficient is frame-resolved then split into a complex number × dressing atoms
    (drDecompose); a "slash" structure's momenta become a vlc of {1.0, env Base} pairs (coeff-1, like the
@@ -1390,25 +1441,14 @@ dressedSlotStr[gf : ntDressedNum[_, _, _], env_] := With[{h = Hash[{gf, $ctCtx}]
 dressedSlotStrBody[ntDressedNum[opts_, _, _], env_] := Function[opt,
           Module[{num, dr, vlcStr},
             {num, dr} = drDecompose[$ntDressResolve[opt[[1]]]];
-            vlcStr =
-              If[opt[[2, 1]] === "slash",
-                StringRiffle[
-                  Function[cq,
-                      Module[{c = cq[[1]], q = cq[[2]]},
-                        If[!KeyExistsQ[env, q],
-                          Print["[NumTracer] ERROR: dressed slash momentum ", q, " absent from env ", Keys[env]];
-                          Abort[]];
-                        "{" <> cppNum[c] <> "," <> ToString[env[q]["Base"]] <> "}"]
-                    ] /@ opt[[2, 2]],
-                  ", "],
-                ""];
+            vlcStr = If[opt[[2, 1]] === "slash", vlcCpp[opt[[2, 2]], env, "dressed slash"], ""];
             (* LEVER (b): return the STRUCTURE separately from the dressing, as {structStr, num, dr}.
                      structStr is the dressing-free DSlotOpt (coeff 1, no dress atoms) — ident → empty toks,
                      slash → one dslash token (netFacs empty: a k=0 propagator numerator has no open leg).
                      num (numeric Cx) folds into the sub-term scalar and dr (dress-atom ids) becomes the
                      DPoly key, so the trace table dedups on structure alone. *)
             {"DSlotOpt{Cx{1,0}, {}, {" <>
-              If[opt[[2, 1]] === "slash", "dslash({" <> vlcStr <> "})", ""] <> "}, {}}", num, dr}]
+              If[opt[[2, 1]] === "slash", "dslash(" <> vlcStr <> ")", ""] <> "}, {}}", num, dr}]
         ] /@ opts;
 
 (* ---- general collected Dirac slot → C++ DSlot literal (Stage 4, any open-leg count) ------------
@@ -1449,42 +1489,22 @@ diracSlotStr[gf : ntDiracSlot[_, _, _, _], ids_, env_, nonzeroCompMask_] := With
 (* Returns the LIST of per-option "DSlotOpt{…}" strings (see dressedSlotStrBody): the generator
    expands the Cartesian product of a chain's slots into single-option sub-terms. *)
 diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, nonzeroCompMask_] := Function[opt,
-        Module[{num, dr, facs, vecOf, gammaLegs, diracFacs, lorFacs, ordered, toks, netFacs, legStr, sigStr},
+        Module[{num, dr, facs, vecOf, gammaLegs, diracFacs, lorFacs, toks, netFacs},
           {num, dr} = drDecompose[$ntDressResolve[opt[[1]]]];
           facs = If[Head[opt[[2]]] === Times, List @@ opt[[2]], {opt[[2]]}];
-          (* μ -> slash momentum q (an ntVec sharing a γ's Lorentz leg) *)
           vecOf = Association[Reverse[Cases[facs, ntVec[q_, m_] :> (m -> q)]]];
           gammaLegs = Cases[facs, ntGamma[gm_, _, _] :> gm];
           diracFacs = Select[facs, MatchQ[#, _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac] &];
           (* Lorentz-net factors = non-Dirac tensors that are NOT a slash-vec (a slash-vec's μ is a γ leg) *)
           lorFacs = Select[facs, (tensorQ[#] && ! MatchQ[#, _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac] &&
                           ! MatchQ[#, ntVec[_, m_ /; MemberQ[gammaLegs, m]]]) &];
-          (* an ntSigma leg → C++ arg (free open leg id, or a slashed-leg vlc) *)
-          legStr[{"slash", pairs_List}] :=
-            "{" <> StringRiffle[("{" <> cppNum[#[[1]]] <> "," <> ToString[env[#[[2]]]["Base"]] <> "}") & /@ pairs, ", "] <> "}";
-          legStr[{"free", mu_}] := ToString[ids[mu]];
-          sigStr[legA_, legB_] := Module[{ta = legA[[1]], tb = legB[[1]], sa = legStr[legA], sb = legStr[legB]},
-            Which[ta === "free" && tb === "free", "dcomm(" <> sa <> ", " <> sb <> ")",
-                ta === "slash" && tb === "slash", "dcomm_ss(" <> sa <> ", " <> sb <> ")",
-                ta === "free" && tb === "slash", "dcomm_fs(" <> sa <> ", " <> sb <> ")",
-                True, "dcomm_sf(" <> sa <> ", " <> sb <> ")"]];
-          ordered = orderOpenChain[diracFacs, din];
+          (* A slot's chain runs din->dout by construction (NumTrace::slotorient refuses an ambiguous
+             one), so orderOpenChain never marks a transpose and the slot emitter cannot express one. *)
           toks = Function[gf2,
-            Which[
-(* orderOpenChain does NOT mark transposes: a slot's internal chain runs din->dout by construction,
-   and DSL.m's NumTrace::slotorient guard refuses a slot whose orientation is ambiguous. So a marker
-   here would mean that guard was relaxed without teaching this emitter — refuse rather than fall
-   through to the ntGamma branch, which would read First[ntTransposed[..]] as a Lorentz index. *)
-              MatchQ[gf2, _ntTransposed],
-                (Print["[NumTracer] ERROR: a transposed token reached the slot emitter, which cannot ",
-                       "represent one (see orderOpenChain). Token:\n  ", gf2]; Abort[]),
-              MatchQ[gf2, _ntGamma5], "dg5()",
-              MatchQ[gf2, _ntC], "dc()",
-              MatchQ[gf2, _ntSigma], sigStr[gf2[[1]], gf2[[2]]],
-              True, With[{mu = First[gf2]},   (* ntGamma: slash if its leg is an ntVec momentum, else a free open leg *)
-                If[KeyExistsQ[vecOf, mu],
-                  "dslash({{1.0," <> ToString[env[vecOf[mu]]["Base"]] <> "}})",
-                  "dgamma(" <> ToString[ids[mu]] <> ")"]]]] /@ ordered;
+            If[MatchQ[gf2, _ntTransposed],
+              Print["[NumTracer] ERROR: a transposed token reached the slot emitter, which cannot ",
+                    "represent one (see orderOpenChain). Token:\n  ", gf2]; Abort[]];
+            fixedTokCpp[gf2, vecOf, ids, env]] /@ orderOpenChain[diracFacs, din];
           netFacs = lorentzElemStr[#, ids, env] & /@ lorFacs;
           (* LEVER (b): {structStr, num, dr} — dressing-free DSlotOpt (coeff 1, no dress) + the numeric
                   Cx (num) and dress-atom ids (dr) carried separately by the sub-term. See dressedSlotStrBody. *)
@@ -1492,207 +1512,49 @@ diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, nonzeroComp
             StringRiffle[netFacs, ", "] <> "}}", num, dr}
         ]] /@ opts;
 
-(* Turn a component's factor list into the C++ Dirac-chain token(s) + its Lorentz "rest".
-   Algorithm:
-     1. pull out the Dirac heads (γ/γ5/σ/δ/dressed-numerator); if none, defer to compileLorentz.
-     2. order them into independent spinor loops (orderDiracLoops) and map each to a token string
-        (tokenOf): a γ leg becomes dgamma/dslash, a σ becomes the matching dcomm* builder (legStr),
-        a dressed-numerator becomes a SLOT (dtslot) whose DSlot is recorded.
-     3. LOUD-GUARD that no Dirac head leaked into the non-Dirac "rest" (an un-collected dressed sum) —
-        that would silently collapse/leak the trace; abort if so.
-     4. compile the Lorentz rest separately (restCompiled = {restStr, scalar}) and return the Dirac
-        core, scalar and rest SEPARATELY so the contraction stays deferred (rest emitted once, shared
-        across a colour group). A dressed chain returns the ntDressedCore[chain, slots] marker instead. *)
-
-(* NOT MEMOISED — measured dead end, do not retry. compileDirac is the single hottest helper in the
-   net-build (476296 calls / 110 s of 144 s on the four-quark hPhiL), and the downstream CSE reporting
-   only 1327 distinct Dirac nets makes it look like almost pure recomputation. It is not: those 1327
-   are distinct at the EMITTED-STRING level, several processing steps downstream, and genuinely
-   different inputs converge on them. Caching on the canonicalised arguments (the same key that gave
-   compileLorentz a 13x collapse) yields only 221876 distinct keys out of 476296 calls — 2.1x — and the
-   per-call ntCanonIds ReplaceAll + Hash over a large factor list then costs MORE than the 2.1x saves:
-   net-build 143.8 s -> 162.3 s. compileColour collapses better (82093 -> 15177) but is only 13.8 s to
-   begin with and did not pay for itself either. *)
-
+(* A component's factor list -> {coreStr, scalar, restStr}: the Dirac chain(s) and the Lorentz rest,
+   kept SEPARATE so splitColourGroups can share one rest across a colour group and the contraction
+   stays deferred to the generator. A component without Dirac heads is just its Lorentz net.
+     - the Dirac heads are ordered into independent spinor loops (orderDiracLoops), each a token
+       string joined by loop separators;
+     - a chain with a dressed numerator or a collected slot is returned as
+       ntDressedCore[std::vector<DChainTok>{…}, slots] (slots: per-slot option lists, expanded into
+       single-option sub-terms by emitNumericGenerator), else as DiracNet{…};
+     - the remaining factors must be Dirac-free (a dressed numerator sum that was neither distributed
+       nor collected would otherwise lose or leak its γ structure) and compile through compileLorentz.
+   Not memoised: caching on canonicalised arguments collapses hPhiL's calls only 2.1x, and the key
+   costs more than that saves (measured, net-build 144 s -> 162 s). *)
 compileDirac[factors_, ids_, env_, nonzeroCompMask_] :=
   ntProfTimed["compileDirac", compileDiracBody[factors, ids, env, nonzeroCompMask]];
 
 compileDiracBody[factors_, ids_, env_, nonzeroCompMask_] := Module[
-    {diracFacs, loops, loopStrs, loopStrsBare, nEmptyLoops, slashVecs = {}, tokenOf, restFacs, restCompiled, legStr, sigStr, slots = {}, slotN = 0, dressed, vecOf},
-(* μ -> the momentum q of an ntVec[q,μ] factor, built ONCE per call: tokenOf would otherwise rescan the
-   whole factor list for every gamma token, which is quadratic in the factor count. Reverse before
-   building the Association so a duplicate μ keeps the FIRST match, matching the old `First[...]`. *)
+    {diracFacs, vecOf, loops, dressed, loopStrs, slots, slashVecs, restFacs, restCompiled},
+    diracFacs = Cases[factors, $diracHeadPat];
+    If[diracFacs === {}, Return[Append[compileLorentz[Times @@ factors, ids, env, nonzeroCompMask], ""]]];
+    (* μ -> q of an ntVec[q,μ]; Reverse so a duplicate μ keeps the FIRST match *)
     vecOf = Association[Reverse[Cases[factors, ntVec[q_, m_] :> (m -> q)]]];
-    diracFacs = Select[factors, MatchQ[#, _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot]&];
-    If[diracFacs === {},
-      Return[Append[compileLorentz[Times @@ factors, ids, env, nonzeroCompMask], ""]]];
-    loops = orderDiracLoops[diracFacs];(* one ordered token list per independent spinor loop *)
-    dressed = !FreeQ[diracFacs, _ntDressedNum | _ntDiracSlot];
-(* an ntSigma leg → its C++ arg string. A slashed leg is a list of {coeff, q} pairs (q a literal
-   ntVec momentum, hence an env key) ⇒ a vlc `{{c1,b1},{c2,b2},…}` of (coeff, env Base) pairs (a
-   single atomic momentum reduces to `{{1.,Base}}`); a free leg is its open Lorentz id. Guard loudly
-   if a leg momentum is somehow not in env (it always should be — momentumOf collected it). *)
-    legStr[{"slash", pairs_List}] := "{" <>
-        StringRiffle[
-          Function[cm,
-              Module[{c = cm[[1]], q = cm[[2]]},
-                If[!KeyExistsQ[env, q],
-                  Print["[NumTracer] ERROR: σ slash leg momentum ", q, " absent from env ", Keys[env]];
-                  Abort[]];
-                "{" <> cppNum[c] <> "," <> ToString[env[q]["Base"]] <> "}"]
-            ] /@ pairs,
-          ", "
-        ] <> "}";
-    legStr[{"free", mu_}] := ToString[ids[mu]];
-    (* the bare-commutator [A,B] builder, picked by each leg's free/slash kind (see et/inv/dirac.hpp). *)
-    sigStr[legA_, legB_] := Module[{ta = legA[[1]], tb = legB[[1]], sa = legStr[legA], sb = legStr[legB]},
-        Which[
-          ta === "free" && tb === "free",
-            "dcomm(" <> sa <> ", " <> sb <> ")",
-          ta === "slash" && tb === "slash",
-            "dcomm_ss(" <> sa <> ", " <> sb <> ")",
-          ta === "free" && tb === "slash",
-            "dcomm_fs(" <> sa <> ", " <> sb <> ")",
-          True,
-            "dcomm_sf(" <> sa <> ", " <> sb <> ")"]];
-(* one chain token. A ntDressedNum becomes a SLOT (dtslot index, its DSlot recorded); the others are
-   the usual gamma/slash/γ5/σ tokens. In the dressed case every fixed token is wrapped in dtfix(...)
-   so the chain is a std::vector<DChainTok>; otherwise the bare token goes into a DiracNet{...}. *)
-    tokenOf =
-      Function[gf,
-        Which[
-(* TRANSPOSE MARKER. `orderDiracFacs` wraps a factor the walk traversed against its declared
-   (diracIn,diracOut) order; the engine must multiply M^T there. Recurse for the inner token's string
-   and wrap it in `dtr(...)`. The marker MUST reach the emitted text: chains are interned by string
-   (dsInt/dcInt/dlInt below), so a transposed and an untransposed chain would otherwise collide in the
-   trace table. A `dressed` chain wraps this from the OUTSIDE, giving dtfix(dtr(...)). *)
-          MatchQ[gf, _ntTransposed],
-(* A FIXED token wraps in dtr(...); a SLOT is a different C++ type (DChainTok, not DFac) and takes
-   the dtrslot(k) spelling, which reverses the option's chain and transposes each token at the
-   dress_enumerate splice. Recurse first so the slot is registered exactly as it would be untransposed
-   (same $dslCache key — the transpose lives on the reference, not on the slot). *)
-            With[{inner = tokenOf[First[gf]]},
-              If[StringMatchQ[inner, "dtslot(" ~~ __],
-                StringReplace[inner, StartOfString ~~ "dtslot(" -> "dtrslot("],
-                "dtr(" <> inner <> ")"]],
-          MatchQ[gf, _ntDressedNum],
-            (
-              AppendTo[slots, dressedSlotStr[gf, env]];
-              With[{k = slotN},
-                slotN++;
-                "dtslot(" <> ToString[k] <> ")"]),
-          MatchQ[gf, _ntDiracSlot],
-            (
-              AppendTo[slots, diracSlotStr[gf, ids, env, nonzeroCompMask]];
-              With[{k = slotN},
-                slotN++;
-                "dtslot(" <> ToString[k] <> ")"]),
-          MatchQ[gf, _ntGamma5],
-            If[dressed,
-              "dtfix(dg5())",
-              "dg5()"],
-          MatchQ[gf, _ntC],
-            If[dressed,
-              "dtfix(dc())",
-              "dc()"],
-          MatchQ[gf, _ntSigma],
-            With[{s = sigStr[gf[[1]], gf[[2]]]},
-              If[dressed,
-                "dtfix(" <> s <> ")",
-                s]],
-          True,
-            Module[{mu = First[gf], vq, t},
-              vq = Lookup[vecOf, mu, Missing[]];
-              t =
-                If[!MissingQ[vq],
-                  (
-                    AppendTo[slashVecs, ntVec[vq, mu]];
-                    "dslash({{1.0," <> ToString[env[vq]["Base"]] <> "}})"),
-                  "dgamma(" <> ToString[ids[mu]] <> ")"];
-              If[dressed,
-                "dtfix(" <> t <> ")",
-                t]]]];
-    (* one token-string per spinor loop (mapped in order so the slot/slashVec side effects accumulate) *)
-    loopStrs = (StringRiffle[tokenOf /@ #, ", "])& /@ loops;
-(* COLLAPSED (token-free) spinor loops. orderDiracFacs drops δ "connector" factors, so a loop built
-   ONLY from ntDeltaDirac (a bare closed spinor δ-loop, e.g. <P_2,T_2> of AqbqDirect8) yields an
-   EMPTY token list. Downstream, ndetail::split_loops discards empty segments, so such a loop
-   contributes NO factor at all and its tr(1) = 4 is silently lost — a 4x undercount per collapsed
-   loop. (The DRESSED path already compensates for exactly this, restoring 4^(#collapsed loops); see
-   the comment on nloops in numeric_value_dressed_netval. The bare path had no such compensation.)
-   Fix it HERE rather than in C++: only the front end can tell a loop that collapsed to the identity
-   (tr(1) = 4) from a component with no spinor loop at all (a pure-gauge diagram, where 4 must NOT be
-   applied) — by the time the chain reaches the runtime both look like an empty DiracNet. compileDirac
-   is only ever entered with diracFacs =!= {}, so every loop counted here is a genuine spinor loop.
-   Flows whose every loop keeps a fixed γ never collapse => nEmpty == 0 => kernels byte-identical. *)
-    nEmptyLoops = Count[loopStrs, ""];
-(* REACHABILITY (checked 2026-07-18, and why the riffle below filters anyway): a token-free loop
-   consists only of ntDeltaDirac, which carries NO Lorentz and NO colour label, so it can never
-   share a label with another spinor loop — connectedComponents always isolates it into its own
-   component. Hence loopStrs is exactly {""} whenever it holds an empty entry, and the empty entry
-   is never adjacent to a non-empty one. Verified: a net with an all-δ loop, a γ loop and a colour
-   loop splits into 3 components, the δ one reporting loops = {{}}.
-   The filter is still applied because StringRiffle over a list MIXING "" with real tokens would
-   emit stray commas — `DiracNet{, dloopsep(), dgamma(0)}` — which is a C++ syntax error in leading
-   or middle position but a LEGAL trailing comma in last position. That is a correctness that
-   depends on loop ORDER, which nothing enforces; it would become reachable the moment a Dirac head
-   that carries a Lorentz index can also be token-free. Filtering makes the emission order-blind.
-   Applied ONLY to the bare branch below: the DRESSED chain must keep every segment, because the
-   runtime derives nCollapsed from the LoopSep marker count (ndetail::dress_enumerate) and
-   dropping a segment would silently change it. A dressed loop is never token-free at codegen time
-   anyway — an ntDressedNum is itself a chain token (a dtslot). *)
-    loopStrsBare = DeleteCases[loopStrs, ""];
+    loops = orderDiracLoops[diracFacs];
+    dressed = ! FreeQ[diracFacs, _ntDressedNum | _ntDiracSlot];
+    {loopStrs, slots} = Block[{$ntSlotN = 0},
+      Reap[StringRiffle[chainTokCpp[#, dressed, vecOf, ids, env, nonzeroCompMask] & /@ #, ", "] & /@ loops, "slot"]];
+    slots = Flatten[slots, 1];
+    (* the ntVec factors absorbed into a chain γ as its slash *)
+    slashVecs = Cases[Join @@ loops /. ntTransposed[g_] :> g,
+                      ntGamma[mu_, _, _] /; KeyExistsQ[vecOf, mu] :> ntVec[vecOf[mu], mu]];
     restFacs = DeleteCases[factors, Alternatives @@ Join[diracFacs, slashVecs]];
-(* LOUD GUARD against the silent dressed-numerator fall-through. `diracFacs` captures only BARE Dirac
-   heads; a dressed propagator-numerator sum (Mq·δ − I·Z·γ·p̸) that was NEITHER distributed
-   (expandBridges) NOR collected (rewriteDressedNums → ntDressedNum) survives as a `Plus`/`Power`
-   factor with Dirac heads NESTED inside it. Such a factor lands in `restFacs` → `compileLorentz`, which
-   handles only Lorentz/colour/scalars: it then SILENTLY drops the nested γ/δ (the trace collapses,
-   e.g. a pion loop → tr(γ5)=0) or leaks the raw head into the generated C++ (undeclared `ntGamma` /
-   `ntDeltaDirac`). Either way the diagram is wrong with no warning (observed in the hSigL meson
-   sector, ~1% of FORM). Detect it and abort with the offending factor rather than emit a wrong kernel.
-   A correctly-handled diagram has all Dirac structure in `diracFacs` (bare heads or ntDressedNum), so
-   `restFacs` is Dirac-free; this never trips on the validated flows. *)
-    With[{leak = Select[restFacs, !FreeQ[#, _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot]&]},
-      If[leak =!= {},
-        Print["[NumTracer] ERROR: un-handled Dirac structure in a non-Dirac factor — a dressed ", "propagator-numerator sum was NEITHER distributed NOR collected into ntDressedNum, so the ", "numeric backend would silently drop/leak its gamma structure (collapsed trace or ", "untranslated C++). This is a front-end collection gap (collectibleDiracSumQ rejected a sum ", "that distributeQ also skipped). Offending factor(s):\n  ", leak];
-        Abort[]]];
-    restCompiled = compileLorentz[Times @@ restFacs, ids, env, nonzeroCompMask];(* {restStr, scal}; restStr "" if trivial *)
-(* return the Dirac core and the Lorentz "rest" (projector) SEPARATELY: {coreStr, scal, restStr}.
-   The contract is deferred — splitColourGroups factors a rest shared across a colour group out of
-   the Dirac-trace sum so it is emitted ONCE (a shared sub-net) and contracted lazily in the
-   generator, never materialising the |trace|×|projector| product. restStr=="" ⇒
-   no projector. The numeric backend emits the bare DiracNet{...}; the runtime contracts it against
-   the Lorentz rest via numeric_value_netval (the matrix-product trace). A DRESSED chain (one or more
-   ntDressedNum slots) is returned as the marker ntDressedCore[chainStr, slotsStr]; the generator
-   contracts it via numeric_value_dressed_netval_mp — a plain STRUCTURAL MPoly, since lever (b) strips
-   each option's dressing into a per-sub-term scalar + monomial before contraction, and the DPoly is
-   assembled later in phase B (fold_groups_streaming_dressed). *)
-(* join the per-loop token strings with a loop separator so the runtime traces each spinor loop
-   independently and contracts their shared gluon legs; a single-loop component has no separator and
-   emits the identical net as before. *)
+    If[! FreeQ[restFacs, $diracHeadPat],
+      Print["[NumTracer] ERROR: un-handled Dirac structure in a non-Dirac factor — a dressed ", "propagator-numerator sum was NEITHER distributed NOR collected into ntDressedNum, so the ", "numeric backend would silently drop/leak its gamma structure (collapsed trace or ", "untranslated C++). This is a front-end collection gap (collectibleDiracSumQ rejected a sum ", "that distributeQ also skipped). Offending factor(s):\n  ", Select[restFacs, ! FreeQ[#, $diracHeadPat] &]];
+      Abort[]];
+    restCompiled = compileLorentz[Times @@ restFacs, ids, env, nonzeroCompMask];
+    (* A loop of δ connectors only (a closed spinor δ-loop) has no token, so its segment is empty and
+       the runtime's split_loops drops it: its tr(1) = 4 must be restored here. The bare chain deletes
+       the empty segments and multiplies by 4 per loop. The dressed chain keeps every separator (the
+       runtime counts collapsed loops from them) and only drops the empty segments' text. *)
     If[dressed,
-(* Carry the slots STRUCTURED (a list over chain slots of that slot's option-string list) rather than
-   pre-joined into one multi-option "std::vector<DSlot>{…}" string. emitNumericGenerator expands the
-   Cartesian product of the options into one single-option dressed sub-term per combination, so each
-   combination becomes an ordinary trace that dedups across nets and contracts over phase A's flat
-   parallel work list — instead of C++ dress_collect enumerating the 3ⁿ combinations serially per net. *)
-(* A token-free (all-δ, collapsed) loop contributes an EMPTY segment. The bare branch below deletes
-   those and compensates with 4^nEmptyLoops, but the dressed chain must keep every SEPARATOR — the
-   runtime derives nCollapsed from the marker count (`nloops = 1 + #LoopSep` in dress_enumerate,
-   minus the segments split_loops actually yields, which skips empty ones) and restores tr(1)=4 per
-   collapsed loop. So drop the empty segment's TEXT while keeping its separators: riffle first, then
-   delete the empties, which yields two ADJACENT `dtfix(dloopsep())` tokens for a collapsed loop.
-   StringRiffle over a list containing "" instead emits `…, dtfix(dloopsep()), , dtfix(dloopsep()), …`
-   — a stray empty element, which is a C++ syntax error in leading/middle position (it is only a legal
-   trailing comma in last position, which is why this stayed latent). The comment above the bare
-   branch predicted exactly this: it becomes reachable as soon as a dressed component can contain a
-   token-free loop, which a four-quark/meson-dressed quark line does. Non-empty cases are unchanged
-   character-for-character. *)
-      Module[{chain = "std::vector<DChainTok>{" <> StringRiffle[DeleteCases[Riffle[loopStrs, "dtfix(dloopsep())"], ""], ", "] <> "}"},
-        {ntDressedCore[chain, slots], restCompiled[[2]], restCompiled[[1]]}],
-      Module[{core = "DiracNet{" <> StringRiffle[loopStrsBare, ", dloopsep(), "] <> "}"},
-        {core, restCompiled[[2]] * 4^nEmptyLoops, restCompiled[[1]]}]]];
+      {ntDressedCore["std::vector<DChainTok>{" <> StringRiffle[DeleteCases[Riffle[loopStrs, "dtfix(dloopsep())"], ""], ", "] <> "}", slots],
+       restCompiled[[2]], restCompiled[[1]]},
+      {"DiracNet{" <> StringRiffle[DeleteCases[loopStrs, ""], ", dloopsep(), "] <> "}",
+       restCompiled[[2]] * 4^Count[loopStrs, ""], restCompiled[[1]]}]];
 
 (* ---- numeric (matrix-product) backend: component table + user symbols (task #22) -------------
    The numeric backend has NO sp-invariant basis: it evaluates scalar products numerically from each

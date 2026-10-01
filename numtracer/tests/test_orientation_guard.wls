@@ -69,6 +69,18 @@ check["reversed collected slot is marked",
                         ntGamma[b1, e1, e3]}]], "ABORTED"],
   {True, True}];
 
+(* --- D2. The EMITTED spelling of D. A dressed chain is a std::vector<DChainTok>: each fixed token is
+   a DFac wrapped in dtfix(...), and dtr takes and returns a DFac, so a backward fixed token must read
+   dtfix(dtr(DFac)). The reverse nesting, dtr(dtfix(...)), does not compile. --------------------- *)
+NumTracer`Private`$ctCache = <||>;
+check["dressed chain spells a backward fixed token dtfix(dtr(...))",
+  CheckAbort[First @ First @ NumTracer`Private`compileDirac[
+      {ntDeltaDirac[e1, e2], NumTracer`Private`ntDressedNum[{{1, {"ident"}}}, e3, e2],
+       ntGamma[b1, e1, e3], ntVec[qq, b1]},
+      <|b1 -> 0, e1 -> 100, e2 -> 101, e3 -> 102|>,
+      <|qq -> <|"Base" -> 0, "Inv" -> None, "InvS" -> None|>|>, 15], "ABORTED"],
+  "std::vector<DChainTok>{dtrslot(0), dtfix(dtr(dslash({{1.0,0}})))}"];
+
 (* --- E. The same defect one level down, in a COLLECTED Dirac slot. A slot is an OPEN chain
    din->dout whose tokens are spliced into the surrounding loop IN CHAIN ORDER, so it needs exactly
    one open spinor label that is some head's `in` and no head's `out`. Here both open ends (e1, e2)
