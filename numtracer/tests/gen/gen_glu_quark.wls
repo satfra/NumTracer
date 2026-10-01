@@ -68,8 +68,6 @@ net = FromFunKit[dressed];
 frame = NumTracer`propFrame[Global`p, Global`l1, Global`cos1, Global`p1, Global`l1];
 ntk = NumTrace[net, "Frame" -> frame, "Args" -> {Global`l1, Global`cos1, Global`p, Global`k}];
 
-(* force the numeric backend's fundamental colour through the NUMERIC SUNNet path *)
-NumTracer`Private`$NumTracerFundETMaxEntries = 0;
 MakeNTKernel[ntk, FileNameJoin[{$gen, "gen_glu_quark_num.cpp"}],
   FileNameJoin[{$gen, "Glu_quark_num_kernel.hh"}], FileNameJoin[{$gen, "Glu_quark_num_kernels.hh"}],
   "Name" -> "Glu_quark_num_kernel", "Namespace" -> "glu_quark_num",

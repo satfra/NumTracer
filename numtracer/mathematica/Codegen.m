@@ -1089,17 +1089,6 @@ colourFacStr[ntSUNDiagFund[n_, i_, j_, spec_], ids_] :=
 colourFacStr[ntSUNDiagAdj[n_, a_, b_, spec_], ids_] :=
   "sun" <> ToString[n] <> ".diagAdj(" <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> "," <> diagVecStr[diagComp2Dr[spec, n^2 - 1]] <> ")";
 
-(* The 5-argument spelling is gone. Catch it explicitly: without this it would fall through to the
-   colleak catch-all below and report an unlowerable colour factor, which says nothing about the
-   actual cause. *)
-colourFacStr[(h : ntSUNDiagFund | ntSUNDiagAdj)[n_, i_, j_, spec_, scale_], _] := (
-    Print["[NumTracer] ERROR: ", h, " no longer takes a separate `scale`. Apply each dressing to ",
-      "its own kinematics in the spec instead:\n",
-      "    old:  ", h, "[N, i, j, {1 -> Zu, 2 -> Zd}, scale]\n",
-      "    new:  ", h, "[N, i, j, {1 -> Zu[scale], 2 -> Zd[scale]}]\n",
-      "  (a pure projector component is now simply `c -> 1`, not `c -> ntUnitDressing`.)"];
-    Abort[]);
-
 (* CATCH-ALL, and it must stay LAST: the six rules above are the only lowerable colour factors.
    Without this a non-matching factor returns UNEVALUATED and StringRiffle happily ToString's it
    into the generator .cpp — `colourFacStr[Plus[...], <|v1 -> 0, ...|>]` — which is how the four-quark
@@ -1176,19 +1165,8 @@ compileColourSum[e_, ids_] := Module[{
 
 (* ---- spinor slots of the Dirac heads (used by the spinor-loop walk below) ---------------------- *)
 
-diracIn[ntGamma[_, a_, _]] := a; diracOut[ntGamma[_, _, b_]] := b;
-
-diracIn[ntGamma5[a_, _]] := a; diracOut[ntGamma5[_, b_]] := b;
-
-diracIn[ntC[a_, _]] := a; diracOut[ntC[_, b_]] := b;
-
-diracIn[ntSigma[_, _, a_, _]] := a; diracOut[ntSigma[_, _, _, b_]] := b;
-
-diracIn[ntDeltaDirac[a_, _]] := a; diracOut[ntDeltaDirac[_, b_]] := b;
-
-diracIn[ntDressedNum[_, a_, _]] := a; diracOut[ntDressedNum[_, _, b_]] := b;
-
-diracIn[ntDiracSlot[_, a_, _, _]] := a; diracOut[ntDiracSlot[_, _, b_, _]] := b;
+(* the IN (row) spinor slot of a Dirac head; its OUT (column) slot is the other one *)
+diracIn[h_] := First[spinorLabelsHead[h]];
 
 (* SPINOR-SLOT SYMMETRY. `diracIn`/`diracOut` name a head's two spinor slots, but only for the heads
    whose two slots play DIFFERENT roles (row vs column, i.e. the two ends of a fermion arrow) is that
@@ -1207,7 +1185,6 @@ diracSpinorSymmetricQ[_]             := False;
    pairing sum symbolically in Mathematica. This parallels how colour is folded by
    `SUNNet`/`compileColour`. *)
 
-$ntDiracFree = 900000;(* fresh Lorentz-label base for slash–slash pairings: above every component id *)
 (* the gamma/gamma5 factors in trace order (walk the closed spinor loop; spinor-δ connectors carry no
    token but are followed).
 
@@ -1799,7 +1776,7 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
     units =
       DeleteCases[
         Function[g,
-            Lookup[idx, Select[g, KeyExistsQ[idx, #]&], Nothing]
+            Lookup[idx, Select[g, KeyExistsQ[idx, #]&]]
           ] /@ unitGroups,
         _ ? (Length[#] < 2&)];
     <|
@@ -1890,7 +1867,6 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
    groups on. Listable arithmetic over the ragged integer columns — no Map. *)
     traceKeyPacked      = ((dsI * nLs + lsI) * nDc + dcI) * nDl + dlI;
     traceDressKeyPacked = traceKeyPacked * nDr + drI;
-    If[$NumTracerVerbose, ntLog["[mem] dedup join: keys packed: MemoryInUse=", Round[MemoryInUse[]/2.^20], " MB  RSS=", Round[ntWolframRssMB[]], " MB"]];
     subKeysLen = lens;
     If[noDedup,   (* I4 *)
       Module[{tot = Total[lens]},
@@ -1905,7 +1881,6 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
    scalars cancel is not referenced at all and must not be contracted. Each net yields three columns
    {trace key, dress id, summed scalar} (ntMergeNetTerms). *)
     merged = MapThread[ntMergeNetTerms, {traceDressKeyPacked, traceKeyPacked, drI, subScalars}];
-    If[$NumTracerVerbose, ntLog["[mem] dedup join: per-net merge done: MemoryInUse=", Round[MemoryInUse[]/2.^20], " MB  RSS=", Round[ntWolframRssMB[]], " MB"]];
     foldKeys = Join @@ merged[[All, 1]];
     foldLens = Length /@ merged[[All, 1]];
 (* I3: order the distinct traces by DESCENDING reference count, so a memory-capped run still caches
@@ -1934,12 +1909,11 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
     netDressRows  = TakeList[uDr[[(Join @@ merged[[All, 2]]) + 1]], foldLens];
     netScalarRows = merged[[All, 3]];
 
-    If[$NumTracerVerbose, ntLog["[mem] dedup join: decode done: MemoryInUse=", Round[MemoryInUse[]/2.^20], " MB  RSS=", Round[ntWolframRssMB[]], " MB"]];
     ntStageResult["ntGenDedupJoin",
-      {"subKeysLen", "netTraceRows", "netDressRows", "netScalarRows", "refCount", "distinctSubs", "subIdxOf", "nSub", "nReused"},
+      {"subKeysLen", "netTraceRows", "netDressRows", "netScalarRows", "distinctSubs", "nSub", "nReused"},
       <|"subKeysLen" -> subKeysLen, "netTraceRows" -> netTraceRows, "netDressRows" -> netDressRows,
-        "netScalarRows" -> netScalarRows, "refCount" -> refCount,
-        "distinctSubs" -> distinctSubs, "subIdxOf" -> subIdxOf, "nSub" -> nSub,
+        "netScalarRows" -> netScalarRows,
+        "distinctSubs" -> distinctSubs, "nSub" -> nSub,
         "nReused" -> nReused|>]];
 
 (* ---- emitNumericGenerator: STAGE MAP ----------------------------------------------------------
@@ -1981,7 +1955,7 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
    flow / unknown". When it is >= 0 the generator proves Matsubara evenness while it contracts (see
    the ntMEven thread below) and emits the verdict as a constant in the traces header. *)
 emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kns_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False, mIdx_:-1] :=
-  Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], str, tmpl, pre, unitPre, unitInc, nUnits, units, decl, diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeysLen, netTraceRows, netDressRows, netScalarRows, dsInt, dsGet, lsInt, lsGet, dcInt, dcGet, dlInt, dlGet, drInt, drGet, scCache, slotCombo, dPoolCse, lPoolCse, refCount, distinctSubs, subIdxOf, nSub, nReused, sdnDefs, slnDefs, sdchDefs, sdslDefs, sdnCDecl, slnCDecl, sdchCDecl, sdslCDecl, tableBag, emitBigTable,
+  Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], str, tmpl, pre, unitPre, unitInc, nUnits, units, decl, diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeysLen, netTraceRows, netDressRows, netScalarRows, dsInt, dsGet, lsInt, lsGet, dcInt, dcGet, dlInt, dlGet, drInt, drGet, scCache, slotCombo, dPoolCse, lPoolCse, distinctSubs, nSub, nReused, sdnDefs, slnDefs, sdnCDecl, slnCDecl, tableBag, emitBigTable,
     chpDefs, chpCDecl, optpDefs, optpCDecl, sdchrDefs, sdchrCDecl, sdslrDefs, sdslrCDecl, dressAtomIds, colMainDecls, colChunkDefs},
     str[x_] := ToString[x];
 (* The four big index/scalar tables and the colour/group tables are emitted as TOP-LEVEL chunk
@@ -2067,31 +2041,11 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                Developer`ToPackedArray[drInt /@ (Sort[Catenate[#]]& /@ Tuples[dress])]],
              Flatten[Outer[Times, Sequence @@ nums]],
              n}]];
-(* MEMORY PROBE (verbose only): where the resident set goes on the dense finite-T flows, which grow
-   by tens of GB before this expansion reports. Stamps on entry, every 2000 nets, and after; then
-   what the scalar column actually holds (packed machine numbers, or boxed/exact/symbolic ones). *)
-    If[$NumTracerVerbose,
-      ntLog["[mem] emitNumericGenerator entry: MemoryInUse=", Round[MemoryInUse[]/2.^20], " MB  RSS=",
-        Round[ntWolframRssMB[]], " MB  ByteCount invNets=", Round[ByteCount[invNets]/2.^20],
-        " MB invRest=", Round[ByteCount[invRest]/2.^20], " MB  nets=", Length[invNets]]];
-    ntMemNet = 0;
-(* per-net probe: every 2000th net, the size of what THIS net expanded into, column by column
-   ({ds, ls, scal, dc, dl, dr}), its sub-term count and whether its scalar column is packed. The
-   identity on r, so the expansion's result is untouched. *)
-    ntMemProbeNet[r_] := (
-      If[$NumTracerVerbose && Mod[++ntMemNet, 2000] == 0,
-        ntLog["[mem]   expansion net ", ntMemNet, ": MemoryInUse=", Round[MemoryInUse[]/2.^20],
-          " MB  RSS=", Round[ntWolframRssMB[]], " MB | this net: sub-terms=", Length[r[[3]]],
-          "  KB per column {ds,ls,scal,dc,dl,dr}=", Round[ByteCount /@ r / 1024.],
-          "  scal packed=", Developer`PackedArrayQ[r[[3]]],
-          "  scal heads=", Counts[Head /@ Take[r[[3]], Min[Length[r[[3]]], 1000]]],
-          "  scal sample=", ToString[Short[Take[r[[3]], Min[Length[r[[3]]], 2]], 2]]]];
-      r);
     With[{ntT = First @ AbsoluteTiming[
     {diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, dressAtomIds} =
       Transpose @
         MapThread[
-          Function[{cores, rss}, ntMemProbeNet @
+          Function[{cores, rss},
             If[cores === {},
               {{}, {}, {}, {}, {}, {}},
 (* COLUMN-ORIENTED, not row-oriented. The obvious spelling builds one six-element ROW per sub-term
@@ -2131,12 +2085,6 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                     {cores, rss[[All, 1]], rss[[All, 2]]}]]],
           {invNets, invRest}];]},
       ntLog["[prof] sub-term expansion: ", ntT, " s"]];
-    If[$NumTracerVerbose,
-      ntLog["[mem] after expansion (before stats): MemoryInUse=", Round[MemoryInUse[]/2.^20], " MB  RSS=",
-        Round[ntWolframRssMB[]], " MB"]];
-    If[$NumTracerVerbose,
-      ntLog["[mem]   sub-terms=", Total[Length /@ subScalars],
-        "  per-net scalar columns packed=", Count[subScalars, _?Developer`PackedArrayQ], "/", Length[subScalars]]];
 (* ---- colour-net table: chunk DEFINITIONS on the parallel -O0 units, assembler in the main TU ----
    The distinct colour nets are one `SUNNet{sun3.T(..), ..}` constructor-call literal each, and on a
    flow with a large colour graph the table dwarfs everything else in the main TU (measured: 6.28 MB
@@ -2355,9 +2303,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
         netTraceRows  = joined["netTraceRows"];
         netDressRows  = joined["netDressRows"];
         netScalarRows = joined["netScalarRows"];
-        refCount     = joined["refCount"];
         distinctSubs = joined["distinctSubs"];
-        subIdxOf     = joined["subIdxOf"];
         nSub         = joined["nSub"];
         nReused      = joined["nReused"];
 (* Published for the COMPILE step (mainOpt), which runs later, in another function, and needs the
@@ -4244,7 +4190,7 @@ ntkPruneSpec[diagData_, groups_, complexQ_, offline_, pruneRequested_, realProbe
    the fields; that is the direction the rest is moving. A local you cannot find an assignment for in
    THIS scope is assigned in an inner one, and that is the hazard, not a convention. *)
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
-  Module[{name, ns, dress, scalarParams, adParams, parameterOrder, adNames, scalarParamNames, args, sigArgs, frame, env, nonzeroCompMask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, preamble, integrand, kernelParams, runtimeParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, mkKernelFn, timedBody, realOut, endProject, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass,
+  Module[{name, ns, dress, scalarParams, adParams, parameterOrder, adNames, scalarParamNames, args, sigArgs, frame, env, nonzeroCompMask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, preamble, integrand, kernelParams, runtimeParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, complexQ, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, realOut, endProject, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, realOnlyG = {}, pruneG = {}, probeVerdict = None, genPass,
 (* hoistCalls/hoistSyms/hoistFnStr were NOT declared here at all — they were assigned unqualified
    and so became NumTracer`Private` globals that survive ACROSS generations. Every path assigns
    them, so there was no bug today; but that is the outer-declare/inner-assign hazard one level
@@ -4439,15 +4385,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    The old complex restriction is GONE. `tarr` is emitted as std::complex<double> whenever any trace
    is complex — the same type trN(fenv) returned — so the kernel's ntRe/ntIm reads are unchanged and
    nothing is truncated. Do NOT reintroduce a real tarr with per-trace phase tracking. *)
-    invNets = {};
-    invRest = {};
-    colourNets = {};
-    colDecls = {};
-    colToks = {};
     preamble = {};
-    factorNets = {};
-    lorFacOf = {};
-    factorCompOf = <||>;(* factor net indices, per-net factor-id list, net->factor-id *)
+    factorCompOf = <||>;(* net -> factor-id *)
     $ctCache = <||>;(* clear the compileLorentz memo cache for this generation *)
 (* dressedSlotStr / diracSlotStr / orderDiracLoops memos: all depend on generation-fixed state
    ($ntDressResolve, env, nonzeroCompMask, frame), so they MUST be cleared here alongside $ctCache.
@@ -4480,7 +4419,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
     (* NB no `diagData` in this local list — it is declared in the OUTER Module (see the note on its
        declaration there) because `pruneG` reads it after this Module closes. Re-adding it here
        re-shadows it and silently restores the all-groups-pruned bug. *)
-    Module[{bInvNets = Internal`Bag[], bInvRest = Internal`Bag[], bColourNets = Internal`Bag[], bColToks = Internal`Bag[], bDiagData = Internal`Bag[], bLorFacOf = Internal`Bag[], bFactorNets = Internal`Bag[], nNetAcc = 0},
+    Module[{bInvNets = Internal`Bag[], bInvRest = Internal`Bag[], bColourNets = Internal`Bag[], bDiagData = Internal`Bag[], bLorFacOf = Internal`Bag[], bFactorNets = Internal`Bag[], nNetAcc = 0},
 (* The net build itself is bound here, not passed as an ntLog argument: it is the work, not a
    diagnostic. See ntExportCpp for why load-bearing work must stay outside ntLog. *)
       $ntProf = <||>;
@@ -4489,7 +4428,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
           AbsoluteTiming[
             Block[{$ntProfOn = TrueQ[$NumTracerVerbose]}, MapIndexed[
               Function[{diag, di},
-                Module[{coeff, colBr, constAcc = {}, colTok = "", entries = {}, d = di[[1]] - 1, pureLorAcc = {}, nNonConst = 0, nNCDirCol = 0, diracComps = {}},
+                Module[{coeff, colBr, constAcc = {}, d = di[[1]] - 1, pureLorAcc = {}, diracComps = {}},
 (* cache this diagram's canonicalisation rules for ntCanonIds (see there) — one Dispatch per
    diagram instead of one Normal[KeyDrop[...]] per compileLorentz/diracSlotStr call. *)
                   $ntCanonIdsSrc = diag["Ids"];
@@ -4497,7 +4436,6 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                   coeff = diag["Coeff"] /. {ntSP[x_, y_] :> resolveComponents[x, frame] . resolveComponents[y, frame], ntSPS[x_, y_] :> Rest[resolveComponents[x, frame]] . Rest[resolveComponents[y, frame]], ntVec[q_, i_Integer] :> resolveComponents[q, frame][[i + 1]]};
                   MapIndexed[
                     Function[{comp, ci},
-                      Module[{},
                         If[comp["Constant"],
 (* Constant SU(N) component — colour and/or flavour, fundamental and/or adjoint: every group
    head carries its own rank N, so all fold through the SINGLE numeric SUNNet path
@@ -4525,14 +4463,9 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
        Lorentz net) as ONE Dirac/colour component in diracComps;
      - pure Lorentz (no colour, no gamma): accumulate factors — ALL pure-Lorentz components
        fold into ONE product net (disjoint ids make the C++ contract_factors multiply them). *)
-                          (
-                            nNonConst++;
-                            If[colourEntangledQ[comp["Factors"]] || !FreeQ[comp["Factors"], _ntGamma | _ntGamma5 | _ntC | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot],
-                              (
-                                nNCDirCol++;
-                                AppendTo[diracComps, ntProfTimed["splitColourGroups", splitColourGroups[comp["Factors"], diag["Ids"], env, nonzeroCompMask]]]
-                              ),
-                              pureLorAcc = Join[pureLorAcc, comp["Factors"]]])]]],
+                          If[colourEntangledQ[comp["Factors"]] || !FreeQ[comp["Factors"], _ntGamma | _ntGamma5 | _ntC | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot],
+                            AppendTo[diracComps, ntProfTimed["splitColourGroups", splitColourGroups[comp["Factors"], diag["Ids"], env, nonzeroCompMask]]],
+                            pureLorAcc = Join[pureLorAcc, comp["Factors"]]]]],
                     diag["Components"]];
 (* The diagram's CONSTANT colour/flavour part, as a list of {netString, scalar} branches — one
    branch unless a constant component was a sum. Colour folds to a scalar (sun_value_cx -> Cx)
@@ -4575,7 +4508,6 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                           Internal`StuffBag[bInvNets, rec[[2]]];
                           Internal`StuffBag[bInvRest, rec[[4]]];
                           Internal`StuffBag[bColourNets, rec[[1]]];
-                          Internal`StuffBag[bColToks, colTok];
                           Internal`StuffBag[bDiagData, rec[[3]]];
                           Internal`StuffBag[bLorFacOf, rec[[5]]];
                           nNetAcc = ni + 1;
@@ -4638,7 +4570,6 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
       invNets = Internal`BagPart[bInvNets, All];
       invRest = Internal`BagPart[bInvRest, All];
       colourNets = Internal`BagPart[bColourNets, All];
-      colToks = Internal`BagPart[bColToks, All];
       diagData = Internal`BagPart[bDiagData, All];
       lorFacOf = Internal`BagPart[bLorFacOf, All];
       factorNets = Internal`BagPart[bFactorNets, All];
@@ -4685,16 +4616,10 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
           "tarr[" <> ToString[#] <> "]",
           nsHome <> "::tr" <> ToString[#] <> "(fenv)"
         ]&;
-(* Group diagrams (0-based) into traces by colour kind. ADJOINT-colour diagrams (colTok=="" —
-   their real colour was folded numerically into the generator polynomial) FUSE by identical
-   dressing coeff, so the kernel evaluates ~one polynomial per Feynman graph; cross-diagram like
-   terms then collect in the invariant basis (many channels collapse to a few traces this way).
-   FUNDAMENTAL-colour diagrams (a complex generator T^a, kept in the kernel as _colN so the trace
-   polynomial stays REAL) stay singleton, each times its own _colN. A flow that mixes both colour
-   kinds thus fuses the adjoint part and keeps the fundamental part per-diagram. *)
-(* diag-dressed diagrams (diagTokExpr =!= 1) carry a per-diagram RUNTIME colour-sum token, so —
-   like the fundamental-colTok diagrams — they stay singletons (they cannot fuse by dressing
-   coefficient alone, the colour token differs). lorFac diagrams (lorFacOf =!= None — a Dirac trace
+(* Group diagrams (0-based) into traces. Colour is folded numerically into the generator polynomial,
+   so diagrams FUSE by identical dressing coeff and the kernel evaluates ~one polynomial per Feynman
+   graph. Exceptions stay singletons: diag-dressed diagrams (diagTokExpr =!= 1) carry a per-diagram
+   RUNTIME colour-sum token (they cannot fuse by dressing coefficient alone, the token differs). lorFac diagrams (lorFacOf =!= None — a Dirac trace
    times a disconnected pure-Lorentz scalar) likewise stay singletons: each carries a per-diagram
    multiplicative trace, so it must not fuse with another diagram's entries.
    The FACTOR nets (P, indices in factorNets) are EXCLUDED from the additive groups and appended as
@@ -4704,8 +4629,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    ordinal} pairs it was split into — one per distinct token, see the GatherBy below. *)
       Module[{adj, fund, additivePos, factorPos = (# + 1)& /@ factorNets, gAdd, gFactor},
         additivePos = Complement[Range[Length[diagData]], factorPos];
-        adj = Select[additivePos, colToks[[#]] === "" && diagTokExpr[[#]] === 1 && lorFacOf[[#]] === None&];
-        fund = Select[additivePos, colToks[[#]] =!= "" || diagTokExpr[[#]] =!= 1 || lorFacOf[[#]] =!= None&];
+        adj = Select[additivePos, diagTokExpr[[#]] === 1 && lorFacOf[[#]] === None&];
+        fund = Select[additivePos, diagTokExpr[[#]] =!= 1 || lorFacOf[[#]] =!= None&];
         gAdd = Join[(# - 1)& /@ GatherBy[adj, diagData[[#]]&], List /@ (fund - 1)];
 (* each disconnected factor COMPONENT (possibly several colour-branch nets) fuses into ONE trace
    group, so its group trace = the component scalar (colour folded by the group sum). *)
@@ -4730,11 +4655,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                 (factorCompOf[#1[[1]]] -> {diagTokExpr[[#1[[1]] + 1]], nAdd + #2[[1]] - 1})&,
                 gFactor],
             Identity]];
-(* GlobalCollect folds ALL colour numerically (colToks all empty above), so this groups EVERY
-   diagram by its dressing coefficient — the quark-loop colour channels that the legacy path kept
-   as fundamental singletons now MERGE into their Feynman graph, collapsing the trace count toward
-   FORM's handful. The dressing coefficient stays FACTORED in `diagData` (COEN CSEs it, like FORM's
-   _repl), so each group is one collected kinematic trace × its dressing — not a flat polynomial. *)
+(* The dressing coefficient stays FACTORED in `diagData` (COEN CSEs it, like FORM's _repl), so each
+   group is one collected kinematic trace × its dressing — not a flat polynomial. *)
 (* Sum the ADDITIVE groups only (1..nAdd); factor groups (nAdd+1..) are referenced multiplicatively
    via lorFac. A factored (disconnected) diagram multiplies in its other components' scalars
    Π traceRef[factor groups] (each computed ONCE, as a separate trace): the diagram's
@@ -4742,11 +4664,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
       integrand =
         Sum[
           With[{rep = g[[gi, 1]]},
-            diagData[[rep + 1]] *
-              If[colToks[[rep + 1]] === "",
-                1,
-                colToks[[rep + 1]]
-              ] * diagTokExpr[[rep + 1]] *
+            diagData[[rep + 1]] * diagTokExpr[[rep + 1]] *
               If[lorFacOf[[rep + 1]] === None,
                 1,
 (* Each factor component contributes Σ_t token_t · traceRef[subgroup_t]; with one token (the
@@ -4790,7 +4708,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    exported-context handoff symbol would silently fail to assign (Set::wrsym). *)
     $ntLastHoistCount = Length[hoistCalls];
 (* Same Private`-context handoff, for the same reason: ntProjectIntegrand runs several call layers
-   down (mkKernelFn -> ntPureIntegrand/ntRePartIntegrand) and threading an option through those
+   down (the kernel body lowering -> ntPureIntegrand/ntRePartIntegrand) and threading an option through those
    would touch every one. Assigned UNCONDITIONALLY so a generation cannot inherit the previous
    flow's setting — this is a package-global, and MakeNTKernel is called once per flow in a script
    that generates many. See the "ComplexRuntimeProjection" note above. *)
@@ -4806,8 +4724,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                    TrueQ[OptionValue["PruneRealTraces"]], TrueQ[OptionValue["RealProbe"]],
                    TrueQ[OptionValue["RunGenerator"]]]},
       pruneG       = spec["pruneG"];
-      realOnlyG    = spec["realOnlyG"];
-      probeWillRun = spec["probeWillRun"]];
+      realOnlyG    = spec["realOnlyG"]];
     nGrp = Length[g];
 (* The tarr declaration+fill, used by BOTH the kernel's coreBlock and the RealProbe TU (which
    evaluates the same integrand, so it needs the same tokens in scope). `trace_all_t` is emitted by
@@ -4856,8 +4773,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
         preamble =
           StringRiffle[
             If[hasDr,
-              Join[ntSupportUsings[sns], angleDecls, colDecls, coreBlock, preamble],
-              Join[ntSupportUsings[sns], coreBlock, angleDecls, colDecls, preamble]],
+              Join[ntSupportUsings[sns], angleDecls, coreBlock, preamble],
+              Join[ntSupportUsings[sns], coreBlock, angleDecls, preamble]],
             "\n"]]];
     mkParam[nm_, ty_] := <|
         "Name" ->
@@ -5033,14 +4950,12 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    through its own MakeCppFunction so COEN's CSE spans the whole expression, exactly as when Mathematica
    used to re-lower the single chosen one after the probe. *)
           mkKernelFnNamed = Function[{nm, expr}, ntShareInterpIndices[FunKit`MakeCppFunction[expr, "Name" -> nm, "Prefix" -> decor, "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble], If[TrueQ[OptionValue["ShareInterpolatorIndex"]], dress, {}]]];
-          mkKernelFn = Function[expr, mkKernelFnNamed["kernel", expr]];
 (* Per-body timing. The aggregate [prof] line above also covers constFn, the class and the header, so
    the cost of one BODY — which is what "RealOutput" removes — is invisible in it. Without this the
    only evidence for the option's value would be the downstream report's numbers. *)
           timedBodyNamed = Function[{nm, label, expr},
             Module[{t, res}, {t, res} = AbsoluteTiming[mkKernelFnNamed[nm, expr]];
               ntLog["[prof]   body ", nm, "/", label, ": ", t, " s"]; res]];
-          timedBody = Function[{label, expr}, timedBodyNamed["kernel", label, expr]];
           realOut = TrueQ[OptionValue["RealOutput"]];
           bodyFor = Function[{nm, expr},
             If[!complexQ,
