@@ -543,7 +543,8 @@ if(NUMTRACER_BUILD_TESTS)
   # oracle), and a third TU compiles the "RealOutput" -> True twin, which drops that complex body
   # altogether. This flow probes verdict 0, so it is also the only gate on what RealOutput does there.
   add_executable(compare_cplxrt_num tests/compare_cplxrt_num.cpp tests/compare_cplxrt_num_oracle.cpp
-                                    tests/compare_cplxrt_num_realoutput.cpp)
+                                    tests/compare_cplxrt_num_realoutput.cpp
+                                    tests/compare_cplxrt_num_endproj.cpp)
   target_include_directories(compare_cplxrt_num PRIVATE tests/gen)
   target_link_libraries(compare_cplxrt_num PRIVATE NumTracer::NumTracer)
   # The RealOutput kernel deliberately carries a #warning for the verdict-0 truncation, and that TU
@@ -686,6 +687,14 @@ if(NUMTRACER_BUILD_TESTS)
              COMMAND "${NT_WOLFRAM_EXE}" -noprompt
                      -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_orientation_guard.wls")
     set_tests_properties(wolfram_orientation_guard PROPERTIES LABELS wolfram TIMEOUT 300)
+
+    # Collected Dirac slots: diracSlotDecompose must be an exact re-grouping of the vertex sum
+    # (expanding the slot back gives the sum), and the collection gate must turn a dressed k=1 and
+    # k=2 vertex into an ntDiracSlot under vertex collection.
+    add_test(NAME wolfram_diracslot_roundtrip
+             COMMAND "${NT_WOLFRAM_EXE}" -noprompt
+                     -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/gen/test_diracslot_roundtrip.wls")
+    set_tests_properties(wolfram_diracslot_roundtrip PROPERTIES LABELS wolfram TIMEOUT 300)
 
     # The C++ TYPE of each runtime kernel parameter: an AD-flagged scalar must be emitted
     # `const auto&` (an abbreviated template, the only thing that binds autodiff::real) and not

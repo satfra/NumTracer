@@ -106,6 +106,19 @@ MakeNTKernel[ntk,
   "Name" -> "Cplxrtro_num_kernel", "Namespace" -> "cplxrtro_num",
   "Dressings" -> {}, "ComplexRuntimeProjection" -> True, "RealOutput" -> True];
 
+(* The SAME ntk a third time, with "ComplexEndProjection": no symbolic projection at all, one body
+   ntRe[integrand] evaluated in complex arithmetic, no probe and no verdict. Its value must equal the
+   same complex oracle — compare_cplxrt_num_endproj.cpp. *)
+Print["[gen] Numeric backend (ComplexEndProjection + RealOutput) ..."];
+Quiet[DeleteFile[FileNameJoin[{$gen, "probe_cplxrtend_num.cpp"}]]];
+MakeNTKernel[ntk,
+  FileNameJoin[{$gen, "gen_cplxrtend_num.cpp"}],
+  FileNameJoin[{$gen, "Cplxrtend_num_kernel.hh"}],
+  FileNameJoin[{$gen, "Cplxrtend_num_kernels.hh"}],
+  "Name" -> "Cplxrtend_num_kernel", "Namespace" -> "cplxrtend_num",
+  "Dressings" -> {}, "ComplexRuntimeProjection" -> True, "ComplexEndProjection" -> True,
+  "RealOutput" -> True];
+
 Module[{h = Import[FileNameJoin[{$gen, "Cplxrt_num_kernel.hh"}], "Text"],
         hro = Import[FileNameJoin[{$gen, "Cplxrtro_num_kernel.hh"}], "Text"],
         deferred},
@@ -154,5 +167,37 @@ Module[{h = Import[FileNameJoin[{$gen, "Cplxrt_num_kernel.hh"}], "Text"],
   If[! StringContainsQ[hro, "warning"],
     Print["FATAL: the RealOutput kernel carries no #warning for the verdict-0 truncation."];
     Exit[1]]];
+
+(* "ComplexEndProjection": ONE body returning ntRe(...) of the whole complex integrand, with no probe and
+   no verdict, and the complex denominator left intact (not projected symbolically). *)
+Module[{he = Import[FileNameJoin[{$gen, "Cplxrtend_num_kernel.hh"}], "Text"]},
+  If[StringCount[he, "auto kernel("] =!= 1,
+    Print["FATAL: the ComplexEndProjection kernel emitted ", StringCount[he, "auto kernel("],
+          " bodies, expected exactly 1."]; Exit[1]];
+  If[StringContainsQ[he, "VERDICT" | "numtrace_verdict.hh"],
+    Print["FATAL: the ComplexEndProjection kernel references the probe verdict; it must not need one."];
+    Exit[1]];
+  If[FileExistsQ[FileNameJoin[{$gen, "probe_cplxrtend_num.cpp"}]],
+    Print["FATAL: a probe source was written for the ComplexEndProjection kernel; the mode skips the probe."];
+    Exit[1]];
+  If[! StringContainsQ[he, "return ntRe("],
+    Print["FATAL: the ComplexEndProjection body does not return ntRe(...) of the assembled integrand."];
+    Exit[1]];
+  If[! AnyTrue[StringSplit[he, "\n"],
+        StringContainsQ[#, "powr<-2>"] && StringContainsQ[#, "complex<double>(0.,1.)"] &&
+          StringContainsQ[#, "muq"] &],
+    Print["FATAL: the complex denominator powr<-2>(... complex<double>(0.,1.) * muq ...) did not survive ",
+          "into the ComplexEndProjection kernel; it was projected symbolically."]; Exit[1]]];
+
+(* ... and the mode is refused without "RealOutput": its single body returns a real value. *)
+If[! TrueQ[CheckAbort[
+      Quiet[MakeNTKernel[ntk,
+        FileNameJoin[{$TemporaryDirectory, "gen_cplxrtendbad_num.cpp"}],
+        FileNameJoin[{$TemporaryDirectory, "Cplxrtendbad_num_kernel.hh"}],
+        FileNameJoin[{$TemporaryDirectory, "Cplxrtendbad_num_kernels.hh"}],
+        "Name" -> "Cplxrtendbad_num_kernel", "Namespace" -> "cplxrtendbad_num", "Dressings" -> {},
+        "ComplexRuntimeProjection" -> True, "ComplexEndProjection" -> True]]; False,
+      True]],
+  Print["FATAL: ComplexEndProjection without RealOutput was not refused."]; Exit[1]];
 
 Print["Finite-density (nested-Complex) codegen kernels generated."];

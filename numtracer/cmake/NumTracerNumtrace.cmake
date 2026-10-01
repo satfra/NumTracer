@@ -109,7 +109,6 @@ function(numtracer_add_numtrace flows_target flow_dir)
     string(JSON _generator GET "${_json}" "generator")
     string(JSON _decorator GET "${_json}" "decorator")
     string(JSON _mainopt   GET "${_json}" "main_opt")
-    string(JSON _fullpar   GET "${_json}" "full_parallel")
     string(JSON _complex   GET "${_json}" "complex")
     string(JSON _kernels   GET "${_json}" "kernels")
 
@@ -214,7 +213,6 @@ function(numtracer_add_numtrace flows_target flow_dir)
         "-DNS=${_ns}"
         "-DFLOW=${_name}"
         "-DDECOR=${_decorator}"
-        "-DFULLPAR=${_fullpar}"
         "-DJOBS=${NUMTRACE_JOBS}"
         "-DMAXW=${_maxw}"
         "-DMAXWB=${_maxwb}"

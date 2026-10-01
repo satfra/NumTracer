@@ -228,8 +228,6 @@ recipe below silently ineffective.)
 | `NT_NO_SIGN_CANON` | front end | canon on | Stop ±q sharing one env base/inverse slot. A/B control; `gen_lambda3d_small_numeric.wls` builds its graded control kernel with it. |
 | `NT_NO_UNIT_GROUPS` | front end | on where the frame qualifies | Force the general `polyFrameSpec` path instead of the unit-loop rewrite (measured 70× on `lambda3d`). Same fixture, same purpose. |
 | `NT_NO_SIGMA_FOLD` | front end | fold on | Distribute a recognised γ-commutator into two Dirac traces instead of folding it to one `ntSigma` token. The baseline for measuring the sub-term reduction. |
-| `NT_NO_INTERP_SHARE` | emission | share on | Disable interpolator index sharing (`"ShareInterpolatorIndex"`). A/B control; results are bit-identical either way. |
-| `NT_GEN_NO_KHOIST` | emission | hoist on | Disable launch-constant dressing-lookup hoisting (`"HoistLoopConstLookups"`). A/B control — **not** bit-identical (host libm vs device libdevice, last ulp). |
 | `NT_GEN_HORNER_ORDERS` | lowering | 8, auto-reduced by size | Force N trial Horner orderings instead of the size-scaled default (3 above 500 monomials, 1 above 2000). |
 | `NT_GEN_SNAP_DIGITS` | lowering | 14 | Decimal digits emitted coefficients are snapped to. `0` disables snapping; outside `[0,17]` falls back to the default. |
 | `NT_GEN_POLYSTATS` | lowering | off | `=1` monomial/SSA counts to stderr; `=2` dumps every monomial key instead (pipe through `sort -u` to count distinct monomials across traces). |

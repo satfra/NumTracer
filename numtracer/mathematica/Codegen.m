@@ -3186,7 +3186,7 @@ ntEnvPosInt[nm_String] := With[{v = Environment[nm]},
     0]];
 
 ntWriteManifest[flowDir_String, name_String, ns_String, genFile_String, tracesFile_String,
-    unitFiles_List, decor_String, mainOpt_String, fullParallel_, complexQ_, probeFile_,
+    unitFiles_List, decor_String, mainOpt_String, complexQ_, probeFile_,
     deviceTarget_ : Automatic] := Module[
   {genDir = DirectoryName[genFile], manifest},
   manifest = <|
@@ -3200,7 +3200,6 @@ ntWriteManifest[flowDir_String, name_String, ns_String, genFile_String, tracesFi
     "units"         -> FileNameTake /@ unitFiles,
     "decorator"     -> decor,
     "main_opt"      -> mainOpt,
-    "full_parallel" -> TrueQ[fullParallel],
 (* the per-flow thread caps, captured from whatever SetNumTracerThreads[nA, nB] was in force at emit
    time — it sets exactly these two environment variables. Offline the generator runs from a cmake -P
    build step, which inherits nothing of the emitting Wolfram kernel's environment, so a cap that is
@@ -3280,14 +3279,7 @@ ntMarkGenerated[manifestFile_String] := Module[{m = Import[manifestFile, "RawJSO
    Regulator calls (RB/RFdot/...) and, on complex flows, ntRe(ns::trK(fenv)) share the same
    `const auto _interpN = f(...)` shape and must NOT be rewritten — restricting callees to `dress`
    excludes them by construction (and ntRe is an overloaded member, so ntRe.index() would not even
-   compile).
-
-   NT_NO_INTERP_SHARE=1 disables it (the A/B control). *)
-
-$ntInterpShare := !ntEnvFlag["NT_NO_INTERP_SHARE"];
-
-(* k-only lookup hoisting ("HoistLoopConstLookups"): NT_GEN_NO_KHOIST=1 disables (the A/B control). *)
-$ntKHoist := !ntEnvFlag["NT_GEN_NO_KHOIST"];
+   compile). *)
 
 ntInterpLine[ln_String] :=
   Module[{m = StringCases[ln,
@@ -3296,7 +3288,7 @@ ntInterpLine[ln_String] :=
 
 ntShareInterpIndices[text_String, splines_List] :=
   Module[{lines, parsed, counts, shared, idxName, emitted, out, nrw = 0},
-    If[!TrueQ[$ntInterpShare] || splines === {}, Return[text]];
+    If[splines === {}, Return[text]];
     lines = StringSplit[text, "\n", All];
     parsed = ntInterpLine /@ lines;
 (* count arguments over interpolator lookups only *)
@@ -3442,7 +3434,6 @@ Options[mkGenerateKernel] =
     "ParameterOrder" -> Automatic,
     "IncludeDir" -> Automatic,
     "RunGenerator" -> True,
-    "FullParallel" -> False,
     "AngleDefs" -> {},
     "CrossTraceCSE" -> False,
     "Components" -> Automatic,
@@ -3621,8 +3612,6 @@ $ntComplexRuntimeProjection = False;
    (e.g. cosl1p2 -> (-cos1 + Sqrt[3-3 cos1^2] cos2)/2). Emitted ONCE as `const double sym = ...;`
    in the kernel body so a shared sub-expression (the sqrt) is computed once rather than inlined
    per occurrence. *)
-(* "FullParallel" -> True passes `-p` to the generator: heavy nets are reduced/rebased CONCURRENTLY
-   (faster codegen, higher peak RAM) instead of one-at-a-time. The emitted kernel is identical. *)
 
 mkGenerateKernel::genfail = "Generator compile/run failed: `1`";
 mkGenerateKernel::pruneoff = "PruneRealTraces ignored: the RealProbe cannot run in this mode (Offline or RunGenerator->False), so pruned traces could not be probe-validated. Emitting all-complex traces; set RealProbe->False to assert the flow is safe to prune without a probe.";
@@ -4685,11 +4674,11 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    substitution and the kernel signature is branch-independent.
    NOT bit-identical: host libm log/exp differ from device libdevice in the last ulp, so this is
    gated at the physics level (observables + dressing sweeps), not bitwise.
-   Opt-in (DiFfRG_compat.m enables it after checking the dressing types are DiFfRG interpolators);
-   NT_GEN_NO_KHOIST=1 is the A/B control. *)
+   Opt-in (MakeNTKernelDiFfRG enables it after checking the dressing types are DiFfRG interpolators,
+   unless its own "HoistLoopConstLookups" option says otherwise). *)
     hoistCalls = {};
     hoistSyms = {};
-    If[TrueQ[OptionValue["HoistLoopConstLookups"]] && $ntKHoist && dress =!= {},
+    If[TrueQ[OptionValue["HoistLoopConstLookups"]] && dress =!= {},
       Module[{loopSyms = DeleteCases[args, Global`k], dressPat},
 (* "Dressings" may arrive as strings (DiFfRG_compat derives them from the parameter list); in the
    integrand the calls carry SYMBOL heads, so normalise before matching. *)
@@ -5289,11 +5278,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
           AbsoluteTiming[
             Run[
               ntDeviceEnvPrefix[OptionValue["DeviceTarget"], decor] <> ntTcmallocPrefix[] <>
-                "'" <> bin <> "' -n '" <> ns <> "' -d '" <> decor <> "'" <>
-                If[OptionValue["FullParallel"],
-                  " -p",
-                  ""
-                ] <> " > '" <> tmp <> "'"]];
+                "'" <> bin <> "' -n '" <> ns <> "' -d '" <> decor <> "' > '" <> tmp <> "'"]];
         Print["[time]   generator run (reduce+rebase+lower): ", trun, " s"];
         sz =
           If[FileExistsQ[tmp],
@@ -5336,7 +5321,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
     (* per-flow numtrace manifest + switch. Written LAST, so a flow that aborted part-way leaves no
        manifest claiming to be buildable. Offline it says 0 (the numtrace target still owes the
        kernels); online everything is already done, so it says 1 and the target skips the flow. *)
-    Module[{mf = ntWriteManifest[DirectoryName[kernelFile], name, ns, genFile, headerFile, unitFiles, decor, mainOptForManifest, OptionValue["FullParallel"], complexQ, probeFile, OptionValue["DeviceTarget"]]},
+    Module[{mf = ntWriteManifest[DirectoryName[kernelFile], name, ns, genFile, headerFile, unitFiles, decor, mainOptForManifest, complexQ, probeFile, OptionValue["DeviceTarget"]]},
       If[!offline, ntMarkGenerated[mf]];
       Print["wrote manifest: ", mf, If[offline, " (generated: 0 — run `make numtrace`)", " (generated: 1)"]]];
     kernelFile];
@@ -5348,7 +5333,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    the fundamental symbols and calls the traces. Options are forwarded to the generator
    (see Options[mkGenerateKernel] for the set). *)
 
-Options[MakeNTKernel] = {"ComputeType" -> "double", "Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "ParameterOrder" -> Automatic, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "ComplexRuntimeProjection" -> False, "ComplexEndProjection" -> False, "RealOutput" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None, "DecayingRegulators" -> Automatic, "MatsubaraFiniteExtent" -> Automatic};
+Options[MakeNTKernel] = {"ComputeType" -> "double", "Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "ParameterOrder" -> Automatic, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "ComplexRuntimeProjection" -> False, "ComplexEndProjection" -> False, "RealOutput" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None, "DecayingRegulators" -> Automatic, "MatsubaraFiniteExtent" -> Automatic};
 
 MakeNTKernel::nfiles = "MakeNTKernel needs three output files: MakeNTKernel[ntk, genFile, kernelFile, tracesFile].";
 

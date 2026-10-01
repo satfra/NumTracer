@@ -40,6 +40,7 @@ double cplxrt_oracle(double l0, double l1, double cos1, double p0, double p, dou
 // compare_cplxrt_num_realoutput.cpp: the "RealOutput" -> True kernel, verdict forced to 0.
 double cplxrt_realoutput(double l0, double l1, double cos1, double p0, double p, double muq,
                          double Ep);
+double cplxrt_endproj(double l0, double l1, double cos1, double p0, double p, double muq, double Ep);
 
 int main()
 {
@@ -53,23 +54,27 @@ int main()
   // Max ABSOLUTE error against the kernel's own overall scale, not a pointwise relative metric: the
   // integrand is a sum whose summands nearly cancel, so a relative metric blows up at its zeros even
   // under exact agreement. Same choice as compare_cplxdisc_num.cpp.
-  double errRePart = 0, errRealOut = 0, maxAbs = 0;
+  double errRePart = 0, errRealOut = 0, errEndProj = 0, maxAbs = 0;
   for (int i = 0; i < 200000; ++i) {
     const double l0 = Ud(rng), l1 = Ul(rng), cos1 = Uc(rng), p0 = Ud(rng), p = Ul(rng),
                  muq = Ud(rng), Ep = Ud(rng);
     const double a = cplxrt_oracle(l0, l1, cos1, p0, p, muq, Ep);
     const double n = Num::kernel(l0, l1, cos1, p0, p, muq, Ep);
     const double r = cplxrt_realoutput(l0, l1, cos1, p0, p, muq, Ep);
+    const double e = cplxrt_endproj(l0, l1, cos1, p0, p, muq, Ep);
     errRePart = std::max(errRePart, std::fabs(n - a));
     errRealOut = std::max(errRealOut, std::fabs(r - a));
+    errEndProj = std::max(errEndProj, std::fabs(e - a));
     maxAbs = std::max(maxAbs, std::fabs(a));
   }
 
   const double scale = maxAbs > 0 ? maxAbs : 1.0;
-  const double relRePart = errRePart / scale, relRealOut = errRealOut / scale;
+  const double relRePart = errRePart / scale, relRealOut = errRealOut / scale,
+               relEndProj = errEndProj / scale;
   std::printf("cplxrt: RePart     vs complex   max|err| = %.3e   rel = %.3e\n", errRePart, relRePart);
   std::printf("cplxrt: RealOutput vs complex   max|err| = %.3e   rel = %.3e   scale = %.3e\n",
               errRealOut, relRealOut, maxAbs);
+  std::printf("cplxrt: EndProj    vs complex   max|err| = %.3e   rel = %.3e\n", errEndProj, relEndProj);
 
   if (!(maxAbs > 0)) {
     std::printf("FAIL: the oracle is identically zero over the sample - the fixture is degenerate.\n");
@@ -86,6 +91,11 @@ int main()
     std::printf("FAIL: the RealOutput kernel does not reproduce real(complex body) at verdict 0. "
                 "Dropping the untouched complex body must leave verdict 0 selecting the exact RePart "
                 "body; it is selecting something else.\n");
+    return 1;
+  }
+  if (!(relEndProj < 1e-12)) {
+    std::printf("FAIL: the ComplexEndProjection kernel does not reproduce real(complex body). Its single "
+                "body must be ntRe of the full complex integrand.\n");
     return 1;
   }
   std::printf("cplxrt: OK\n");

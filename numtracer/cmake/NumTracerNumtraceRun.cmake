@@ -4,7 +4,7 @@
 #
 #   run   run a flow's generator binary and commit its stdout as the straight-line traces header,
 #         with its thread pool sized to the build's own job budget (see "workers" below).
-#         -DGEN=<binary> -DOUT=<kernels.hh> -DNS=<namespace> -DDECOR=<decorator> [-DFULLPAR=ON]
+#         -DGEN=<binary> -DOUT=<kernels.hh> -DNS=<namespace> -DDECOR=<decorator>
 #         -DFLOW=<name> -DJOBS=<n> -DMAXW=<n|0> -DMAXWB=<n|0> -DIDX=<k> -DTOTAL=<n>
 #
 #   probe run a flow's imaginary-part probe, which writes the verdict header, and report the verdict
@@ -43,12 +43,6 @@ if(MODE STREQUAL "run")
 
   set(_tmp "${OUT}.tmp")
   set(_args -n "${NS}" -d "${DECOR}")
-  if(FULLPAR)
-    # Legacy: -p asked the old reduce/rebase generator to work heavy nets concurrently. The numeric
-    # generator's argument parser knows only -d and -n, so this is currently inert — kept because
-    # the "FullParallel" MakeNTKernel option and the manifest field are still public.
-    list(APPEND _args -p)
-  endif()
 
   # ---- worker count (see the header note) -------------------------------------------------------
   set(_jobs "${JOBS}")

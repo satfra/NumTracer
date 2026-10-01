@@ -7,7 +7,8 @@ Get[FileNameJoin[{$repo, "numtracer", "mathematica", "NumTracer.m"}]];
 
 (* pull the private symbols under test *)
 dec  = NumTracer`Private`diracSlotDecompose;
-exp  = NumTracer`Private`expandDiracSlot;
+(* expand a slot back into its sum: each option is {scalar, structure} *)
+exp[NumTracer`Private`ntDiracSlot[opts_, __]] := Total[Times @@@ opts];
 sumQ = NumTracer`Private`diracSlotSumQ;
 openL = NumTracer`Private`openLorentzOf;
 nDS  = NumTracer`Private`ntDiracSlot;   (* ntDiracSlot lives in the Private context, like ntDressedNum *)
@@ -54,9 +55,11 @@ check["k=2 two-gluon vertex (Dirac / metric / mixed legs)", v2];
 (* ---- R3: the collection gate keeps the vertex eager and rewrites it to ntDiracSlot ---- *)
 collQ = NumTracer`Private`collectibleDiracSumQ;
 rew   = NumTracer`Private`rewriteDressedNums;
+(* a DRESSED vertex sum is collected only under vertex collection (NT_VERTEX_COLLECT), so turn it on *)
 gate[name_, sum_] := Module[{c, r},
-  c = TrueQ[collQ[sum]];
-  Block[{NumTracer`Private`$ntDressCollect = True}, r = rew[{sum}]];
+  Block[{NumTracer`Private`$ntDressCollect = True, NumTracer`Private`$ntVertexCollect = True},
+    c = TrueQ[collQ[sum]];
+    r = rew[{sum}]];
   Module[{hasSlot = ! FreeQ[r, nDS]},
     Print["  ", name, ": collectibleDiracSumQ=", c, "  rewrite→ntDiracSlot=", hasSlot,
           "  ", If[c && hasSlot, "ok", "FAIL"]];
@@ -66,3 +69,4 @@ gate["k=1 vertex", v1];
 gate["k=2 vertex", v2];
 
 Print["\n", If[fails == 0, "ALL ROUND-TRIP TESTS PASSED", ToString[fails] <> " FAILED"]];
+Exit[If[fails == 0, 0, 1]];
