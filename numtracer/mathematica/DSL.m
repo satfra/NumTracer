@@ -232,13 +232,16 @@ connectedComponents[factors_List] := Module[{byLabel, edges},
 (* Greedy contraction order: keep each successive factor sharing a free index with the
    running set, so contract_all's intermediates stay low-rank (never outer-product the
    whole thing). *)
-orderFactors[fs_List] := Module[{fi = freeIdx /@ fs, rem, out, used},
+orderFactors[fs_List] := Module[{fi = freeIdx /@ fs, byLabel, touched, rem, out, take},
   If[fs === {}, Return[{}]];
-  out = {1}; used = fi[[1]]; rem = Range[2, Length[fs]];
+  (* touched[[i]]: factor i shares a free index with the factors taken so far *)
+  byLabel = GroupBy[Join @@ MapIndexed[Function[{ls, i}, {#, First[i]} & /@ ls], fi], First -> Last];
+  touched = ConstantArray[False, Length[fs]];
+  take = Function[k, AppendTo[out, k]; Scan[(touched[[#]] = True) &, Join @@ Lookup[byLabel, fi[[k]]]]];
+  out = {}; take[1]; rem = Range[2, Length[fs]];
   While[rem =!= {},
-    With[{pick = SelectFirst[rem, IntersectingQ[fi[[#]], used] &, First[rem]]},
-      AppendTo[out, pick]; used = Union[used, fi[[pick]]];
-      rem = DeleteCases[rem, pick, {1}, 1]]];
+    With[{pick = SelectFirst[rem, touched[[#]] &, First[rem]]},
+      take[pick]; rem = DeleteCases[rem, pick, {1}, 1]]];
   fs[[out]]];
 
 (* ---- sector-bridge expansion (keep colour and Lorentz contractions separate) ---- *)
@@ -511,8 +514,9 @@ diracSlotDecompose[_] := $Failed;
 (* ---- per-call memo for the Plus classifiers ------------------------------------------------------
    FunKit reuses index names across diagrams, so one vertex sum is the SAME expression in every diagram
    that contains it (ZA4_147: 2631 Plus factors, 40 distinct), and expandBridges, collectibleDiracSumQ
-   and rewriteDressedNums each re-ask the same questions of it. The four functions below are pure in
-   {p, $ntDressCollect, $ntVertexCollect}, so NumTrace and FromFunKit Block $ntPlusMemo to <||> and
+   and rewriteDressedNums each re-ask the same questions of it. The four functions below (and
+   labelCensus on a Plus) are pure in {p, $ntDressCollect, $ntVertexCollect}, so NumTrace and
+   FromFunKit Block $ntPlusMemo to <||> and
    share the answers for one call. Outside such a Block (direct calls from tests) nothing is cached.
    The store happens only after f[p] returns, so an Abort (slotorient) is never memoised. *)
 $ntPlusMemo = None;
@@ -745,6 +749,7 @@ it contracts colour indices against flavour ones and returns a silently wrong nu
 rather than guessing. Offending factors:\n`3`";
 
 (* Contract every epsilon pair, one multiplicative context at a time. *)
+expandFundEps[e_] /; FreeQ[e, _ntEpsFund] := e;
 expandFundEps[e_] := Module[{res},
   res = expandFundEpsRec[e];
   With[{left = Cases[res, _ntEpsFund, {0, Infinity}]},
@@ -995,11 +1000,13 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
   (* net2, not net: the unit basis vectors introduced by expandFixedComponents — and the spatial
      vectors introduced by expandSpatialVecs — are ordinary momenta and MUST get an env Base, or
      compileDirac's slash emission finds them absent. *)
-  ntProfTimed["buildEnv",
-    allMom = DeleteDuplicates @ Cases[net2, f_?tensorQ :> momentumOf[f], Infinity] // DeleteCases[None];
-    invMom = DeleteDuplicates @ Cases[net2, f_?(needsInvQ) :> momentumOf[f], Infinity];
-    invSMom = DeleteDuplicates @ Cases[net2, f_?(needsInvSQ) :> momentumOf[f], Infinity];
-    {env, nenv} = buildEnv[allMom, invMom, invSMom]];
+  (* one scan for the distinct tensor heads; deduplicating them first keeps each momentum's
+     first-occurrence order (needsInvQ/needsInvSQ heads are tensor heads) *)
+  ntProfTimed["buildEnv", With[{tens = DeleteDuplicates @ Cases[net2, _?tensorQ, Infinity]},
+    allMom = DeleteDuplicates[momentumOf /@ tens] // DeleteCases[None];
+    invMom = DeleteDuplicates[momentumOf /@ Select[tens, needsInvQ]];
+    invSMom = DeleteDuplicates[momentumOf /@ Select[tens, needsInvSQ]];
+    {env, nenv} = buildEnv[allMom, invMom, invSMom]]];
 
 (* The text of this line is a CONTRACT: tests/gen/regen_check.sh's flow_counts() seds the diagram
    count out of it. Same literal fragments, same order. *)
@@ -1132,6 +1139,7 @@ occur outside it — a dummy-name collision between two independently generated 
 Offending diagram:\n`3`";
 
 (* {exposed-multiset, private-set, bad-list} of a (sub)expression. *)
+labelCensus[p_Plus] := ntPlusMemo["lc", labelCensusPlus, p];
 labelCensus[e_] := Which[
   tensorQ[e],
     With[{ls = labelsOf[e]},
@@ -1163,15 +1171,14 @@ labelCensus[e_] := Which[
        Union[priv, Cases[tal, {l_, c_} /; c == 2 :> l]],
        bad}],
 
-  Head[e] === Plus,
-    Module[{sub = labelCensus /@ (List @@ e), frees},
-      frees = Sort /@ sub[[All, 1]];
-      {If[frees === {}, {}, First[frees]],
-       Union @@ sub[[All, 2]],
-       Join[Join @@ sub[[All, 3]],
-            If[Length[DeleteDuplicates[frees]] > 1, {{frees, "plus-free-mismatch"}}, {}]]}],
-
   True, {{}, {}, {}}];
+
+labelCensusPlus[e_Plus] := Module[{sub = labelCensus /@ (List @@ e), frees},
+  frees = Sort /@ sub[[All, 1]];
+  {If[frees === {}, {}, First[frees]],
+   Union @@ sub[[All, 2]],
+   Join[Join @@ sub[[All, 3]],
+        If[Length[DeleteDuplicates[frees]] > 1, {{frees, "plus-free-mismatch"}}, {}]]}];
 
 (* Escape hatch: NT_NO_LABEL_CHECK=1 disables (the census is O(net), not a hot path). Anything
    falsy — unset, "", "0", "false" — leaves the check ON, which is the safe direction: this guard
