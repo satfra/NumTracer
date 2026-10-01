@@ -160,33 +160,33 @@ mergeColNet[a_, b_] :=
    dressing expression under a small integer id `dr` and bakes a per-component id vector
    (component → dr, -1 = drop) into the emitted sun<n>.diag{Fund,Adj}(...,{d0,…}) factor. The C++ seam
    folds the net to a SUNPoly over these ids, and the integrand multiplies in the runtime sum
-   Σ_t coeff_t Π expr — an ordinary scalar-dressing token, no array. Reset per generation. *)
+   Σ_t coeff_t Π expr — an ordinary scalar-dressing token, no array.
+   A component's dressing is a COMPLETE expression, kinematics included (e.g.
+   `{1 -> Zu[scale], 2 -> Zd[scale]}`; each component may use its own scale), frame-resolved at
+   emission and otherwise emitted as given. *)
 
-$diagDrTable = <||>; $diagDrByKey = <||>; $diagDrCounter = 0;
+(* ---- per-generation dressing interners --------------------------------------------------------
+   $diagDrIntern (diag-dressing expressions, ids in the sun<n>.diag… vectors) and $drIntern (scalar
+   dressing atoms, ids in the fm.dress table and the fill() dr_<id> arguments) are ntMkIntern intern
+   closures. They are dynamically bound rather than passed because their callers (colourFacStr, the
+   dressed/collected slot builders) sit below the memoised net builders. mkGenerateKernel Blocks both
+   to fresh interners for one generation and harvests the tables after the net build; outside a
+   generation, interning aborts. *)
 
-resetDiagDr[] := (
-    $diagDrTable = <||>;
-    $diagDrByKey = <||>;
-    $diagDrCounter = 0;);
+ntNoIntern::nogen = "A `1` was interned outside a kernel generation (only mkGenerateKernel binds the dressing interners).";
 
-(* A component's dressing is a COMPLETE expression, kinematics included (e.g.
-   `{1 -> Zu[scale], 2 -> Zd[scale]}`; each component may use its own scale). It is interned here and
-   frame-resolved at emission; nothing is applied to it on the way out. *)
+ntNoIntern[what_][_] := (Message[ntNoIntern::nogen, what]; Abort[]);
 
-diagDrId[expr_] := Module[{key = expr},
-    If[!KeyExistsQ[$diagDrByKey, key],
-      $diagDrByKey[key] = $diagDrCounter;
-      $diagDrTable[$diagDrCounter] = <|"Expr" -> expr|>;
-      $diagDrCounter++];
-    $diagDrByKey[key]];
+$diagDrIntern = ntNoIntern["diagonal colour dressing"];
+$drIntern = ntNoIntern["dressing atom"];
 
 (* Parse a diag-dressing spec into a per-component id vector of length `dim` (component 0..dim-1;
-   1-based physics index = v+1). Named components get diagDrId[expr]; a Default -> expr rule
+   1-based physics index = v+1). Named components get their interned id; a Default -> expr rule
    fills the rest; unmatched components are -1 (dropped). *)
 
 diagComp2Dr[spec_, dim_] := Module[{rules = Flatten[{spec}], named, def},
-    named = Association[Cases[rules, (c_Integer -> nm_) :> (c -> diagDrId[nm])]];
-    def = Cases[rules, (Default -> nm_) :> diagDrId[nm]];
+    named = Association[Cases[rules, (c_Integer -> nm_) :> (c -> $diagDrIntern[nm])]];
+    def = Cases[rules, (Default -> nm_) :> $diagDrIntern[nm]];
     def =
       If[def === {},
         -1,
@@ -202,25 +202,11 @@ diagVecStr[vec_] := "{" <> StringRiffle[ToString /@ vec, ","] <> "}";
    that keys the sub-term's dressing monomial and the generator's fm.dress table. So identical atoms
    across slots / diagrams share ONE `f[]` slot and the runtime evaluates each dressing call ONCE.
    The atom expression is already frame-resolved (ntSP/ntVec components substituted) so its C++ fill
-   is `cppFlat[atom]`. Reset per generation alongside resetDiagDr. *)
+   is `cppFlat[atom]`. Interned via $drIntern (above). *)
 
-$drTable = <||>; $drByKey = <||>; $drCounter = 0;
-
-resetDr[] := (
-    $drTable = <||>;
-    $drByKey = <||>;
-    $drCounter = 0;);
-
-drAtomId[atom_] := Module[{key = atom},
-    If[!KeyExistsQ[$drByKey, key],
-      $drByKey[key] = $drCounter;
-      $drTable[$drCounter] = atom;
-      $drCounter++];
-    $drByKey[key]];
-
-(* Decompose a (frame-resolved) dressed-structure coefficient into {Cx numeric, {drAtomId…}}: numbers
+(* Decompose a (frame-resolved) dressed-structure coefficient into {Cx numeric, {atom id…}}: numbers
    fold into the complex coefficient; a positive-integer power b^n expands to n atom copies; every other
-   non-numeric factor is one atom (interned via drAtomId). *)
+   non-numeric factor is one atom. *)
 
 drDecompose[coeff_] := Module[{
     factors =
@@ -234,9 +220,9 @@ drDecompose[coeff_] := Module[{
         NumberQ[f],
           num *= f,
         MatchQ[f, Power[_, _Integer?Positive]],
-          ids = Join[ids, ConstantArray[drAtomId[First[f]], Last[f]]],
+          ids = Join[ids, ConstantArray[$drIntern[First[f]], Last[f]]],
         True,
-          AppendTo[ids, drAtomId[f]]],
+          AppendTo[ids, $drIntern[f]]],
       {f, factors}];
     {N[num, 17], Sort[ids]}];
 

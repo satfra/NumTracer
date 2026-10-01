@@ -397,7 +397,7 @@ ntkPruneSpec[diagData_, groups_, complexQ_, offline_, pruneRequested_, realProbe
          spellings collapse here, and nowhere else).
       2. FRAME SPEC. Probe which frame parametrisation the flow qualifies for (unit-loop / mixed
          unit-loop / general polynomial) and build the component table over it.
-      3. RESET. Clear the per-generation memo caches and stamp $ctCtx.
+      3. RESET. Clear the per-generation memo caches, stamp $ctCtx and bind fresh dressing interners.
       4. NET BUILD. Per diagram: split into colour groups, compile the Dirac chain and the Lorentz
          remainder, and accumulate the nets, the colour tokens and the per-diagram coefficient data.
       5. GROUPING. Partition the nets into trace groups — additive groups (summed into one trace)
@@ -420,9 +420,11 @@ ntkPruneSpec[diagData_, groups_, complexQ_, offline_, pruneRequested_, realProbe
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
   Block[{$RecursionLimit = $RecursionLimit, $ctCtx = $ctCtx, $ntDressResolve = $ntDressResolve,
          $ntCanonIdsSrc = $ntCanonIdsSrc, $ntCanonRules = $ntCanonRules,
-         $ntComplexRuntimeProjection = $ntComplexRuntimeProjection},
+         $ntComplexRuntimeProjection = $ntComplexRuntimeProjection,
+         $diagDrIntern = $diagDrIntern, $drIntern = $drIntern},
   Module[{name, ns, dress, scalarParams, adParams, parameterOrder, adNames, scalarParamNames, args, sigArgs, frame, env, nonzeroCompMask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, preamble, integrand, kernelParams, runtimeParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, complexQ, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, realOut, endProject, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, realOnlyG = {}, pruneG = {}, probeVerdict = None, genPass,
     hoistCalls = {}, hoistSyms = {}, hoistFnStr = "", mVarIdx = -1, mSym = None, mEvenBody = False, mFiniteExtentBody = False, mSplit = False, feExpr = 0, tailExpr = 0, splitFns = {}, mkKernelFnNamed, timedBodyNamed, bodyFor, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
+    diagDrHarvest, drHarvest, diagDrExprs = {}, drAtoms = {},
 (* diagData is assigned by the net-build Module below but read after it closes (ntkPruneSpec), so
    it must be declared HERE; declared in the inner Module it would be unassigned at that read. *)
     diagData = {}},
@@ -570,9 +572,10 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
 (* the generation-fixed half of every net-builder memo key, hashed ONCE here instead of on each
    (recursive) call. Covers everything those builders read besides the expression and its ids. *)
     $ctCtx = Hash[{env, nonzeroCompMask, frame}];
-(* clear the per-component diagonal-dressing and scalar-dressing (ntDressedNum) registries *)
-    resetDiagDr[];
-    resetDr[];
+(* fresh diagonal-dressing and scalar-dressing (ntDressedNum) interners; their tables (diagDrExprs,
+   drAtoms) are harvested after the net build, and an id is the 0-based position in its table. *)
+    {$diagDrIntern, diagDrHarvest} = ntMkIntern[];
+    {$drIntern, drHarvest} = ntMkIntern[];
 (* frame resolver for dressed-numerator option coefficients (compileDirac → dressedSlotStr): the same
    ntSP/ntSPS/ntVec[q,i] → component substitution used for diag["Coeff"] below. *)
     $ntDressResolve =
@@ -729,6 +732,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
       diagData = Internal`BagPart[bDiagData, All];
       lorFacOf = Internal`BagPart[bLorFacOf, All];
       factorNets = Internal`BagPart[bFactorNets, All];
+      diagDrExprs = diagDrHarvest[];
+      drAtoms = drHarvest[];
 (* memo sizes should track the number of DISTINCT Dirac/Lorentz structures, not the call count;
    if they grow with the call count, a memo has stopped hitting. *)
       ntLog["[prof]   memo sizes: compileLorentz ", Length[$ctCache], " | orderDiracLoops ", Length[$odCache], " | dressedSlotStr ", Length[$dsCache], " | diracSlotStr ", Length[$dslCache], " (nets ", nNetAcc, ")"];
@@ -757,7 +762,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                           Times @@
                             (
                               Function[dr,
-                                  resolveScale[$diagDrTable[dr]["Expr"]]
+                                  resolveScale[diagDrExprs[[dr + 1]]]
                                 ] /@ term[[3]]))
                     ] /@ p];
               colourNets[[d]] = "SUNNet{}"],
@@ -887,15 +892,15 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
             $ntRealT <> " fenv[(" <> nsHome <> "::nenv) > 0 ? (" <> nsHome <> "::nenv) : 1];",
             Sequence @@
               If[hasDr,
-                KeyValueMap[
-                  Function[{id, atom},
-                    "const " <> $ntRealT <> " dr_" <> ToString[id] <> " = " <> cppFlat[atom] <> ";"],
-                  $drTable],
+                MapIndexed[
+                  Function[{atom, pos},
+                    "const " <> $ntRealT <> " dr_" <> ToString[pos[[1]] - 1] <> " = " <> cppFlat[atom] <> ";"],
+                  drAtoms],
                 {}],
             With[{
               fillCallArgs =
                 If[hasDr,
-                  Join[SymbolName /@ fillArgs, ("dr_" <> ToString[#])& /@ Sort[Keys[$drTable]]],
+                  Join[SymbolName /@ fillArgs, ("dr_" <> ToString[#])& /@ Range[0, Length[drAtoms] - 1]],
                   SymbolName /@ fillArgs]},
               nsHome <> "::fill(fenv, " <> StringRiffle[fillCallArgs, ", "] <> ");"],
             If[crossCSE,
@@ -1003,7 +1008,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
 (* dressed kernels: fill() takes one `double dr_<id>` per dressing atom — the kernel body computes
    the atom's value (regulators / interpolators in scope there) and passes it. Matches fm.dress. *)
       If[!FreeQ[invNets, _ntDressedCore],
-        fillArgSig = fillArgSig <> StringJoin[(", [[maybe_unused]] " <> $ntRealT <> " dr_" <> ToString[#])& /@ Sort[Keys[$drTable]]]
+        fillArgSig = fillArgSig <> StringJoin[(", [[maybe_unused]] " <> $ntRealT <> " dr_" <> ToString[#])& /@ Range[0, Length[drAtoms] - 1]]
       ]];
 (* LOUD GUARD: the integrand must be numeric-valued before it is lowered to C++. A DEGENERATE input
    — most often a basis whose Gram is singular at the chosen kinematics, so its inverse metric (and
@@ -1333,7 +1338,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    Offline the same probe source is compiled and run by the `numtrace` build target instead. *)
     If[complexQ && !endProject,
       probeFile = FileNameJoin[{DirectoryName[genFile], "probe_" <> ns <> ".cpp"}];
-      ntExportCpp[probeFile, ntProbeSource[integrand, args, fillArgs, angleDefs, angleDecls, nsHome, headerFile, $drTable, "TraceArrayDecl" -> If[crossCSE, tarrDecl, ""]]];
+      ntExportCpp[probeFile, ntProbeSource[integrand, args, fillArgs, angleDefs, angleDecls, nsHome, headerFile, drAtoms, "TraceArrayDecl" -> If[crossCSE, tarrDecl, ""]]];
       Print["wrote probe: ", probeFile];
       If[TrueQ[OptionValue["RunGenerator"]] && TrueQ[OptionValue["RealProbe"]] && !offline,
         probeVerdict = ntRunProbe[probeFile, DirectoryName[headerFile], FileNameJoin[{DirectoryName[headerFile], ntVerdictFile}], verdictMacro];

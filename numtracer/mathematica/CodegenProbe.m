@@ -27,7 +27,7 @@ Options[ntProbeSource] = {"NPoints" -> 4000, "Tol" -> 1.*^-9, "TraceArrayDecl" -
          args        every kinematic symbol it reads,  fillArgs  the subset the fill needs,
          angleDefs / angleDecls   the named angle temporaries, so the probe TU has them in scope,
          nsHome      the namespace the generated traces live in,
-         headerFile  the traces header to include,  drTable  the dressing-atom table.
+         headerFile  the traces header to include,  drAtoms  the dressing atoms in id order.
    Out:  the probe program text. It is compiled and run by ntRunProbe, which parses its stdout.
 
    It compares the untouched COMPLEX form with the two real projections (ntPureIntegrand,
@@ -36,7 +36,7 @@ Options[ntProbeSource] = {"NPoints" -> 4000, "Tol" -> 1.*^-9, "TraceArrayDecl" -
    Conservative by design: a residual above tolerance resolves to 0 (NaN points are skipped), and
    anything that prevents a verdict (compile, run or parse failure) aborts generation in ntRunProbe.
    A wrong verdict is an O(1) kernel error; an unnecessarily complex kernel is only slower. *)
-ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, headerFile_, drTable_ : <||>, opts : OptionsPattern[]] :=
+ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, headerFile_, drAtoms_List : {}, opts : OptionsPattern[]] :=
   Module[{keepHeads, keepSyms, seedOf, argComb, stub, probeFull, probeProj, probeRePart, probeParams, probePre, fnFull, fnProj, fnRePart, drDecls, drFillArgs, randDecls, callArgs, src, np, tol, distOf},
     np = OptionValue["NPoints"];
     (* A float kernel's roundoff is ~1e-7 relative, so the double tolerance would read noise as a
@@ -70,11 +70,11 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
        integrand; without them the probe does not compile (too few args to fill). Atoms can reference
        the derived angles, so the angle decls precede them. *)
     drDecls =
-      KeyValueMap[
-        Function[{id, atom},
-          "const " <> $ntRealT <> " dr_" <> ToString[id] <> " = " <> cppFlat[stub[atom]] <> ";"],
-        drTable];
-    drFillArgs = ("dr_" <> ToString[#])& /@ Sort[Keys[drTable]];
+      MapIndexed[
+        Function[{atom, pos},
+          "const " <> $ntRealT <> " dr_" <> ToString[pos[[1]] - 1] <> " = " <> cppFlat[stub[atom]] <> ";"],
+        drAtoms];
+    drFillArgs = ("dr_" <> ToString[#])& /@ Range[0, Length[drAtoms] - 1];
     probePre =
       StringRiffle[
         Join[
