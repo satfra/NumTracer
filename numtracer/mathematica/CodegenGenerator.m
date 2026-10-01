@@ -59,7 +59,7 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
           nLs, nDc, nDl, nDr, traceKeyPacked, traceDressKeyPacked, traceKeyFlat, distinctTraceKeys,
           subKeysLen, merged, foldKeys, foldLens, netTraceRows, netDressRows, netScalarRows,
           refCount, distinctSubs, subIdxOf, nSub, nReused},
-(* The key columns arrive already interned (stage 1 of emitNumericGenerator), so nothing is hashed
+(* The key columns arrive already interned (ntGenExpandSubTerms), so nothing is hashed
    here: the join is integer arithmetic over ids. *)
     lens = Length /@ diracNetIds;
 
@@ -132,74 +132,83 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
    they share. Returns {pre, units, decl, main}. The program it emits is what actually contracts the
    traces and PRINTS the committed straight-line kernel header; nothing here contracts anything.
 
-   The stages, in order; each consumes the one before it:
+   emitNumericGenerator is the driver; the stages, in order:
 
-     1. SUB-TERM EXPANSION + INTERNING. Walk every net's cores, expand the dressed slot options into
-        their Cartesian product, and intern the five key columns (Dirac net, Lorentz net, dressed
-        chain, slot-option tuple, dressing-atom multiset) through ntMkIntern. Output: six ragged
-        integer columns, one entry per (net, sub-term), plus the five pools they index.
-     2. NET CSE. Net-builder strings that recur across sub-terms become shared `lc<k>()` / `dc<k>()`
-        accessor functions, and the pools are rewritten to call them.
-     3. DEDUP JOIN (ntGenDedupJoin, above). Merge sub-terms sharing a trace AND a dress channel,
-        count references, and order the distinct traces by descending reference count. Output: the
+     1. ntGenExpandSubTerms — SUB-TERM EXPANSION + INTERNING. Walk every net's cores, expand the
+        dressed slot options into their Cartesian product, and intern the five key columns (Dirac net,
+        Lorentz net, dressed chain, slot-option tuple, dressing-atom multiset) through ntMkIntern.
+        Output: six ragged integer columns, one entry per (net, sub-term), plus the five pools.
+     2. ntGenColourTables — the distinct colour nets: chunk builders for the unit TUs, the main-TU
+        assembler, and the per-net index colR into them.
+     3. ntGenPreambles — the main-TU and unit-TU headers.
+     4. ntGenNetCSE — net-builder strings that recur across sub-terms become shared `lc<k>()` /
+        `dc<k>()` accessors, and the pools are rewritten to call them.
+     5. ntGenDedupJoin (above) — merge sub-terms sharing a trace AND a dress channel, count
+        references, order the distinct traces by descending reference count. Output: the
         distinct-trace table and the per-net fold entries that index it.
-     4. UNIT TABLES. Chunk the distinct-trace tables (ntChunkDefs) and LPT bin-pack every definition
-        into the -O0 unit TUs, so the net-builder code compiles in parallel.
-     5. main() DATA TABLES. Emit the per-net index/scalar/dressing tables with two-level hash-consing
-        (distinct ROWS, then distinct VALUES), each as a top-level chunk function collected into
-        `tableBag` and prepended afterwards.
-     6. PHASE A / PHASE B / EMISSION. Emit the calls that contract each distinct trace (phase A),
-        fold each net and drain each group (phase B), lower to SSA, and print the kernel header.
+     6. ntGenUnitSources — chunk the distinct-trace tables (ntGenTraceTables, ntGenDressedSlotTables),
+        LPT bin-pack every definition into the -O0 unit TUs (ntLptBinPack), emit the decl header.
+     7. main(): ntGenMainPrologue, ntGenMainTables (per-net tables, hash-consed by ntHashConsRows),
+        ntGenMainPhaseA (contract each distinct trace), ntGenMainPhaseB (fold nets, drain groups,
+        lower to SSA), ntGenMainEmission (print the kernel header). The big tables are top-level
+        chunk functions (ntGenBigTable) whose definitions the driver prepends to main().
 
    WHAT MAKES THE OUTPUT REPRODUCIBLE. Every stage boundary above fixes an ORDER, and the emitted
    kernel's slot numbering follows it, so a reordering here yields a kernel that is still correct and
    still passes every oracle while differing byte-for-byte from the committed one. The four specific
-   invariants are stated at ntGenDedupJoin (I1-I4); the fifth lives at stage 4: `allDefs` is Joined in
-   a fixed order and `Ordering` breaks ties by index, so that Join order decides which definition
-   lands in which unit TU.
+   invariants are stated at ntGenDedupJoin (I1-I4). Two more fix the generator source: in stage 6
+   the definitions are Joined in a fixed order and `Ordering` breaks ties by index, so that Join
+   order decides which definition lands in which unit TU; in stage 7 the driver's StringJoin fixes
+   the order of the table functions in front of main().
 
-   The `Tuples` in stage 1 runs LAST-SLOT-FASTEST, and stages 1, 3 and 5 all rely on that alignment. *)
+   The `Tuples` in stage 1 runs LAST-SLOT-FASTEST, and stages 1, 5 and 7 all rely on that alignment. *)
 
-(* `mIdx` is the MPoly var index (0-based) of the Matsubara frequency, or -1 for "not a finite-T
-   flow / unknown". When it is >= 0 the generator proves Matsubara evenness while it contracts (see
-   the ntMEven thread below) and emits the verdict as a constant in the traces header. *)
-emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kns_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False, mIdx_:-1] :=
-  Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], str, tmpl, pre, unitPre, unitInc, nUnits, units, decl, diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeysLen, netTraceRows, netDressRows, netScalarRows, dsInt, dsGet, lsInt, lsGet, dcInt, dcGet, dlInt, dlGet, drInt, drGet, scCache, slotCombo, dPoolCse, lPoolCse, distinctSubs, nSub, nReused, sdnDefs, slnDefs, sdnCDecl, slnCDecl, tableBag, emitBigTable,
-    chpDefs, chpCDecl, optpDefs, optpCDecl, sdchrDefs, sdchrCDecl, sdslrDefs, sdslrCDecl, dressAtomIds, colMainDecls, colChunkDefs},
-    str[x_] := ToString[x];
-(* The four big index/scalar tables and the colour/group tables are emitted as TOP-LEVEL chunk
-   functions (ntBigTableFns) that main() then calls, because inline they make main() large enough to
-   break the compiler. Their DEFINITIONS therefore have to be prepended to main() after the body is
-   built — so the body's construction collects them as a side effect, into this bag.
-   The ORDER is fixed by the left-to-right evaluation of the StringJoin arguments below and is
-   load-bearing: it decides the order the table functions appear in the generator source. *)
-    tableBag = Internal`Bag[];
-(* Emit one big table: stuff its definition into the bag, and return the `<lhs> = <call>;` line that
-   goes in main(). *)
-    emitBigTable[nm_String, ret_String, rows_List, lhs_String] :=
-      With[{t = ntBigTableFns[nm, ret, rows]},
-        Internal`StuffBag[tableBag, t[[1]]];
-        "  " <> lhs <> " = " <> t[[2]] <> ";\n"];
-(* DRESSED nets (symbolic dressing collection): a core may be ntDressedCore[chainStr, slotsStr].
-   Traces are dressing-stripped, so the trace table is PLAIN MPoly on both paths: a dressed sub-term's
-   structural trace contracts via numeric_value_dressed_netval_mp, and its dressing rides the
-   per-sub-term scalar (dsc) + monomial (sdr, atom ids), assembled into the per-net DPoly by the
-   phase-B fold (fold_groups_streaming_dressed). Combinations differing only in dressing thus share
-   ONE trace. The dressings themselves are kind-2 `dress` env leaves filled by fm.dress. *)
-    hasDressed = !FreeQ[invNets, _ntDressedCore];
-    (* shared wrapper templates so the net-builder strings compile. *)
-    tmpl = "template<int Mu,int Nu,int Lb,int Mask,int Inv> NetVal tproj(){ return projT(Mu,Nu,Lb,Inv); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int Inv> NetVal lproj(){ return projL(Mu,Nu,Lb,Inv); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int InvS> NetVal mproj(){ return projM(Mu,Nu,Lb,InvS); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int Inv,int InvS> NetVal eproj(){ return projE(Mu,Nu,Lb,Inv,InvS); }\n" <> "template<int Mu,int Nu> NetVal lmetric(){ return met(Mu,Nu); }\n" <> "template<int Lbl,int Base,int Mask> NetVal lvec(){ return vec(Lbl,Base); }\n" <> "template<int A,int B,int C,int D> NetVal leps(){ return epsilon(A,B,C,D); }\n" <> "inline NetVal konst(double c){ return NetVal{PTerm{Cx{c,0}, {}}}; }\n" <> "template<class L> struct litco;\n" <> "template<numtracer::Cx C> struct litco<numtracer::Lit<C>>{ static constexpr numtracer::Cx v=C; };\n" <> "template<class L> NetVal sc(NetVal x){ return scale(litco<L>::v, std::move(x)); }\n";
-(* STAGE 1: sub-term expansion. Per net, a colour group is a SUM of sub-terms: invNets[i] = {core_b…}
-   (a DiracNet literal for a gamma branch, a Lorentz NetVal for a gamma-free one), invRest[i] =
-   {{rest_b, scal_b}…} parallel. Each branch yields {ds, ls, scal, dc, dl, dr} columns (usually one
-   sub-term). A DRESSED branch expands the Cartesian product of its chain's slot options, each a
-   triple {structStr, num, dr}: the structures (dl) form the trace key, ∏ num folds into the scalar,
-   and the dress-atom multiset (dr) becomes the DPoly key. Non-dressed branches carry an empty dress key.
+(* ---- helpers --------------------------------------------------------------------------------- *)
 
-   The five key columns (Dirac net, Lorentz net, chain, structural option tuple, dress multiset) are
-   interned HERE, once per distinct value, so the dedup join works on integers. Byte-identity:
-   `ntMkIntern` assigns ids in first-appearance order along the walk nets -> cores -> combinations
-   (`Tuples` last-slot-fastest), which is the order the join relies on (I1). *)
+(* rows -> distinct rows (first-appearance order) and each row's 0-based index into them. With
+   "Values", first intern the row ENTRIES the same way, then hash-cons the rows of value indices:
+   rows alone differ while their entries repeat. *)
+ntHashConsRows[rows_List] :=
+  With[{u = DeleteDuplicates[rows]},
+    <|"Rows" -> u, "RowIdx" -> AssociationThread[u -> Range[Length[u]] - 1] /@ rows|>];
+
+ntHashConsRows[rows_List, "Values"] :=
+  With[{vals = DeleteDuplicates[Flatten[rows, 1]]},
+    Append[ntHashConsRows[Map[AssociationThread[vals -> Range[Length[vals]] - 1], rows, {2}]],
+      "Values" -> vals]];
+
+(* One big main() table as top-level chunk functions (ntBigTableFns): inline, these tables make
+   main() large enough to break the compiler. Returns {definitions, the `<lhs> = <call>;` line}. *)
+ntGenBigTable[nm_String, ret_String, rows_List, lhs_String] :=
+  With[{t = ntBigTableFns[nm, ret, rows]},
+    {t[[1]], "  " <> lhs <> " = " <> t[[2]] <> ";\n"}];
+
+(* LPT bin-packing: largest definition first, into the currently-smallest unit. Def sizes are
+   skewed, and ntChunkDef bounds any single def to ~$ntDefChunk, so the size target is reachable.
+   `Ordering` breaks ties by index, so the input order decides the packing. Returns nUnits lists. *)
+ntLptBinPack[defs_List, nUnits_Integer] :=
+  Module[{lens = StringLength /@ defs, order, loads = ConstantArray[0, nUnits], bin},
+    order = Reverse @ Ordering[lens];
+    bin = Table[With[{b = First @ Ordering[loads, 1]}, loads[[b]] += lens[[d]]; b], {d, order}];
+    Lookup[GroupBy[Transpose[{bin, defs[[order]]}], First -> Last], Range[nUnits], {}]];
+
+(* ---- STAGE 1: sub-term expansion + interning --------------------------------------------------
+   Per net, a colour group is a SUM of sub-terms: invNets[i] = {core_b…} (a DiracNet literal for a
+   gamma branch, a Lorentz NetVal for a gamma-free one), invRest[i] = {{rest_b, scal_b}…} parallel.
+   Each branch yields {ds, ls, scal, dc, dl, dr} columns (usually one sub-term). A DRESSED branch
+   (ntDressedCore[chainStr, slotsStr]) expands the Cartesian product of its chain's slot options,
+   each a triple {structStr, num, dr}: the structures (dl) form the trace key, ∏ num folds into the
+   scalar, and the dress-atom multiset (dr) becomes the DPoly key. Non-dressed branches carry an
+   empty dress key. Traces are dressing-stripped, so combinations differing only in dressing share
+   ONE trace; the dressing rides the per-sub-term scalar + monomial into the phase-B fold.
+
+   The five key columns are interned HERE, once per distinct value, so the dedup join works on
+   integers. Byte-identity: `ntMkIntern` assigns ids in first-appearance order along the walk
+   nets -> cores -> combinations (`Tuples` last-slot-fastest), which is the order the join relies
+   on (I1). *)
+ntGenExpandSubTerms[invNets_, invRest_] :=
+  Module[{dsInt, dsGet, lsInt, lsGet, dcInt, dcGet, dlInt, dlGet, drInt, drGet, scCache = <||>,
+          slotCombo, cols, ntT},
     {dsInt, dsGet} = ntMkIntern[];
     {lsInt, lsGet} = ntMkIntern[];
     {dcInt, dcGet} = ntMkIntern[];
@@ -209,7 +218,6 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    per distinct option set. Returns {dlIds, drIds, nums, n} from one call so the columns can never
    desync: `Tuples` and `Flatten[Outer[...]]` both vary the last slot fastest, and that alignment
    between a structure tuple and its numeric coefficient is load-bearing. *)
-    scCache = <||>;
     slotCombo[slotOpts_] :=
       Lookup[scCache, Key[slotOpts],
         scCache[slotOpts] =
@@ -227,90 +235,92 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                Developer`ToPackedArray[drInt /@ (Sort[Catenate[#]]& /@ Tuples[dress])]],
              Flatten[Outer[Times, Sequence @@ nums]],
              n}]];
-    With[{ntT = First @ AbsoluteTiming[
-    {diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, dressAtomIds} =
-      Transpose @
-        MapThread[
-          Function[{cores, rss},
-            If[cores === {},
-              {{}, {}, {}, {}, {}, {}},
+    ntT = First @ AbsoluteTiming[
+      cols =
+        Transpose @
+          MapThread[
+            Function[{cores, rss},
+              If[cores === {},
+                {{}, {}, {}, {}, {}, {}},
 (* COLUMN-ORIENTED: a dressed flow has millions of sub-terms, so nothing is evaluated per sub-term
    at Mathematica level. Every column is a constant repeated n times, a `Tuples`, or an `Outer`
    product (see slotCombo); `Join @@@ Transpose[...]` regroups the per-core column tuples into six
    whole-net columns. *)
-              Join @@@ Transpose @
-                  MapThread[
-                    Function[{nv, rv, scal},
-                      Module[{lsStr = If[rv === "", "NetVal{}", rv]},
-                        Which[
-                          (* dressed numerator: expand slot options → structural sub-terms *)
-                          MatchQ[nv, _ntDressedCore],
-                            With[{chain = nv[[1]], slotOpts = nv[[2]]},
-                              If[slotOpts === {},
-                                {{dsInt["DiracNet{}"]}, {lsInt[lsStr]}, ntPackCx[{scal}], {dcInt[chain]}, {dlInt[{}]}, {drInt[{}]}},
+                Join @@@ Transpose @
+                    MapThread[
+                      Function[{nv, rv, scal},
+                        Module[{lsStr = If[rv === "", "NetVal{}", rv]},
+                          Which[
+                            (* dressed numerator: expand slot options → structural sub-terms *)
+                            MatchQ[nv, _ntDressedCore],
+                              With[{chain = nv[[1]], slotOpts = nv[[2]]},
+                                If[slotOpts === {},
+                                  {{dsInt["DiracNet{}"]}, {lsInt[lsStr]}, ntPackCx[{scal}], {dcInt[chain]}, {dlInt[{}]}, {drInt[{}]}},
 (* dl = this combination's STRUCTURAL option-string LIST (one dressing-free structStr per chain
    slot), interned so the table emitter still pools the distinct structures; the numeric Cx folds
    into the sub-term scalar and the dress ids become the DPoly key. *)
-                                Module[{tb = slotCombo[slotOpts], n},
-                                  n = tb[[4]];
-                                  {ConstantArray[dsInt["DiracNet{}"], n],
-                                   ConstantArray[lsInt[lsStr], n],
-                                   ntPackCx[scal * tb[[3]]],
-                                   ConstantArray[dcInt[chain], n],
-                                   tb[[1]],
-                                   tb[[2]]}]]],
-                          (* gamma branch: DiracNet + projector rest *)
-                          StringStartsQ[nv, "DiracNet"],
-                            {{dsInt[nv]}, {lsInt[lsStr]}, ntPackCx[{scal}], {dcInt["std::vector<DChainTok>{}"]}, {dlInt[{}]}, {drInt[{}]}},
-                          (* gamma-free branch: whole net is the rest *)
-                          True,
-                            {{dsInt["DiracNet{}"]}, {lsInt[nv]}, ntPackCx[{scal}], {dcInt["std::vector<DChainTok>{}"]}, {dlInt[{}]}, {drInt[{}]}}]]],
-                    {cores, rss[[All, 1]], rss[[All, 2]]}]]],
-          {invNets, invRest}];]},
-      ntLog["[prof] sub-term expansion: ", ntT, " s"]];
-(* ---- colour-net table: chunk DEFINITIONS on the parallel -O0 units, assembler in the main TU ----
+                                  Module[{tb = slotCombo[slotOpts], n},
+                                    n = tb[[4]];
+                                    {ConstantArray[dsInt["DiracNet{}"], n],
+                                     ConstantArray[lsInt[lsStr], n],
+                                     ntPackCx[scal * tb[[3]]],
+                                     ConstantArray[dcInt[chain], n],
+                                     tb[[1]],
+                                     tb[[2]]}]]],
+                            (* gamma branch: DiracNet + projector rest *)
+                            StringStartsQ[nv, "DiracNet"],
+                              {{dsInt[nv]}, {lsInt[lsStr]}, ntPackCx[{scal}], {dcInt["std::vector<DChainTok>{}"]}, {dlInt[{}]}, {drInt[{}]}},
+                            (* gamma-free branch: whole net is the rest *)
+                            True,
+                              {{dsInt["DiracNet{}"]}, {lsInt[nv]}, ntPackCx[{scal}], {dcInt["std::vector<DChainTok>{}"]}, {dlInt[{}]}, {drInt[{}]}}]]],
+                      {cores, rss[[All, 1]], rss[[All, 2]]}]]],
+            {invNets, invRest}];];
+    ntLog["[prof] sub-term expansion: ", ntT, " s"];
+    ntStageResult["ntGenExpandSubTerms",
+      {"DiracNetIds", "LorNetIds", "SubScalars", "ChainIds", "SlotTupleIds", "DressMonoIds",
+       "DiracNetPool", "LorNetPool", "ChainPool", "SlotTuplePool", "DressMonoPool"},
+      <|"DiracNetIds" -> cols[[1]], "LorNetIds" -> cols[[2]], "SubScalars" -> cols[[3]],
+        "ChainIds" -> cols[[4]], "SlotTupleIds" -> cols[[5]], "DressMonoIds" -> cols[[6]],
+        "DiracNetPool" -> dsGet[], "LorNetPool" -> lsGet[], "ChainPool" -> dcGet[],
+        "SlotTuplePool" -> dlGet[], "DressMonoPool" -> drGet[]|>]];
+
+(* ---- STAGE 2: colour-net tables ---------------------------------------------------------------
    The distinct colour nets are one `SUNNet{...}` literal each; on a large colour graph the table can
    dominate the main TU, which is the one serial -O1 compile. So the chunk functions ride the
-   LPT-packed -O0 units like every other builder (colChunkDefs -> allDefs below), with external
-   (non-static) linkage, and only forward decls + the assembler stay in the main TU. *)
-    {colMainDecls, colChunkDefs} =
-      With[{uCol = DeleteDuplicates[colourNets]},
-        If[uCol === {},
-          {"static std::vector<SUNNet> ntColNets(){ return {}; }\n", {}},
-          Module[{envDecl, chunks},
-            envDecl = StringJoin["SUNEnv sun" <> # <> "(" <> # <> "); "& /@ DeleteDuplicates @ Flatten @ StringCases[uCol, "sun" ~~ r : DigitCharacter.. ~~ "." :> r]];
-            chunks = ntSplitByChars[uCol, 2];
-            {StringJoin[
-               MapIndexed["void ntColNets_c" <> ToString[#2[[1]] - 1] <> "(std::vector<SUNNet>& o);\n"&, chunks],
-               "static std::vector<SUNNet> ntColNets(){ std::vector<SUNNet> o; o.reserve(" <> ToString[Length[uCol]] <> "); " <> StringJoin[Table["ntColNets_c" <> ToString[k - 1] <> "(o); ", {k, Length[chunks]}]] <> "return o; }\n"],
-             MapIndexed["void ntColNets_c" <> ToString[#2[[1]] - 1] <> "(std::vector<SUNNet>& o){ " <> envDecl <> StringJoin[("o.push_back(" <> # <> "); ")& /@ #1] <> "}\n"&, chunks]}]]];
-    pre =
-      StringJoin[
-        "// GENERATED by MakeNTKernel — do not edit. Numeric matrix-product tensor traces.\n",
-(* one umbrella header pulls the whole engine API (network/dirac/gen/sun_net/numeric_*/core) for
-   this single generator TU. The parallel -O0 net-builder units below deliberately keep their
-   minimal includes — pulling the umbrella into each would re-parse the whole engine per unit and
-   regress generation time. The emitted kernel stays minimal too (runtime.hpp + sun_data.hpp). *)
-        "#include \"numtracer/numtracer.hpp\"\n",
-(* the two contraction phases (phase A: contract each distinct trace once over a flat work list;
-   phase B: fold each net's traces as a balanced tree). Host-only (it spawns threads) and MAIN-TU
-   ONLY — the net-builder units are compiled -fno-exceptions and must not see it. *)
-        "#include \"numtracer/numeric/trace_fold.hpp\"\n",
-        "#include <iostream>\n#include <string>\n#include <utility>\n#include <iterator>\n#include <vector>\n#include <array>\n#include <cstdlib>\n",
-        "#include <thread>\n#include <atomic>\n#include <mutex>\n#include <chrono>\n#include <cstdio>\n#include <algorithm>\n#include <system_error>\n",
-        "#include <unistd.h>\n#if defined(__GLIBC__)\n#include <malloc.h>\n#endif\n",
-(* Resident set in MB, straight from /proc — so the generator can report its OWN peak rather than
-   the caller having to wrap it in `/usr/bin/time`. Returns 0 where /proc is absent. *)
-        "static double ntRssMB(){ long pages=0; if(FILE* f=std::fopen(\"/proc/self/statm\",\"r\")){ long tot=0; if(std::fscanf(f,\"%ld %ld\",&tot,&pages)!=2) pages=0; std::fclose(f); } return pages*(double)sysconf(_SC_PAGESIZE)/1048576.0; }\n",
-        "#include <sstream>\n#include <unordered_map>\n",
-        "using numtracer::Cx;\n",
-        "namespace numtracer::network {\n",
-        tmpl,
-        "}\n",
-        "using namespace numtracer::network;\nusing namespace numtracer::numeric;\n",
-(* colour-net table: forward decls + assembler only — the chunk DEFINITIONS ride the -O0 units
-   (colChunkDefs, hoisted above), keeping the 6+ MB table off the serial -O1 main-TU compile. *)
-        colMainDecls];
+   LPT-packed -O0 units like every other builder (ChunkDefs), with external (non-static) linkage,
+   and only forward decls + the assembler ntColNets() stay in the main TU (MainDecls).
+   colnets are HASH-CONSED: nets differing only in their Lorentz/Dirac part share a colour net, so
+   sun_value_cx runs once per DISTINCT net and colR maps each net to it (ColRDef, MainText). *)
+ntGenColourTables[colourNets_, nNet_] :=
+  Module[{hc = ntHashConsRows[colourNets], uCol, mainDecls, chunkDefs, colR},
+    uCol = hc["Rows"];
+    {mainDecls, chunkDefs} =
+      If[uCol === {},
+        {"static std::vector<SUNNet> ntColNets(){ return {}; }\n", {}},
+        Module[{envDecl, chunks},
+          envDecl = StringJoin["SUNEnv sun" <> # <> "(" <> # <> "); "& /@ DeleteDuplicates @ Flatten @ StringCases[uCol, "sun" ~~ r : DigitCharacter.. ~~ "." :> r]];
+          chunks = ntSplitByChars[uCol, 2];
+          {StringJoin[
+             MapIndexed["void ntColNets_c" <> ToString[#2[[1]] - 1] <> "(std::vector<SUNNet>& o);\n"&, chunks],
+             "static std::vector<SUNNet> ntColNets(){ std::vector<SUNNet> o; o.reserve(" <> ToString[Length[uCol]] <> "); " <> StringJoin[Table["ntColNets_c" <> ToString[k - 1] <> "(o); ", {k, Length[chunks]}]] <> "return o; }\n"],
+           MapIndexed["void ntColNets_c" <> ToString[#2[[1]] - 1] <> "(std::vector<SUNNet>& o){ " <> envDecl <> StringJoin[("o.push_back(" <> # <> "); ")& /@ #1] <> "}\n"&, chunks]}]];
+    colR = ntGenBigTable["ntColR", "std::vector<int>", ntIntStrs[hc["RowIdx"]], "std::vector<int> colR"];
+    ntStageResult["ntGenColourTables", {"MainDecls", "ChunkDefs", "ColRDef", "MainText"},
+      <|"MainDecls" -> mainDecls, "ChunkDefs" -> chunkDefs, "ColRDef" -> colR[[1]],
+        "MainText" ->
+          StringJoin["  std::vector<SUNNet> colnetsU = ntColNets();\n", colR[[2]],
+            "  std::vector<numtracer::Cx> colvU(colnetsU.size());\n",
+            "  for(size_t i=0;i<colnetsU.size();++i) colvU[i]=sun_value_cx(colnetsU[i]);\n",
+            "  std::vector<numtracer::Cx> colv(" <> ToString[nNet] <> ");\n",
+            "  for(int i=0;i<" <> ToString[nNet] <> ";++i) colv[i]=colvU[colR[i]];\n"]|>]];
+
+(* ---- STAGE 3: preambles -----------------------------------------------------------------------
+   Pre: the main TU's includes, helpers and the colour-net assembler. UnitPre: the header every -O0
+   net-builder unit starts with. *)
+ntGenPreambles[hasDressed_, colMainDecls_String, colourUnitsQ_] :=
+  Module[{tmpl, unitInc},
+    (* shared wrapper templates so the net-builder strings compile. *)
+    tmpl = "template<int Mu,int Nu,int Lb,int Mask,int Inv> NetVal tproj(){ return projT(Mu,Nu,Lb,Inv); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int Inv> NetVal lproj(){ return projL(Mu,Nu,Lb,Inv); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int InvS> NetVal mproj(){ return projM(Mu,Nu,Lb,InvS); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int Inv,int InvS> NetVal eproj(){ return projE(Mu,Nu,Lb,Inv,InvS); }\n" <> "template<int Mu,int Nu> NetVal lmetric(){ return met(Mu,Nu); }\n" <> "template<int Lbl,int Base,int Mask> NetVal lvec(){ return vec(Lbl,Base); }\n" <> "template<int A,int B,int C,int D> NetVal leps(){ return epsilon(A,B,C,D); }\n" <> "inline NetVal konst(double c){ return NetVal{PTerm{Cx{c,0}, {}}}; }\n" <> "template<class L> struct litco;\n" <> "template<numtracer::Cx C> struct litco<numtracer::Lit<C>>{ static constexpr numtracer::Cx v=C; };\n" <> "template<class L> NetVal sc(NetVal x){ return scale(litco<L>::v, std::move(x)); }\n";
 (* The shared header block goes through a per-flow `_pch.hh` so the build can precompile it ONCE
    instead of per unit TU (unit compiles are header-bound; the PCH cuts their work ~5x).
    The `#ifndef NT_GEN_PCH` guard keeps the emitted source STANDALONE-compilable (ab_gen.sh and hand
@@ -325,107 +335,99 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
           "#include \"numtracer/numeric/numeric_contract.hpp\"\n",
           ""
         ] <>
-(* colour-net chunk defs ride the units (see colChunkDefs above); they build SUNNet literals
-   through function-local SUNEnvs, so those units need the SU(N) engine header the net builders
-   otherwise don't touch. Gated: colour-free flows keep their units byte-identical. *)
-        If[colChunkDefs =!= {},
+(* colour-net chunk defs ride the units (stage 2); they build SUNNet literals through function-local
+   SUNEnvs, so those units need the SU(N) engine header the net builders otherwise don't touch.
+   Gated: colour-free flows keep their units byte-identical. *)
+        If[colourUnitsQ,
           "#include \"numtracer/network/sun_net.hpp\"\n",
           ""
         ];
-    unitPre =
-      "// GENERATED by MakeNTKernel — do not edit. Numeric net-builder unit (compiled -O0).\n" <>
-        "#ifndef NT_GEN_PCH\n" <> unitInc <> "#endif\n" <>
-        "using numtracer::Cx;\nnamespace numtracer::network {\n" <> tmpl <> "}\nusing namespace numtracer::network;\n" <>
-        If[hasDressed,
-          "using namespace numtracer::numeric;\n",
-          ""];
-(* STAGE 2: NET-LEVEL CSE. Dense projections emit the SAME net sub-term thousands of times (e.g. the
-   σ^μν quark-gluon vertex: ~500x), ballooning the generator source and its -O0 compile. Hash-cons each
-   recurring net term into a shared accessor `lc<k>()` / `dc<k>()` (a function-local `static const`,
-   so it is also BUILT once at run time). Trivial/empty literals and unique terms stay inline. Runs on
-   both paths; each use copies the shared NetVal/DiracNet, so the committed kernel is unchanged. *)
-    cseDefs = {};
-    cseDecls = "";
-    Module[{dPool = dsGet[], lPool = lsGet[], lCnt, dCnt, lMap = <||>, dMap = <||>, li = 0, di = 0},
+    ntStageResult["ntGenPreambles", {"Pre", "UnitPre"},
+      <|"Pre" ->
+          StringJoin[
+            "// GENERATED by MakeNTKernel — do not edit. Numeric matrix-product tensor traces.\n",
+(* one umbrella header pulls the whole engine API (network/dirac/gen/sun_net/numeric_*/core) for
+   this single generator TU. The parallel -O0 net-builder units deliberately keep their minimal
+   includes — pulling the umbrella into each would re-parse the whole engine per unit and regress
+   generation time. The emitted kernel stays minimal too (runtime.hpp + sun_data.hpp). *)
+            "#include \"numtracer/numtracer.hpp\"\n",
+(* the two contraction phases (phase A: contract each distinct trace once over a flat work list;
+   phase B: fold each net's traces as a balanced tree). Host-only (it spawns threads) and MAIN-TU
+   ONLY — the net-builder units are compiled -fno-exceptions and must not see it. *)
+            "#include \"numtracer/numeric/trace_fold.hpp\"\n",
+            "#include <iostream>\n#include <string>\n#include <utility>\n#include <iterator>\n#include <vector>\n#include <array>\n#include <cstdlib>\n",
+            "#include <thread>\n#include <atomic>\n#include <mutex>\n#include <chrono>\n#include <cstdio>\n#include <algorithm>\n#include <system_error>\n",
+            "#include <unistd.h>\n#if defined(__GLIBC__)\n#include <malloc.h>\n#endif\n",
+(* Resident set in MB, straight from /proc — so the generator can report its OWN peak rather than
+   the caller having to wrap it in `/usr/bin/time`. Returns 0 where /proc is absent. *)
+            "static double ntRssMB(){ long pages=0; if(FILE* f=std::fopen(\"/proc/self/statm\",\"r\")){ long tot=0; if(std::fscanf(f,\"%ld %ld\",&tot,&pages)!=2) pages=0; std::fclose(f); } return pages*(double)sysconf(_SC_PAGESIZE)/1048576.0; }\n",
+            "#include <sstream>\n#include <unordered_map>\n",
+            "using numtracer::Cx;\n",
+            "namespace numtracer::network {\n",
+            tmpl,
+            "}\n",
+            "using namespace numtracer::network;\nusing namespace numtracer::numeric;\n",
+            colMainDecls],
+        "UnitPre" ->
+          "// GENERATED by MakeNTKernel — do not edit. Numeric net-builder unit (compiled -O0).\n" <>
+            "#ifndef NT_GEN_PCH\n" <> unitInc <> "#endif\n" <>
+            "using numtracer::Cx;\nnamespace numtracer::network {\n" <> tmpl <> "}\nusing namespace numtracer::network;\n" <>
+            If[hasDressed,
+              "using namespace numtracer::numeric;\n",
+              ""]|>]];
+
+(* ---- STAGE 4: net-level CSE -------------------------------------------------------------------
+   Dense projections emit the SAME net sub-term thousands of times (e.g. the σ^μν quark-gluon vertex:
+   ~500x), ballooning the generator source and its -O0 compile. Hash-cons each recurring net term
+   into a shared accessor `lc<k>()` / `dc<k>()` (a function-local `static const`, so it is also BUILT
+   once at run time). Trivial/empty literals and unique terms stay inline. Each use copies the shared
+   NetVal/DiracNet, so the committed kernel is unchanged. *)
+ntGenNetCSE[dPool_List, lPool_List, diracNetIds_, lorNetIds_] :=
+  Module[{lCnt, dCnt, lMap = <||>, dMap = <||>, li = 0, di = 0, dPoolCse, lPoolCse, ntT},
 (* Counted by interned ID. `Range[0, n-1]` yields the counts in id order, i.e. first-appearance
    order, which fixes the lc<k>/dc<k> numbering. *)
-      With[{
-        ntT =
-          First @
-            AbsoluteTiming[
-              lCnt = Lookup[Counts[Flatten[lorentzNetStrs]], Range[0, Length[lPool] - 1], 0];
-              dCnt = Lookup[Counts[Flatten[diracNetStrs]], Range[0, Length[dPool] - 1], 0];]},
-        ntLog["[prof] CSE Counts (", Total[lCnt], "+", Total[dCnt], " terms): ", ntT, " s"]];
-      Do[
-        With[{t = lPool[[k]]},
-          If[lCnt[[k]] >= 2 && t =!= "NetVal{}" && t =!= "",
-            lMap[t] = "lc" <> str[li];
-            li++]],
-        {k, Length[lPool]}];
-      Do[
-        With[{t = dPool[[k]]},
-          If[dCnt[[k]] >= 2 && t =!= "DiracNet{}" && t =!= "",
-            dMap[t] = "dc" <> str[di];
-            di++]],
-        {k, Length[dPool]}];
-      cseDefs =
-        Join[
-          KeyValueMap[
-            Function[{t, nm},
-              "const DiracNet& " <> nm <> "(){ static const DiracNet v = " <> t <> "; return v; }"],
-            dMap],
-          KeyValueMap[
-            Function[{t, nm},
-              "const NetVal& " <> nm <> "(){ static const NetVal v = " <> t <> "; return v; }"],
-            lMap]];
-      cseDecls =
-        StringJoin[
-          Riffle[
-            Join[
-              KeyValueMap[
-                Function[{t, nm},
-                  "const DiracNet& " <> nm <> "();"],
-                dMap],
-              KeyValueMap[
-                Function[{t, nm},
-                  "const NetVal& " <> nm <> "();"],
-                lMap]],
-            "\n"]];
+    ntT = First @ AbsoluteTiming[
+      lCnt = Lookup[Counts[Flatten[lorNetIds]], Range[0, Length[lPool] - 1], 0];
+      dCnt = Lookup[Counts[Flatten[diracNetIds]], Range[0, Length[dPool] - 1], 0];];
+    ntLog["[prof] CSE Counts (", Total[lCnt], "+", Total[dCnt], " terms): ", ntT, " s"];
+    Do[
+      With[{t = lPool[[k]]},
+        If[lCnt[[k]] >= 2 && t =!= "NetVal{}" && t =!= "",
+          lMap[t] = "lc" <> ToString[li];
+          li++]],
+      {k, Length[lPool]}];
+    Do[
+      With[{t = dPool[[k]]},
+        If[dCnt[[k]] >= 2 && t =!= "DiracNet{}" && t =!= "",
+          dMap[t] = "dc" <> ToString[di];
+          di++]],
+      {k, Length[dPool]}];
 (* The rewrite is a POOL substitution: every occurrence of a net term shares one pool entry, so this
    is O(#distinct). Injective, because an `lc<k>()` / `dc<k>()` accessor can never collide with a net
    literal, so the pool's first-appearance order — and every downstream id — is untouched. *)
-      With[{
-        ntT =
-          First @
-            AbsoluteTiming[
-              dPoolCse = If[KeyExistsQ[dMap, #], dMap[#] <> "()", #]& /@ dPool;
-              lPoolCse = If[KeyExistsQ[lMap, #], lMap[#] <> "()", #]& /@ lPool;]},
-        ntLog["[prof] CSE ref-rewrite: ", ntT, " s"]];
-      ntLog["[cse] net terms: lnet ", Total[lCnt], "->", Length[lMap], " distinct, dnet ", Total[dCnt], "->", Length[dMap], " distinct shared builders"]
-    ];
-(* STAGE 3: the dedup join (ntGenDedupJoin; design and invariants there).
-   NT_GEN_NO_DEDUP=1 turns it off: every occurrence is its own trace, nothing is merged, dropped or
-   cached. It is the escape hatch and the control for the equivalence test, which must compare kernel
-   VALUES: dedup changes GlobalEnv interning order and so renumbers every sN, making a byte-diff
-   meaningless. *)
-    ntNoDedup = ntEnvFlag["NT_GEN_NO_DEDUP"];
-    With[{ntT = First @ AbsoluteTiming[
-      With[{joined =
-          ntGenDedupJoin[
-            diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, dressAtomIds,
-            dPoolCse, lPoolCse, dcGet[], dlGet[], drGet[], hasDressed, ntNoDedup]},
-        subKeysLen   = joined["subKeysLen"];
-        netTraceRows  = joined["netTraceRows"];
-        netDressRows  = joined["netDressRows"];
-        netScalarRows = joined["netScalarRows"];
-        distinctSubs = joined["distinctSubs"];
-        nSub         = joined["nSub"];
-        nReused      = joined["nReused"];
-(* Published for the later COMPILE step (CodegenKernel.m), which logs it next to the main-TU
-   optimisation level. Set HERE, at the hand-off, so a stale value from a previous flow never leaks
-   into the next one. *)
-        $ntGenNSub = nSub;]]},
-      ntLog["[prof] sub-term dedup join: ", ntT, " s"]];
+    ntT = First @ AbsoluteTiming[
+      dPoolCse = If[KeyExistsQ[dMap, #], dMap[#] <> "()", #]& /@ dPool;
+      lPoolCse = If[KeyExistsQ[lMap, #], lMap[#] <> "()", #]& /@ lPool;];
+    ntLog["[prof] CSE ref-rewrite: ", ntT, " s"];
+    ntLog["[cse] net terms: lnet ", Total[lCnt], "->", Length[lMap], " distinct, dnet ", Total[dCnt], "->", Length[dMap], " distinct shared builders"];
+    ntStageResult["ntGenNetCSE", {"Defs", "Decls", "DiracPool", "LorPool"},
+      <|"Defs" ->
+          Join[
+            KeyValueMap["const DiracNet& " <> #2 <> "(){ static const DiracNet v = " <> #1 <> "; return v; }"&, dMap],
+            KeyValueMap["const NetVal& " <> #2 <> "(){ static const NetVal v = " <> #1 <> "; return v; }"&, lMap]],
+        "Decls" ->
+          StringJoin[
+            Riffle[
+              Join[
+                KeyValueMap["const DiracNet& " <> #2 <> "();"&, dMap],
+                KeyValueMap["const NetVal& " <> #2 <> "();"&, lMap]],
+              "\n"]],
+        "DiracPool" -> dPoolCse, "LorPool" -> lPoolCse|>]];
+
+(* ---- STAGE 5 log: the dedup join's summary (regen_check.sh greps the "[cse] sub-terms:" line) ---- *)
+ntGenLogDedup[joined_Association, noDedup_] :=
+  With[{subKeysLen = joined["subKeysLen"], netTraceRows = joined["netTraceRows"],
+        nSub = joined["nSub"], nReused = joined["nReused"]},
     ntLog[
       "[cse] sub-terms: ",
       Total[subKeysLen],
@@ -442,70 +444,53 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
       " (longest ",
       Max[Append[Length /@ netTraceRows, 0]],
       ")",
-      If[ntNoDedup,
+      If[noDedup,
         " [NT_GEN_NO_DEDUP]",
-        ""]];
-(* STAGE 4: UNIT TABLES. The distinct traces are emitted as ONE flat table each, chunked by
-   ntChunkDef and bin-packed into the -O0 unit TUs; the nets reference them by index. Timed apart
-   from the main() data tables: this half is dominated by ntChunkDef's dedup scans, that one by
-   integer-to-text. *)
-    With[{ntT = First @ AbsoluteTiming[
-    {sdnDefs, sdnCDecl} =
-      ntChunkDefs[
-        "sdn",
-        "std::vector<DiracNet>",
-        If[nSub === 0,
-          {{}},
-          {distinctSubs[[All, 1]]}]];
-    {slnDefs, slnCDecl} =
-      ntChunkDefs[
-        "sln",
-        "std::vector<NetVal>",
-        If[nSub === 0,
-          {{}},
-          {distinctSubs[[All, 2]]}]];
+        ""]]];
+
+(* ---- STAGE 6: unit tables ---------------------------------------------------------------------
+   The distinct traces are emitted as ONE flat table each, chunked by ntChunkDef and bin-packed into
+   the -O0 unit TUs; the nets reference them by index. *)
+
 (* DRESSED slot tables — INTERNED. Thousands of sub-terms share a handful of chains and draw their
    DSlotOpts from a tiny option pool, so per-sub-term literals would bloat the generator source ~20x.
    Emit the distinct chains (`chp`) and options (`optp`) ONCE, and each sub-term as INDICES (`sdchR`:
    its chain; `sdslR`: one option per slot); main() rebuilds sdch[k]/sdsl[k] in an O(nSub) loop.
    Non-dressed sub-terms carry an empty chain, keeping the sdch[k].empty() fast path. *)
-    {chpDefs, chpCDecl, sdchrDefs, sdchrCDecl, optpDefs, optpCDecl, sdslrDefs, sdslrCDecl} =
-      If[hasDressed,
-        Module[{chainStrs, combos, uChains, chainPos, uOpts, optPos, chainDefs, chainDecl, chainRefDefs, chainRefDecl, optDefs, optDecl, slotRefDefs, slotRefDecl},
-          chainStrs = If[nSub === 0, {}, distinctSubs[[All, 3]]];
-          (* per sub-term: its option-string LIST ({} for a non-slot sub-term) *)
-          combos    = If[nSub === 0, {}, distinctSubs[[All, 4]]];
-          uChains = DeleteDuplicates[chainStrs];
-          chainPos = AssociationThread[uChains -> Range[Length[uChains]] - 1];
-          uOpts = DeleteDuplicates[Flatten[combos]];
-          optPos = AssociationThread[uOpts -> Range[Length[uOpts]] - 1];
-          {chainDefs, chainDecl} = ntChunkDefs["chp", "std::vector<std::vector<DChainTok>>", {uChains}];
-          {chainRefDefs, chainRefDecl} = ntChunkDefs["sdchR", "std::vector<int>", {ntIntStrs[chainPos /@ chainStrs]}];
-          {optDefs, optDecl} = ntChunkDefs["optp", "std::vector<DSlotOpt>", {uOpts}];
-          {slotRefDefs, slotRefDecl} = ntChunkDefs["sdslR", "std::vector<std::vector<int>>",
-            {ntIntRow[optPos /@ #]& /@ combos}];
-          {chainDefs, chainDecl, chainRefDefs, chainRefDecl, optDefs, optDecl, slotRefDefs, slotRefDecl}],
-        {{}, "", {}, "", {}, "", {}, ""}];
-    chunkDecls = sdnCDecl <> slnCDecl <> chpCDecl <> sdchrCDecl <> optpCDecl <> sdslrCDecl;
-    allDefs = Join[cseDefs, sdnDefs, slnDefs, chpDefs, sdchrDefs, optpDefs, sdslrDefs, colChunkDefs];
-(* Size-aware unit count (~$ntUnitChars per unit, 8..$ntUnitCap): a count-based rule would emit
-   hundreds of tiny TUs (the CSE accessors are many but small), each re-parsing the shared header.
-   Defs are packed by LPT (largest first, into the currently-smallest unit), since def sizes are
-   skewed; ntChunkDef bounds any single def to ~$ntDefChunk, so the target is reachable. The cap must
-   stay above what the size target asks for, or units quietly grow back past it.
-   Total[StringLength /@ ...] avoids materialising every def as one giant string just to measure it. *)
-    nUnits = Min[Min[$ntUnitCap, Max[8, Ceiling[Total[StringLength /@ allDefs] / $ntUnitChars]]], Max[1, Length[allDefs]]];
-    units =
-      If[allDefs === {},
-        {},
-        (unitPre <> StringRiffle[#, "\n"] <> "\n")& /@
-          Module[{lens = StringLength /@ allDefs, order, loads = ConstantArray[0, nUnits], bin},
-            order = Reverse @ Ordering[lens];
-            bin = Table[With[{b = First @ Ordering[loads, 1]}, loads[[b]] += lens[[d]]; b], {d, order}];
-            Lookup[GroupBy[Transpose[{bin, allDefs[[order]]}], First -> Last], Range[nUnits], {}]]];
+ntGenDressedSlotTables[distinctSubs_, nSub_] :=
+  Module[{chainStrs, combos, uChains, chainPos, uOpts, optPos, chainDefs, chainDecl, chainRefDefs,
+          chainRefDecl, optDefs, optDecl, slotRefDefs, slotRefDecl},
+    chainStrs = If[nSub === 0, {}, distinctSubs[[All, 3]]];
+    (* per sub-term: its option-string LIST ({} for a non-slot sub-term) *)
+    combos    = If[nSub === 0, {}, distinctSubs[[All, 4]]];
+    uChains = DeleteDuplicates[chainStrs];
+    chainPos = AssociationThread[uChains -> Range[Length[uChains]] - 1];
+    uOpts = DeleteDuplicates[Flatten[combos]];
+    optPos = AssociationThread[uOpts -> Range[Length[uOpts]] - 1];
+    {chainDefs, chainDecl} = ntChunkDefs["chp", "std::vector<std::vector<DChainTok>>", {uChains}];
+    {chainRefDefs, chainRefDecl} = ntChunkDefs["sdchR", "std::vector<int>", {ntIntStrs[chainPos /@ chainStrs]}];
+    {optDefs, optDecl} = ntChunkDefs["optp", "std::vector<DSlotOpt>", {uOpts}];
+    {slotRefDefs, slotRefDecl} = ntChunkDefs["sdslR", "std::vector<std::vector<int>>",
+      {ntIntRow[optPos /@ #]& /@ combos}];
+    ntStageResult["ntGenDressedSlotTables", {"Defs", "ChunkDecls"},
+      <|"Defs" -> Join[chainDefs, chainRefDefs, optDefs, slotRefDefs],
+        "ChunkDecls" -> chainDecl <> chainRefDecl <> optDecl <> slotRefDecl|>]];
+
+(* the distinct-trace tables sdn (Dirac nets) and sln (Lorentz nets), plus the dressed slot tables *)
+ntGenTraceTables[distinctSubs_, nSub_, hasDressed_] :=
+  Module[{sdnDefs, sdnDecl, slnDefs, slnDecl, dressed},
+    {sdnDefs, sdnDecl} = ntChunkDefs["sdn", "std::vector<DiracNet>", If[nSub === 0, {{}}, {distinctSubs[[All, 1]]}]];
+    {slnDefs, slnDecl} = ntChunkDefs["sln", "std::vector<NetVal>", If[nSub === 0, {{}}, {distinctSubs[[All, 2]]}]];
+    dressed = If[hasDressed, ntGenDressedSlotTables[distinctSubs, nSub], <|"Defs" -> {}, "ChunkDecls" -> ""|>];
+    ntStageResult["ntGenTraceTables", {"Defs", "ChunkDecls"},
+      <|"Defs" -> Join[sdnDefs, slnDefs, dressed["Defs"]],
+        "ChunkDecls" -> sdnDecl <> slnDecl <> dressed["ChunkDecls"]|>]];
+
 (* the shared decl header: net-builder + CSE-accessor forward declarations (the units that call the
    lc<k>()/dc<k>() accessors #include this — emitted ONCE here, not duplicated per unit). *)
-    decl =
+ntGenDeclHeader[hasDressed_, cseDecls_String, chunkDecls_String] :=
+  ntStageResult["ntGenDeclHeader", {"Decl"},
+    <|"Decl" ->
       "// GENERATED by MakeNTKernel — do not edit. Numeric net-builder declarations.\n#pragma once\n" <> "#include \"numtracer/network/network.hpp\"\n#include \"numtracer/network/dirac.hpp\"\n#include <vector>\n" <>
         If[hasDressed,
           "#include \"numtracer/numeric/numeric_contract.hpp\"\n",
@@ -524,193 +509,215 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
         ] <>
 (* chunk helpers of the oversized builders — the bin-packer may put a builder's helpers in a
    different unit than its assembler, so these must be declared here, not per-unit. *)
-        chunkDecls;
-]},
-      ntLog["[prof] unit tables + bin-pack: ", ntT, " s"]];
-    (* component-table init: comp[base][mu] = <MPoly builder>, skipping structural zeros. *)
-    compInit =
-      StringJoin @
-        KeyValueMap[
-          Function[{base, comps},
-            StringJoin @
-              MapIndexed[
-                Function[{s, mu},
-                  If[s === "env.zero()",
-                    "",
-                    "  comp[" <> str[base] <> "][" <> str[mu[[1]] - 1] <> "] = " <> s <> ";\n"]],
-                comps]],
-          compCpp];
-(* STAGES 5-6: the main TU. On a dense flow it is ~100% flat integer tables, so this timer measures
-   integer-to-text throughput. *)
-    With[{ntT = First @ AbsoluteTiming[
-    main =
+        chunkDecls|>];
+
+(* Timed apart from the main() data tables: this half is dominated by ntChunkDef's dedup scans,
+   that one by integer-to-text. *)
+ntGenUnitSources[distinctSubs_, nSub_, hasDressed_, cseDefs_List, cseDecls_String, colChunkDefs_List, unitPre_String] :=
+  Module[{traces, allDefs, nUnits, units, decl, ntT},
+    ntT = First @ AbsoluteTiming[
+      traces = ntGenTraceTables[distinctSubs, nSub, hasDressed];
+      allDefs = Join[cseDefs, traces["Defs"], colChunkDefs];
+(* Size-aware unit count (~$ntUnitChars per unit, 8..$ntUnitCap): a count-based rule would emit
+   hundreds of tiny TUs (the CSE accessors are many but small), each re-parsing the shared header.
+   Total[StringLength /@ ...] avoids materialising every def as one giant string just to measure it. *)
+      nUnits = Min[Min[$ntUnitCap, Max[8, Ceiling[Total[StringLength /@ allDefs] / $ntUnitChars]]], Max[1, Length[allDefs]]];
+      units =
+        If[allDefs === {},
+          {},
+          (unitPre <> StringRiffle[#, "\n"] <> "\n")& /@ ntLptBinPack[allDefs, nUnits]];
+      decl = ntGenDeclHeader[hasDressed, cseDecls, traces["ChunkDecls"]]["Decl"];];
+    ntLog["[prof] unit tables + bin-pack: ", ntT, " s"];
+    ntStageResult["ntGenUnitSources", {"Units", "Decl"}, <|"Units" -> units, "Decl" -> decl|>]];
+
+(* ---- STAGE 7: main() --------------------------------------------------------------------------
+   Each function returns main()'s text for its section; those owning big tables also return the
+   table definitions ("Defs"), which the driver prepends to main(). *)
+
+(* argv, the LorentzEnv, the component table and the distinct-trace tables *)
+ntGenMainPrologue[ncomp_, nsInner_, hasDressed_] :=
+  ntStageResult["ntGenMainPrologue", {"Text"},
+    <|"Text" ->
       StringJoin[
-        Flatten[
-          {
-            "int main(int argc, char** argv){\n",
-            If[ntSingleQ[], "  numtracer::codegen::emit_precision() = numtracer::codegen::EmitPrecision::Single;\n", ""],
-            "  std::string decor = \"static inline\"; std::string hns = \"" <> nsInner <> "\";\n",
-            "  for(int a=1;a<argc;++a){ std::string s=argv[a]; if(s==\"-d\"&&a+1<argc) decor=argv[++a]; else if(s==\"-n\"&&a+1<argc) hns=argv[++a]; }\n",
-            "  const int nsym = " <> str[nsym] <> ";\n",
+        "int main(int argc, char** argv){\n",
+        If[ntSingleQ[], "  numtracer::codegen::emit_precision() = numtracer::codegen::EmitPrecision::Single;\n", ""],
+        "  std::string decor = \"static inline\"; std::string hns = \"" <> nsInner <> "\";\n",
+        "  for(int a=1;a<argc;++a){ std::string s=argv[a]; if(s==\"-d\"&&a+1<argc) decor=argv[++a]; else if(s==\"-n\"&&a+1<argc) hns=argv[++a]; }\n",
+        "  const int nsym = " <> ToString[ncomp["nsym"]] <> ";\n",
 (* units is emitted BEFORE the LorentzEnv because the env binds both nsym and the unit groups;
    comp/atomDen and the trace entry points are then built through `env`. *)
-            "  std::vector<std::vector<int>> units = {" <> StringRiffle[ntIntRow /@ unitG, ","] <> "};\n",
-            "  LorentzEnv env(nsym, units);\n",
-            "  std::vector<std::array<MPoly,4>> comp(" <> str[maxBase + 1] <> ", {env.zero(),env.zero(),env.zero(),env.zero()});\n",
-            compInit,
-            "  std::vector<std::string> symNames = {" <> StringRiffle[("\"" <> # <> "\"")& /@ symNames, ","] <> "};\n",
-(* the DISTINCT-trace tables (see ntGenDedupJoin). Flat, indexed by trace id: a plain
-   trace has an empty chain (contract via sdn[k]), a dressed (structural) one uses sdch[k]/sdsl[k] via
+        "  std::vector<std::vector<int>> units = {" <> StringRiffle[ntIntRow /@ ncomp["units"], ","] <> "};\n",
+        "  LorentzEnv env(nsym, units);\n",
+        "  std::vector<std::array<MPoly,4>> comp(" <> ToString[ncomp["maxBase"] + 1] <> ", {env.zero(),env.zero(),env.zero(),env.zero()});\n",
+        (* component-table init: comp[base][mu] = <MPoly builder>, skipping structural zeros. *)
+        KeyValueMap[
+          Function[{base, comps},
+            MapIndexed[
+              Function[{s, mu},
+                If[s === "env.zero()",
+                  "",
+                  "  comp[" <> ToString[base] <> "][" <> ToString[mu[[1]] - 1] <> "] = " <> s <> ";\n"]],
+              comps]],
+          ncomp["compCpp"]],
+        "  std::vector<std::string> symNames = {" <> StringRiffle[("\"" <> # <> "\"")& /@ ncomp["symNamesCpp"], ","] <> "};\n",
+(* the DISTINCT-trace tables (see ntGenDedupJoin). Flat, indexed by trace id: a plain trace has an
+   empty chain (contract via sdn[k]), a dressed (structural) one uses sdch[k]/sdsl[k] via
    numeric_value_dressed_netval_mp. sdch/sdsl are emitted only when the kernel has dressed nets. *)
-            "  std::vector<DiracNet> sdn = sdn0();\n",
-            "  std::vector<NetVal> sln = sln0();\n",
-            If[hasDressed,
+        "  std::vector<DiracNet> sdn = sdn0();\n",
+        "  std::vector<NetVal> sln = sln0();\n",
+        If[hasDressed,
 (* rebuild the per-sub-term chain/slot tables from the interned pools (chp/optp) + index arrays
    (sdchR/sdslR) — O(nSub), reproduces the full sdch/sdsl exactly, so the trace lambda is untouched. *)
-              "  std::vector<std::vector<DChainTok>> chp = chp0(); std::vector<int> sdchR = sdchR0();\n" <>
-              "  std::vector<DSlotOpt> optp = optp0(); std::vector<std::vector<int>> sdslR = sdslR0();\n" <>
-              "  const size_t NSD = sdchR.size();\n" <>
-              "  std::vector<std::vector<DChainTok>> sdch(NSD); std::vector<std::vector<DSlot>> sdsl(NSD);\n" <>
-              "  for(size_t k=0;k<NSD;++k){ sdch[k]=chp[sdchR[k]]; sdsl[k].reserve(sdslR[k].size());\n" <>
-              "    for(int oi: sdslR[k]) sdsl[k].push_back(DSlot{optp[oi]}); }\n",
-              ""],
-(* per net: which traces it references (sidx), and with what scalar (dsc); sub-terms sharing a trace
-   were already merged, and zero sums dropped, by ntGenDedupJoin.
-   HASH-CONSED: written out in full these tables dominate the main TU, and a multi-megabyte
-   braced-init in the optimised main TU costs minutes. Both are extremely redundant, so dedupe rows
-   for sidx, and for dsc BOTH levels (distinct values, then distinct rows of value-indices; rows alone
-   differ while their entries repeat). The O(nets) runtime rebuild reproduces sidx/dsc exactly. *)
-            With[{
-              idxRows = netTraceRows,
-              (* the per-sub-term dressing monomials, row-deduped like sidx *)
-              drRows = netDressRows,
-              scaRows = netScalarRows},
-              With[{distinctIdxRows = DeleteDuplicates[idxRows], distinctScalars = DeleteDuplicates[Flatten[scaRows]], distinctDressMonos = DeleteDuplicates[Flatten[drRows, 1]]},
-                With[{idxPos = AssociationThread[distinctIdxRows -> Range[Length[distinctIdxRows]] - 1], valPos = AssociationThread[distinctScalars -> Range[Length[distinctScalars]] - 1], drValPos = AssociationThread[distinctDressMonos -> Range[Length[distinctDressMonos]] - 1]},
-                  With[{scaIdxRows = Map[valPos, scaRows, {2}], drIdxRows = Map[drValPos, drRows, {2}]},
-                    With[{distinctScalarRows = DeleteDuplicates[scaIdxRows], distinctDressRows = DeleteDuplicates[drIdxRows]},
-                      With[{scaPos = AssociationThread[distinctScalarRows -> Range[Length[distinctScalarRows]] - 1], drRowPos = AssociationThread[distinctDressRows -> Range[Length[distinctDressRows]] - 1]},
-                        StringJoin[
-                          "  const size_t NNET = " <> str[Length[netTraceRows]] <> ";\n",
-(* the four big index/scalar tables move to top-level chunk functions (see ntBigTableFns): together
-   with colnets they are what makes main() large enough to break the compiler. *)
-                          emitBigTable["ntSidxU", "std::vector<std::vector<int>>", ntIntRow /@ distinctIdxRows,
-                            "std::vector<std::vector<int>> sidxU"],
-                          emitBigTable["ntSidxR", "std::vector<int>", ntIntStrs[idxPos /@ idxRows],
-                            "std::vector<int> sidxR"],
-                          "  std::vector<std::vector<int>> sidx(NNET);\n",
-                          "  for(size_t i=0;i<NNET;++i) sidx[i]=sidxU[sidxR[i]];\n",
-                          "  std::vector<Cx> dscV = {" <>
-                            StringRiffle[
-                              Function[s,
-                                  "Cx{" <> cppNum[Re[s]] <> "," <> cppNum[Im[s]] <> "}"
-                                ] /@ distinctScalars,
-                              ","
-                            ] <> "};\n",
-                          emitBigTable["ntDscU", "std::vector<std::vector<int>>", ntIntRow /@ distinctScalarRows,
-                            "std::vector<std::vector<int>> dscU"],
-                          emitBigTable["ntDscR", "std::vector<int>", ntIntStrs[scaPos /@ scaIdxRows],
-                            "std::vector<int> dscR"],
-                          "  std::vector<std::vector<Cx>> dsc(NNET);\n",
-                          "  for(size_t i=0;i<NNET;++i){ const auto& r=dscU[dscR[i]]; dsc[i].reserve(r.size());\n",
-                          "    for(int k: r) dsc[i].push_back(dscV[k]); }\n",
-(* dressed flows only: the per-sub-term dressing monomials sdr[i][j], deduped on BOTH levels like dsc
-   (few distinct monomials sdrV, few distinct index rows sdrU). The dressed phase-B fold routes each
-   sub-term's scaled MPoly trace into its DPoly channel sdr[i][j] (empty monomial = undressed). *)
-                          If[hasDressed,
-                            "  std::vector<DMono> sdrV = {" <>
-                              StringRiffle[ntIntRow /@ distinctDressMonos, ","] <> "};\n" <>
-                            "  std::vector<std::vector<int>> sdrU = {" <>
-                              StringRiffle[ntIntRow /@ distinctDressRows, ","] <> "};\n" <>
-                            emitBigTable["ntSdrR", "std::vector<int>", ntIntStrs[drRowPos /@ drIdxRows],
-                              "std::vector<int> sdrR"] <>
-                            "  std::vector<std::vector<DMono>> sdr(NNET);\n" <>
-                            "  for(size_t i=0;i<NNET;++i){ const auto& r=sdrU[sdrR[i]]; sdr[i].reserve(r.size());\n" <>
-                            "    for(int k: r) sdr[i].push_back(sdrV[k]); }\n",
-                            ""]]]]]]]],
+          "  std::vector<std::vector<DChainTok>> chp = chp0(); std::vector<int> sdchR = sdchR0();\n" <>
+          "  std::vector<DSlotOpt> optp = optp0(); std::vector<std::vector<int>> sdslR = sdslR0();\n" <>
+          "  const size_t NSD = sdchR.size();\n" <>
+          "  std::vector<std::vector<DChainTok>> sdch(NSD); std::vector<std::vector<DSlot>> sdsl(NSD);\n" <>
+          "  for(size_t k=0;k<NSD;++k){ sdch[k]=chp[sdchR[k]]; sdsl[k].reserve(sdslR[k].size());\n" <>
+          "    for(int oi: sdslR[k]) sdsl[k].push_back(DSlot{optp[oi]}); }\n",
+          ""]]|>];
+
+(* Per net: which traces it references (sidx), with what scalar (dsc) and, dressed flows only, which
+   dressing monomial (sdr); sub-terms sharing a trace were already merged, and zero sums dropped, by
+   ntGenDedupJoin. HASH-CONSED (ntHashConsRows): written out in full these tables dominate the main
+   TU, and a multi-megabyte braced-init in the optimised main TU costs minutes. sidx is row-deduped;
+   dsc and sdr on BOTH levels (distinct values, then distinct rows of value indices). The O(nets)
+   runtime rebuild reproduces sidx/dsc/sdr exactly. *)
+ntGenMainTables[netTraceRows_, netDressRows_, netScalarRows_, hasDressed_] :=
+  Module[{sidx = ntHashConsRows[netTraceRows], dsc = ntHashConsRows[netScalarRows, "Values"],
+          sdr, sidxU, sidxR, dscU, dscR, sdrR},
+    sidxU = ntGenBigTable["ntSidxU", "std::vector<std::vector<int>>", ntIntRow /@ sidx["Rows"], "std::vector<std::vector<int>> sidxU"];
+    sidxR = ntGenBigTable["ntSidxR", "std::vector<int>", ntIntStrs[sidx["RowIdx"]], "std::vector<int> sidxR"];
+    dscU = ntGenBigTable["ntDscU", "std::vector<std::vector<int>>", ntIntRow /@ dsc["Rows"], "std::vector<std::vector<int>> dscU"];
+    dscR = ntGenBigTable["ntDscR", "std::vector<int>", ntIntStrs[dsc["RowIdx"]], "std::vector<int> dscR"];
+    If[hasDressed,
+      sdr = ntHashConsRows[netDressRows, "Values"];
+      sdrR = ntGenBigTable["ntSdrR", "std::vector<int>", ntIntStrs[sdr["RowIdx"]], "std::vector<int> sdrR"]];
+    ntStageResult["ntGenMainTables", {"Defs", "Text"},
+      <|"Defs" -> If[hasDressed, {sidxU[[1]], sidxR[[1]], dscU[[1]], dscR[[1]], sdrR[[1]]}, {sidxU[[1]], sidxR[[1]], dscU[[1]], dscR[[1]]}],
+        "Text" ->
+          StringJoin[
+            "  const size_t NNET = " <> ToString[Length[netTraceRows]] <> ";\n",
+            sidxU[[2]],
+            sidxR[[2]],
+            "  std::vector<std::vector<int>> sidx(NNET);\n",
+            "  for(size_t i=0;i<NNET;++i) sidx[i]=sidxU[sidxR[i]];\n",
+            "  std::vector<Cx> dscV = {" <>
+              StringRiffle[
+                Function[s,
+                    "Cx{" <> cppNum[Re[s]] <> "," <> cppNum[Im[s]] <> "}"
+                  ] /@ dsc["Values"],
+                ","
+              ] <> "};\n",
+            dscU[[2]],
+            dscR[[2]],
+            "  std::vector<std::vector<Cx>> dsc(NNET);\n",
+            "  for(size_t i=0;i<NNET;++i){ const auto& r=dscU[dscR[i]]; dsc[i].reserve(r.size());\n",
+            "    for(int k: r) dsc[i].push_back(dscV[k]); }\n",
+(* the dressed phase-B fold routes each sub-term's scaled MPoly trace into its DPoly channel
+   sdr[i][j] (empty monomial = undressed); sdrV and sdrU are small, so they stay inline. *)
+            If[hasDressed,
+              "  std::vector<DMono> sdrV = {" <>
+                StringRiffle[ntIntRow /@ sdr["Values"], ","] <> "};\n" <>
+              "  std::vector<std::vector<int>> sdrU = {" <>
+                StringRiffle[ntIntRow /@ sdr["Rows"], ","] <> "};\n" <>
+              sdrR[[2]] <>
+              "  std::vector<std::vector<DMono>> sdr(NNET);\n" <>
+              "  for(size_t i=0;i<NNET;++i){ const auto& r=sdrU[sdrR[i]]; sdr[i].reserve(r.size());\n" <>
+              "    for(int k: r) sdr[i].push_back(sdrV[k]); }\n",
+              ""]]|>]];
+
+(* atom denominators, Matsubara-evenness probe, worker counts, the trace lambda and PHASE A *)
+ntGenMainPhaseA[nSub_, nReused_, hasDressed_, mIdx_] :=
+  ntStageResult["ntGenMainPhaseA", {"Text"},
+    <|"Text" ->
+      StringJoin[
 (* the projector atom denominators are keyed by ATOM ID (e.inv/e.invS), not by position, and each
    id is filled idempotently — and the distinct traces cover every lnet that occurs. So scanning
    the deduped table gives the same atomDen as scanning every occurrence did. *)
-            "  auto atomDen = env.collect_atom_denoms(sln, comp);\n",
-            "  for(auto &a: atomDen) a = reduce_units(a, units);  // bare-loop k^2 -> monomial l1^2 -> cancels\n",
+        "  auto atomDen = env.collect_atom_denoms(sln, comp);\n",
+        "  for(auto &a: atomDen) a = reduce_units(a, units);  // bare-loop k^2 -> monomial l1^2 -> cancels\n",
 (* MATSUBARA EVENNESS, proven while contracting. If every trace and every atom denominator carries
    only EVEN powers of the Matsubara frequency, kernel(+w) == kernel(-w), and DiFfRG may collapse
    `kernel(+w) + kernel(-w)` to `2*kernel(w)`, halving the Matsubara-sum work.
    It must be proven HERE: DiFfRG's MakeKernel "MatsubaraEven" option tests the placeholder
    `body = 0.` (DiFfRG_compat.m), so it is trivially True for every flow and would silently drop the
    odd half of a non-even kernel. The test is SUFFICIENT only (cancelling odd terms read as odd),
-   which is the safe direction: a false "odd" costs an optimisation, a false "even" is wrong physics. *)
-            If[mIdx >= 0,
-              "  // Matsubara evenness (see poly_even_in): every trace and every atom denominator must\n" <>
-              "  // carry only even powers of var(" <> str[mIdx] <> "), the Matsubara frequency.\n" <>
-              "  std::atomic<bool> ntMEven{true};\n" <>
-              "  for(const auto &a: atomDen) if(!poly_even_in(a, " <> str[mIdx] <> ")) ntMEven.store(false, std::memory_order_relaxed);\n",
-              ""],
-            "  const bool ntprof = (std::getenv(\"NT_GEN_PROFILE\")!=nullptr);\n",
-            "  unsigned workersA=std::thread::hardware_concurrency(); if(!workersA)workersA=4u;\n",
-            "  if(const char* mw=std::getenv(\"NT_GEN_MAXW\")){int v=std::atoi(mw); if(v>0&&(unsigned)v<workersA)workersA=(unsigned)v;}\n",
+   which is the safe direction: a false "odd" costs an optimisation, a false "even" is wrong physics.
+   mIdx is the MPoly var index (0-based) of the Matsubara frequency, or -1 for "not finite-T". *)
+        If[mIdx >= 0,
+          "  // Matsubara evenness (see poly_even_in): every trace and every atom denominator must\n" <>
+          "  // carry only even powers of var(" <> ToString[mIdx] <> "), the Matsubara frequency.\n" <>
+          "  std::atomic<bool> ntMEven{true};\n" <>
+          "  for(const auto &a: atomDen) if(!poly_even_in(a, " <> ToString[mIdx] <> ")) ntMEven.store(false, std::memory_order_relaxed);\n",
+          ""],
+        "  const bool ntprof = (std::getenv(\"NT_GEN_PROFILE\")!=nullptr);\n",
+        "  unsigned workersA=std::thread::hardware_concurrency(); if(!workersA)workersA=4u;\n",
+        "  if(const char* mw=std::getenv(\"NT_GEN_MAXW\")){int v=std::atoi(mw); if(v>0&&(unsigned)v<workersA)workersA=(unsigned)v;}\n",
 (* SEPARATE worker count for phase B, whose memory profile differs from phase A's. Phase B runs `hw`
    concurrent RECOMPUTES of the uncached traces, which are the singletons (ntGenDedupJoin orders by
    descending refcount) and typically the heaviest ones; they land on top of the live window, so
    phase B can need FEWER workers than phase A. Defaults to phase A's count. *)
-            "  unsigned workersB=workersA; if(const char* mb=std::getenv(\"NT_GEN_MAXW_B\")){int v=std::atoi(mb); if(v>0)workersB=(unsigned)v;}\n",
-            With[{
-              (* traces are dressing-stripped, so phase A caches plain MPoly on both paths; the
-                 DPoly is assembled only in the phase-B fold. *)
-              PT = "MPoly"},
-              StringJoin[
-                {
-                  "  const long NSUB = " <> str[nSub] <> ";\n",
+        "  unsigned workersB=workersA; if(const char* mb=std::getenv(\"NT_GEN_MAXW_B\")){int v=std::atoi(mb); if(v>0)workersB=(unsigned)v;}\n",
+        "  const long NSUB = " <> ToString[nSub] <> ";\n",
 (* how many traces are RESIDENT. Default: the reused ones (refCount >= 2), which the dedup ordering
    puts first; a singleton is contracted once whether cached or not, so caching it is pure RAM.
    DRESSED flows default to NSUB: their traces are individually small, and phase B is parallel over
    NETS, so leaving singletons to it lets one dominant net serialise thousands of contractions.
    NT_GEN_MEMO_MAX overrides either way (clamped to [0, NSUB]): lower it when memory is tight, raise
    it to put the singletons in phase A's balanced work list. *)
-                  "  long nCache = " <> str[If[hasDressed, nSub, nReused]] <> ";\n",
-                  "  if(const char* mm=std::getenv(\"NT_GEN_MEMO_MAX\")){ long v=std::atol(mm); if(v>=0) nCache=std::min<long>(v,NSUB); }\n",
-                  "  auto trace=[&](int k)->" <> PT <> "{\n",
+        "  long nCache = " <> ToString[If[hasDressed, nSub, nReused]] <> ";\n",
+        "  if(const char* mm=std::getenv(\"NT_GEN_MEMO_MAX\")){ long v=std::atol(mm); if(v>=0) nCache=std::min<long>(v,NSUB); }\n",
+(* Traces are dressing-stripped, so phase A caches plain MPoly on both paths; the DPoly is assembled
+   only in the phase-B fold. *)
+        "  auto trace=[&](int k)->MPoly{\n",
 (* The parity probe sits on the trace lambda, not the trace table: with nCache == 0 the table is
    EMPTY and phase B recomputes through this lambda, so every distinct trace passes through here.
    DRESSED flows are excluded: their dressing monomials (sdr) are multiplied back in by the group fold
    and not seen here, and a dressing could carry an odd power. *)
-                  If[mIdx >= 0 && !hasDressed,
-                    "    " <> PT <> " tracePoly = env.numeric_value_netval(sdn[k], sln[k], comp, atomDen);\n" <>
-                    "    if(!poly_even_in(tracePoly, " <> str[mIdx] <> ")) ntMEven.store(false, std::memory_order_relaxed);\n" <>
-                    "    return tracePoly;\n",
-                    If[hasDressed,
-                      (* structural trace → plain MPoly: a non-slot sub-term contracts via sdn[k]/sln[k],
-                                   a collected one via the dressing-free _mp variant (dressing stripped at codegen). *)
-                      "    return sdch[k].empty()\n" <> "      ? env.numeric_value_netval(sdn[k], sln[k], comp, atomDen)\n" <> "      : env.numeric_value_dressed_netval_mp(sdch[k], sdsl[k], sln[k], comp, atomDen);\n",
-                      "    return env.numeric_value_netval(sdn[k], sln[k], comp, atomDen);\n"]],
-                  "  };\n",
-                  (* PHASE A — contract each distinct trace once, parallel over a FLAT work list (numeric/trace_fold.hpp). *)
-                  "  auto tA=std::chrono::steady_clock::now();\n",
-                  "  std::vector<" <> PT <> "> traceTable = env.contract_traces<" <> PT <> ">(nCache, workersA, trace);\n",
-                  "  if(ntprof){ std::size_t tb=0; for(auto &p: traceTable) tb+=poly_bytes(p);\n",
-                  "    std::fprintf(stderr,\"[num] phase A: %ld distinct traces, %ld cached, table %.1f MB, %.1f s (W=%u)\\n\",\n",
-                  "      NSUB, nCache, tb/1048576.0, std::chrono::duration<double>(std::chrono::steady_clock::now()-tA).count(), workersA); }\n",
+        If[mIdx >= 0 && !hasDressed,
+          "    MPoly tracePoly = env.numeric_value_netval(sdn[k], sln[k], comp, atomDen);\n" <>
+          "    if(!poly_even_in(tracePoly, " <> ToString[mIdx] <> ")) ntMEven.store(false, std::memory_order_relaxed);\n" <>
+          "    return tracePoly;\n",
+          If[hasDressed,
+            (* structural trace → plain MPoly: a non-slot sub-term contracts via sdn[k]/sln[k],
+               a collected one via the dressing-free _mp variant (dressing stripped at codegen). *)
+            "    return sdch[k].empty()\n" <> "      ? env.numeric_value_netval(sdn[k], sln[k], comp, atomDen)\n" <> "      : env.numeric_value_dressed_netval_mp(sdch[k], sdsl[k], sln[k], comp, atomDen);\n",
+            "    return env.numeric_value_netval(sdn[k], sln[k], comp, atomDen);\n"]],
+        "  };\n",
+        (* PHASE A — contract each distinct trace once, parallel over a FLAT work list (numeric/trace_fold.hpp). *)
+        "  auto tA=std::chrono::steady_clock::now();\n",
+        "  std::vector<MPoly> traceTable = env.contract_traces<MPoly>(nCache, workersA, trace);\n",
+        "  if(ntprof){ std::size_t tb=0; for(auto &p: traceTable) tb+=poly_bytes(p);\n",
+        "    std::fprintf(stderr,\"[num] phase A: %ld distinct traces, %ld cached, table %.1f MB, %.1f s (W=%u)\\n\",\n",
+        "      NSUB, nCache, tb/1048576.0, std::chrono::duration<double>(std::chrono::steady_clock::now()-tA).count(), workersA); }\n",
 (* RELEASE PHASE A'S ARENA. Concurrent dense contractions transiently allocate GBs, which glibc keeps
    in its per-thread arenas, so phase B would start from phase A's RSS high-water mark rather than
    from the (much smaller) trace table. malloc_trim returns it to the OS in milliseconds. *)
-                  "#if defined(__GLIBC__)\n",
-                  "  { const double rssPre = ntRssMB(); malloc_trim(0);\n",
-                  "    if(ntprof) std::fprintf(stderr,\"[num] arena trim after phase A: RSS %.0f -> %.0f MB\\n\", rssPre, ntRssMB()); }\n",
-                  "#endif\n",
-(* PHASE B is fused into the group/lowering loop below (fold_groups_streaming), which needs
-   `groups`, `colv` and `realOnly` declared first. `tB` starts here so the reported time covers it. *)
-                  "  auto tB=std::chrono::steady_clock::now();\n"}]],
-(* colnets HASH-CONSED: nets differing only in their Lorentz/Dirac part share a colour net, so
-   sun_value_cx runs once per DISTINCT net and colR maps each net to it. The distinct table is built
-   by ntColNets() in the preamble (see colMainDecls), off the main() body. *)
-            With[{uCol = DeleteDuplicates[colourNets]},
-              With[{colPos = AssociationThread[uCol -> Range[Length[uCol]] - 1]},
-                StringJoin["  std::vector<SUNNet> colnetsU = ntColNets();\n",
-                  emitBigTable["ntColR", "std::vector<int>", ntIntStrs[colPos /@ colourNets],
-                    "std::vector<int> colR"], "  std::vector<numtracer::Cx> colvU(colnetsU.size());\n", "  for(size_t i=0;i<colnetsU.size();++i) colvU[i]=sun_value_cx(colnetsU[i]);\n", "  std::vector<numtracer::Cx> colv(" <> str[nNet] <> ");\n", "  for(int i=0;i<" <> str[nNet] <> ";++i) colv[i]=colvU[colR[i]];\n"]
-              ]],
-            emitBigTable["ntGroups", "std::vector<std::vector<int>>", ntIntRow /@ groups,
-              "std::vector<std::vector<int>> groups"],
+        "#if defined(__GLIBC__)\n",
+        "  { const double rssPre = ntRssMB(); malloc_trim(0);\n",
+        "    if(ntprof) std::fprintf(stderr,\"[num] arena trim after phase A: RSS %.0f -> %.0f MB\\n\", rssPre, ntRssMB()); }\n",
+        "#endif\n",
+(* PHASE B is fused into the group/lowering loop (ntGenMainPhaseB), which needs `groups`, `colv` and
+   `realOnly` declared first. `tB` starts here so the reported time covers it. *)
+        "  auto tB=std::chrono::steady_clock::now();\n"]|>];
+
+(* the groups table, the symbol environment, and PHASE B + group accumulation + lowering, FUSED into
+   one streaming pass (numeric/trace_fold.hpp's fold_groups_streaming). `groups` partitions the nets,
+   so a net's folded polynomial is needed by exactly one group and dies once that group has absorbed
+   it; only a window of nets and group accumulators is ever live.
+   ORDER INVARIANT: each group left-folds its members in group order, and the sink runs on the calling
+   thread for gi = 0,1,2,... ascending; that fixes GlobalEnv intern order and the CSE instruction
+   stream. The scale is spelled per branch so each keeps its exact expression (poly*constant vs
+   DPoly scaleCx). With CrossTraceCSE (crossCSE) the sink feeds ONE shared CSE builder (FusedStream)
+   instead of one independent program per group. *)
+ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_, crossCSE_] :=
+  With[{nGrp = Length[groups],
+        grp = ntGenBigTable["ntGroups", "std::vector<std::vector<int>>", ntIntRow /@ groups, "std::vector<std::vector<int>> groups"]},
+    ntStageResult["ntGenMainPhaseB", {"Defs", "Text"},
+      <|"Defs" -> {grp[[1]]},
+        "Text" ->
+          StringJoin[
+            grp[[2]],
             "  // `genv`, not `env`: `env` above is the LorentzEnv (nsym + unit groups) that mints and\n" <>
             "  // contracts polynomials. This is the GLOBAL SYMBOL environment the lowering interns\n" <>
             "  // fundamental symbols into. Naming it `env` would shadow the other and silently rebind\n" <>
@@ -722,29 +729,15 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
             "  std::vector<int> realOnly = {" <>
               StringRiffle[
                 If[Length[realOnlyG] === nGrp,
-                  (
-                      If[TrueQ[#],
-                        "1",
-                        "0"]
-                    )& /@ realOnlyG,
+                  If[TrueQ[#], "1", "0"]& /@ realOnlyG,
                   Table["0", {nGrp}]],
                 ","
               ] <> "};\n",
-(* PHASE B + group accumulation + lowering, FUSED into one streaming pass (numeric/trace_fold.hpp's
-   fold_groups_streaming). `groups` partitions the nets, so a net's folded polynomial is needed by
-   exactly one group and dies once that group has absorbed it; only a window of nets and group
-   accumulators is ever live.
-   ORDER INVARIANT: each group left-folds its members in group order, and the sink runs on the calling
-   thread for gi = 0,1,2,... ascending; that fixes GlobalEnv intern order and the CSE instruction
-   stream. The scale is spelled per branch so each keeps its exact expression (poly*constant vs
-   DPoly scaleCx).
-   With CrossTraceCSE (crossCSE) the sink feeds ONE shared CSE builder (FusedStream) instead of one
-   independent program per group. *)
             "  long netWindow = numtracer::numeric::net_window((long)sidx.size(), workersB);\n",
 (* UNCONDITIONAL and FATAL (check_group_partition in numeric/trace_fold.hpp). `groups` must
    PARTITION the nets: a duplicate folds a net in twice, a gap silently drops one, and either is a
    wrong kernel with no other symptom. O(nNet), once per generation, so never gate it on a flag. *)
-            "  numtracer::numeric::check_group_partition(groups, " <> str[nNet] <> ");\n",
+            "  numtracer::numeric::check_group_partition(groups, " <> ToString[nNet] <> ");\n",
 (* The dressed fold reads the plain-MPoly trace table + the per-sub-term dressing monomials sdr and
    builds the per-net DPoly channel by channel (fold_groups_streaming_dressed). *)
             Which[
@@ -757,58 +750,64 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
               True,
                 "  env.fold_groups_streaming<MPoly>(sidx, dsc, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "    [&](int d, MPoly &&m){ return m*env.constant(colv[d]); },\n" <> "    [&](size_t gi, MPoly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });\n"
             ],
-            "  if(ntprof) std::fprintf(stderr,\"[num] phase B+lower: %d nets in %d groups, window %ld, %.1f s (W=%u)\\n\", " <> str[nNet] <> ", " <> str[nGrp] <> ", netWindow, std::chrono::duration<double>(std::chrono::steady_clock::now()-tB).count(), workersB);\n",
+            "  if(ntprof) std::fprintf(stderr,\"[num] phase B+lower: %d nets in %d groups, window %ld, %.1f s (W=%u)\\n\", " <> ToString[nNet] <> ", " <> ToString[nGrp] <> ", netWindow, std::chrono::duration<double>(std::chrono::steady_clock::now()-tB).count(), workersB);\n",
 (* the trace table is dead once every group has folded; emission below only needs the lowered
    instruction streams, which are orders of magnitude smaller. *)
-            "  { std::vector<MPoly> dead; traceTable.swap(dead); }\n",
+            "  { std::vector<MPoly> dead; traceTable.swap(dead); }\n"]|>]];
+
+(* the fill formulas, the header preamble, the Matsubara verdict, and the trace bodies *)
+ntGenMainEmission[varFill_, nsInner_, kns_, fillArgSig_, complexQ_, hasDressed_, crossCSE_, mIdx_, nGrp_] :=
+  ntStageResult["ntGenMainEmission", {"Text"},
+    <|"Text" ->
+      StringJoin[
 (* Emission renders, dedups and writes every trace body serially (minutes on a multi-MB header);
    timed so the [num] trail covers the whole run. *)
-            "  const auto tEmit = std::chrono::steady_clock::now();\n",
-            "  FillFormulas fm;\n",
-            "  fm.var = [](int id)->std::string{\n",
-            Table["    if(id==" <> str[i - 1] <> ") return \"" <> varFill[[i]] <> "\";\n", {i, 1, Length[varFill]}],
-            "    return \"" <> ntZeroLit[] <> "\"; };\n",
-            "  fm.inv = [&](int id)->std::string{ return \"" <> If[ntSingleQ[], "1.f", "1.0"] <> "/(\" + mpoly_to_cpp(atomDen[(size_t)id], symNames) + \")\"; };\n",
+        "  const auto tEmit = std::chrono::steady_clock::now();\n",
+        "  FillFormulas fm;\n",
+        "  fm.var = [](int id)->std::string{\n",
+        Table["    if(id==" <> ToString[i - 1] <> ") return \"" <> varFill[[i]] <> "\";\n", {i, 1, Length[varFill]}],
+        "    return \"" <> ntZeroLit[] <> "\"; };\n",
+        "  fm.inv = [&](int id)->std::string{ return \"" <> If[ntSingleQ[], "1.f", "1.0"] <> "/(\" + mpoly_to_cpp(atomDen[(size_t)id], symNames) + \")\"; };\n",
 (* dressing fill (kind-2 `dress` leaves): the kernel BODY evaluates each dressing atom (where the
    regulators REG::* and the interpolator parameters are in scope) into `dr_<id>` and passes the
    VALUE to fill(); fill just stores it. So fm.dress returns the passed-in argument name. *)
-            If[hasDressed,
-              "  fm.dress = [](int id)->std::string{ return \"dr_\" + std::to_string(id); };\n",
-              ""],
-            "  std::cout << \"// GENERATED by gen_" <> nsInner <> ".cpp — do not edit.\\n\";\n",
+        If[hasDressed,
+          "  fm.dress = [](int id)->std::string{ return \"dr_\" + std::to_string(id); };\n",
+          ""],
+        "  std::cout << \"// GENERATED by gen_" <> nsInner <> ".cpp — do not edit.\\n\";\n",
 (* Complex trace values carry an OVERRIDABLE type: nvcc lowers std::complex arithmetic through
    gcc _Complex builtins that device code silently computes as 0. A device consumer #defines
    NT_TRACE_COMPLEX (e.g. to cuda::std::complex<double>) BEFORE including the traces header; host
    consumers get std::complex<double>. The alias lives in the per-kernel namespace so multiple
    traces headers coexist in one TU. *)
-            "  std::cout << \"#pragma once\\n#include <cmath>\\n" <>
-              If[complexQ,
-                "#include <complex>\\n",
-                ""
-              ] <> "namespace " <> kns <> " { namespace \" << hns << \" {\\n\";\n",
-            If[complexQ,
-              "  std::cout << \"#ifndef NT_TRACE_COMPLEX\\n#define NT_TRACE_COMPLEX std::complex<" <> $ntRealT <> ">\\n#endif\\nusing nt_complex_t = NT_TRACE_COMPLEX;\\n\";\n",
-              ""],
+        "  std::cout << \"#pragma once\\n#include <cmath>\\n" <>
+          If[complexQ,
+            "#include <complex>\\n",
+            ""
+          ] <> "namespace " <> kns <> " { namespace \" << hns << \" {\\n\";\n",
+        If[complexQ,
+          "  std::cout << \"#ifndef NT_TRACE_COMPLEX\\n#define NT_TRACE_COMPLEX std::complex<" <> $ntRealT <> ">\\n#endif\\nusing nt_complex_t = NT_TRACE_COMPLEX;\\n\";\n",
+          ""],
 (* Unqualified fma/sqrt in a float header would otherwise bind the global double ::fma/::sqrt on
    the host, silently running that arithmetic in double. *)
-            If[ntSingleQ[], "  std::cout << \"using std::fma;\\nusing std::sqrt;\\n\";\n", ""],
-            "  std::cout << \"template<int N> \" << decor << \" " <> $ntRealT <> " powr(" <> $ntRealT <> " x){ " <> $ntRealT <> " r=" <> If[ntSingleQ[], "1.f", "1.0"] <> "; for(int i=0;i<N;++i) r*=x; return r; }\\n\";\n",
-            "  emit_env_layout(std::cout, genv);\n",
-            "  std::cout << \"static inline constexpr int nenv = \" << genv.syms.size() << \";\\n\";\n",
+        If[ntSingleQ[], "  std::cout << \"using std::fma;\\nusing std::sqrt;\\n\";\n", ""],
+        "  std::cout << \"template<int N> \" << decor << \" " <> $ntRealT <> " powr(" <> $ntRealT <> " x){ " <> $ntRealT <> " r=" <> If[ntSingleQ[], "1.f", "1.0"] <> "; for(int i=0;i<N;++i) r*=x; return r; }\\n\";\n",
+        "  emit_env_layout(std::cout, genv);\n",
+        "  std::cout << \"static inline constexpr int nenv = \" << genv.syms.size() << \";\\n\";\n",
 (* The proven verdict, as a compile-time constant the kernel class picks up. Always emitted for a
    finite-T flow (rather than only when true) so the header records what was checked: a `false`
    here is a positive statement that the traces were tested and are not even, not a gap. *)
-            If[mIdx >= 0,
-              "  std::cout << \"// Matsubara evenness of the traces in var(" <> str[mIdx] <> "), proven from the monomial\\n\";\n" <>
-              "  std::cout << \"// exponents at generation time (see poly_even_in). Consumed by the kernel class as\\n\";\n" <>
-              "  std::cout << \"// DiFfRG's `matsubara_even` trait, which halves the Matsubara-sum evaluations.\\n\";\n" <>
-              "  std::cout << \"static inline constexpr bool matsubara_even = \" << (" <>
-                If[hasDressed, "false", "ntMEven.load(std::memory_order_relaxed)"] <>
-                " ? \"true\" : \"false\") << \";\\n\";\n" <>
-              "  if(ntprof) std::fprintf(stderr,\"[num] matsubara_even = %s\\n\", " <>
-                If[hasDressed, "\"false (dressed flow: not checked)\"", "(ntMEven.load(std::memory_order_relaxed)?\"true\":\"false\")"] <> ");\n",
-              ""],
-            "  emit_fill(std::cout, genv, \"fill\", \"" <> fillArgSig <> "\", fm, decor);\n",
+        If[mIdx >= 0,
+          "  std::cout << \"// Matsubara evenness of the traces in var(" <> ToString[mIdx] <> "), proven from the monomial\\n\";\n" <>
+          "  std::cout << \"// exponents at generation time (see poly_even_in). Consumed by the kernel class as\\n\";\n" <>
+          "  std::cout << \"// DiFfRG's `matsubara_even` trait, which halves the Matsubara-sum evaluations.\\n\";\n" <>
+          "  std::cout << \"static inline constexpr bool matsubara_even = \" << (" <>
+            If[hasDressed, "false", "ntMEven.load(std::memory_order_relaxed)"] <>
+            " ? \"true\" : \"false\") << \";\\n\";\n" <>
+          "  if(ntprof) std::fprintf(stderr,\"[num] matsubara_even = %s\\n\", " <>
+            If[hasDressed, "\"false (dressed flow: not checked)\"", "(ntMEven.load(std::memory_order_relaxed)?\"true\":\"false\")"] <> ");\n",
+          ""],
+        "  emit_fill(std::cout, genv, \"fill\", \"" <> fillArgSig <> "\", fm, decor);\n",
 (* TRACE-BODY DEDUP: groups are keyed by dressing COEFFICIENT, finer than trace STRUCTURE, so many
    trN can have byte-identical bodies. Render each, key on the name-independent body, and emit a
    duplicate as a one-line forwarder `trN(f){ return trK(f); }` (K = first with that body); a pure
@@ -816,16 +815,55 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    " tr<i>("), since a complex return is spelled as the `nt_complex_t` alias. The decorator stays
    `decor`, so an out-of-lined canonical body does not drag `noinline` onto the forwarder.
    Fused (crossCSE): ONE trace_all(f, t[]) instead of nGrp trN(); the kernel reads tarr[i]. *)
-            If[crossCSE,
-              "  emit_cpp_fused(std::cout, fused, \"trace_all\", decor);\n",
-              "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> str[nGrp] <> ");\n" <> "    for(int i=0;i<" <> str[nGrp] <> ";++i){\n" <> "      const std::string nm = \"tr\"+std::to_string(i);\n" <> "      std::ostringstream os; emit_cpp(os, progs[i], nm, decor);\n" <> "      std::string s = os.str(); std::string body = s.substr(s.find('{'));\n" <> "      auto it = seen.find(body);\n" <> "      if(it==seen.end()){ seen.emplace(std::move(body), nm); std::cout << s; }\n" <> "      else { const std::string sig = s.substr(0, s.find(\" \"+nm+\"(\")); const std::string rt = sig.substr(sig.rfind(' ')+1);\n" <> "        std::cout << decor << \" \" << rt << \" \" << nm << \"(const " <> $ntRealT <> " *f) { return \" << it->second << \"(f); }\\n\"; } } }\n"
-            ],
-            "  std::cout << \"}} // namespace " <> kns <> "::\" << hns << \"\\n\";\n",
-            "  if(ntprof) std::fprintf(stderr,\"[num] emission: %.1f s\\n\", std::chrono::duration<double>(std::chrono::steady_clock::now()-tEmit).count());\n",
-            "  return 0;\n}\n"}]];
-(* The table builders are collected DURING the StringJoin above (each emitBigTable stuffs the bag as
-   its argument is evaluated), so they can only be prepended here — referencing the bag INSIDE that
-   StringJoin would splice in whatever was collected so far, which at that point is nothing. *)
-    main = StringJoin[Internal`BagPart[tableBag, All]] <> main;]},
-      ntLog["[prof] main() data tables: ", ntT, " s"]];
-    {pre, units, decl, main}];
+        If[crossCSE,
+          "  emit_cpp_fused(std::cout, fused, \"trace_all\", decor);\n",
+          "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> ToString[nGrp] <> ");\n" <> "    for(int i=0;i<" <> ToString[nGrp] <> ";++i){\n" <> "      const std::string nm = \"tr\"+std::to_string(i);\n" <> "      std::ostringstream os; emit_cpp(os, progs[i], nm, decor);\n" <> "      std::string s = os.str(); std::string body = s.substr(s.find('{'));\n" <> "      auto it = seen.find(body);\n" <> "      if(it==seen.end()){ seen.emplace(std::move(body), nm); std::cout << s; }\n" <> "      else { const std::string sig = s.substr(0, s.find(\" \"+nm+\"(\")); const std::string rt = sig.substr(sig.rfind(' ')+1);\n" <> "        std::cout << decor << \" \" << rt << \" \" << nm << \"(const " <> $ntRealT <> " *f) { return \" << it->second << \"(f); }\\n\"; } } }\n"
+        ],
+        "  std::cout << \"}} // namespace " <> kns <> "::\" << hns << \"\\n\";\n",
+        "  if(ntprof) std::fprintf(stderr,\"[num] emission: %.1f s\\n\", std::chrono::duration<double>(std::chrono::steady_clock::now()-tEmit).count());\n",
+        "  return 0;\n}\n"]|>];
+
+(* ---- the driver --------------------------------------------------------------------------------
+   `mIdx` is the MPoly var index (0-based) of the Matsubara frequency, or -1 for "not a finite-T
+   flow / unknown"; when >= 0 the generator proves Matsubara evenness while it contracts.
+   NT_GEN_NO_DEDUP=1 turns the dedup join off (I4): every occurrence is its own trace, nothing is
+   merged, dropped or cached. It is the escape hatch and the control for the equivalence test, which
+   must compare kernel VALUES: dedup changes GlobalEnv interning order and so renumbers every sN. *)
+emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kns_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False, mIdx_:-1] :=
+  Module[{nNet = Length[invNets], hasDressed = !FreeQ[invNets, _ntDressedCore],
+          noDedup = ntEnvFlag["NT_GEN_NO_DEDUP"], sub, col, preambles, cse, joined, unitSrc, main, ntT},
+    sub = ntGenExpandSubTerms[invNets, invRest];
+    col = ntGenColourTables[colourNets, nNet];
+    preambles = ntGenPreambles[hasDressed, col["MainDecls"], col["ChunkDefs"] =!= {}];
+    cse = ntGenNetCSE[sub["DiracNetPool"], sub["LorNetPool"], sub["DiracNetIds"], sub["LorNetIds"]];
+    ntT = First @ AbsoluteTiming[
+      joined =
+        ntGenDedupJoin[
+          sub["DiracNetIds"], sub["LorNetIds"], sub["SubScalars"], sub["ChainIds"], sub["SlotTupleIds"], sub["DressMonoIds"],
+          cse["DiracPool"], cse["LorPool"], sub["ChainPool"], sub["SlotTuplePool"], sub["DressMonoPool"],
+          hasDressed, noDedup];];
+    ntLog["[prof] sub-term dedup join: ", ntT, " s"];
+    sub = None;   (* the per-sub-term columns are dead after the join *)
+(* Published for the later COMPILE step (CodegenKernel.m), which logs it next to the main-TU
+   optimisation level. Set HERE, at the hand-off, so a stale value from a previous flow never leaks
+   into the next one. *)
+    $ntGenNSub = joined["nSub"];
+    ntGenLogDedup[joined, noDedup];
+    unitSrc = ntGenUnitSources[joined["distinctSubs"], joined["nSub"], hasDressed, cse["Defs"], cse["Decls"],
+                col["ChunkDefs"], preambles["UnitPre"]];
+(* main(). On a dense flow it is ~100% flat integer tables, so this timer measures integer-to-text
+   throughput. The table definitions go in front of main(), in this order. *)
+    ntT = First @ AbsoluteTiming[
+      main =
+        With[{tables = ntGenMainTables[joined["netTraceRows"], joined["netDressRows"], joined["netScalarRows"], hasDressed],
+              phaseB = ntGenMainPhaseB[groups, nNet, realOnlyG, hasDressed, crossCSE]},
+          StringJoin[
+            tables["Defs"], col["ColRDef"], phaseB["Defs"],
+            ntGenMainPrologue[ncomp, nsInner, hasDressed]["Text"],
+            tables["Text"],
+            ntGenMainPhaseA[joined["nSub"], joined["nReused"], hasDressed, mIdx]["Text"],
+            col["MainText"],
+            phaseB["Text"],
+            ntGenMainEmission[ncomp["varFill"], nsInner, kns, fillArgSig, complexQ, hasDressed, crossCSE, mIdx, Length[groups]]["Text"]]];];
+    ntLog["[prof] main() data tables: ", ntT, " s"];
+    {preambles["Pre"], unitSrc["Units"], unitSrc["Decl"], main}];
