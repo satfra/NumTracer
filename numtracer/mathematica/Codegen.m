@@ -4126,8 +4126,14 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
           "static inline " <> c <> " fma(const " <> c <> "&a,const " <> c <> "&b,const " <> c <> "&c){return a*b+c;}\n"],
         "template<class T> using complex = std::complex<T>;\n",
 (* independently-seeded pseudo-random real in [0.4,0.9): same (seed,arg) -> same value (a dressing is
-   a function), distinct (seed,arg) -> independent value, so no two dressings or arguments collide. *)
-        "static inline " <> $ntRealT <> " ntStub(double seed, double x){ double h = std::sin(seed*0.1031 + x*0.3127 + 1.7)*43758.5453; return " <> If[ntSingleQ[], "float(0.4 + 0.5*(h - std::floor(h)))", "0.4 + 0.5*(h - std::floor(h))"] <> "; }\n",
+   a function), distinct (seed,arg) -> independent value, so no two dressings or arguments collide.
+   Single precision uses a SMOOTH stub in [0.4,0.9] instead: the hash amplifies its argument ~1e4x,
+   and the bodies being compared compute that argument in different orders, so float roundoff in it
+   became O(1) different dressings per body (ZA3 with mesons: 45% of points "disagreeing"). Distinct
+   seeds still give distinct, generic values. *)
+        If[ntSingleQ[],
+          "static inline float ntStub(double seed, double x){ return float(0.65 + 0.25*std::sin(seed*0.1031 + x*0.3127 + 1.7)); }\n",
+          "static inline double ntStub(double seed, double x){ double h = std::sin(seed*0.1031 + x*0.3127 + 1.7)*43758.5453; return 0.4 + 0.5*(h - std::floor(h)); }\n"],
 (* both real projections call ntRe/ntIm on the trace tokens, exactly as the kernel does *)
         ntReImDefs["static inline"], "\n",
         fnFull,
