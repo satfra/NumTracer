@@ -118,13 +118,8 @@ ntIntRow[l_List] := "{" <> StringRiffle[ntIntStrs[l], ","] <> "}";
 
 ntMkIntern[] :=
   Module[{idx = <||>, bag = Internal`Bag[], n = 0},
-    {Function[v,
-       Module[{k = Lookup[idx, Key[v], Missing[]]},
-         If[MissingQ[k],
-           idx[v] = n;
-           Internal`StuffBag[bag, v];
-           n++,
-           k]]],
+    (* Lookup evaluates its default only on a miss *)
+    {Function[v, Lookup[idx, Key[v], idx[v] = n; Internal`StuffBag[bag, v]; n++]],
      Function[Null, Internal`BagPart[bag, All]]}];
 
 (* CppForm, flattened to a single line — the fill formulas are emitted INSIDE C++ string
@@ -696,23 +691,11 @@ $ntCompileJobs := ntCompileJobs[];
    referenced it, and the guard already covers the case it existed for.) *)
 
 ntChunkDef[name_String, ret_String, elems_List] :=
-  Module[{u, pos, idxCost, intElems},
+  Module[{u, tot},
     u = DeleteDuplicates[elems];
-(* Is this a flat table of integer literals? If so the generic path below emits `static const int
-   a[] = {...}` + one insert instead of one `o.push_back(...); ` per element — the SAME dense form
-   the index run further down already uses. The boilerplate it drops is ~14 characters per element,
-   which on a dressed flow is not a rounding error: ZAAqbq2's `sdchR0` alone was 7.6 MB of the 20 MB
-   of net-builder units. Values, order and the resulting vector are unchanged; measured on a 200k
-   table, 4.18 MB -> 1.38 MB of source and a -O0 compile of 14.2 s -> 0.44 s.
-   Tested on the DISTINCT elements (`u`), not on `elems`: these tables have millions of entries drawn
-   from a few hundred distinct indices, so the check is free where it matters and still exact. The
-   `ret` gate keeps it off every non-int table (DiracNet/NetVal/DSlotOpt/...). *)
-    intElems = ret === "std::vector<int>" && AllTrue[u, StringMatchQ[#, ("-" | "") ~~ DigitCharacter ..]&];
-    pos = Lookup[AssociationThread[u -> Range[Length[u]] - 1], elems];
-    (* one index entry costs its digits plus a comma *)
-    idxCost = (StringLength[ToString[Length[u]]] + 1) * Length[elems];
+    tot = Total[StringLength /@ elems];
     Which[
-      Length[elems] <= 1 || Total[StringLength /@ elems] <= $ntDefChunk,
+      Length[elems] <= 1 || tot <= $ntDefChunk,
         {{ret <> " " <> name <> "(){ return {" <> StringRiffle[elems, ", "] <> "}; }"}, ""},
 
       (* --- every row identical: the fill ctor, and the payload is emitted ONCE --- *)
@@ -722,8 +705,10 @@ ntChunkDef[name_String, ret_String, elems_List] :=
       (* --- few distinct rows: distinct table + an index run --- *)
       (* Conservative: compares payloads only, charging the index to the new form while giving the
          old form no credit for the ~14 chars/element of `o.push_back(...); ` it also pays. *)
-      Length[u] < Length[elems] && Total[StringLength /@ u] + idxCost < Total[StringLength /@ elems],
-        Module[{uDefs, uDecl, xs, xchunks, xnc, xdefs, xdecl, n},
+      (* one index entry costs its digits plus a comma *)
+      Length[u] < Length[elems] && Total[StringLength /@ u] + (StringLength[ToString[Length[u]]] + 1) * Length[elems] < tot,
+        Module[{uDefs, uDecl, pos, xs, xchunks, xnc, xdefs, xdecl, n},
+          pos = Lookup[AssociationThread[u -> Range[Length[u]] - 1], elems];
           n = ToString[Length[elems]];
           {uDefs, uDecl} = ntChunkDef[name <> "_u", ret, u];
           (* the distinct table is reached from the assembler below, which the bin-packer may put in
@@ -743,7 +728,17 @@ ntChunkDef[name_String, ret_String, elems_List] :=
 
       True,
         Module[
-          {cs, chunks, nChunks, defs},
+          {intElems, cs, chunks, nChunks, defs},
+(* Is this a flat table of integer literals? If so the generic path below emits `static const int
+   a[] = {...}` + one insert instead of one `o.push_back(...); ` per element — the SAME dense form
+   the index run further down already uses. The boilerplate it drops is ~14 characters per element,
+   which on a dressed flow is not a rounding error: ZAAqbq2's `sdchR0` alone was 7.6 MB of the 20 MB
+   of net-builder units. Values, order and the resulting vector are unchanged; measured on a 200k
+   table, 4.18 MB -> 1.38 MB of source and a -O0 compile of 14.2 s -> 0.44 s.
+   Tested on the DISTINCT elements (`u`), not on `elems`: these tables have millions of entries drawn
+   from a few hundred distinct indices, so the check is free where it matters and still exact. The
+   `ret` gate keeps it off every non-int table (DiracNet/NetVal/DSlotOpt/...). *)
+          intElems = ret === "std::vector<int>" && AllTrue[u, StringMatchQ[#, ("-" | "") ~~ DigitCharacter ..]&];
           (* cumulative chars / chunk size is nondecreasing, so equal keys form contiguous runs *)
           cs = Ceiling[Accumulate[(StringLength /@ elems) + 2] / $ntDefChunk];
           chunks = SplitBy[Transpose[{elems, cs}], Last][[All, All, 1]];
@@ -2500,13 +2495,10 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
       If[allDefs === {},
         {},
         (unitPre <> StringRiffle[#, "\n"] <> "\n")& /@
-          Module[{bins = ConstantArray[{}, nUnits], loads = ConstantArray[0, nUnits], b},
-            Do[
-              b = First @ Ordering[loads, 1];
-              bins[[b]] = Append[bins[[b]], d];
-              loads[[b]] += StringLength[d],
-              {d, allDefs[[Reverse @ Ordering[StringLength /@ allDefs]]]}];
-            bins]];
+          Module[{lens = StringLength /@ allDefs, order, loads = ConstantArray[0, nUnits], bin},
+            order = Reverse @ Ordering[lens];
+            bin = Table[With[{b = First @ Ordering[loads, 1]}, loads[[b]] += lens[[d]]; b], {d, order}];
+            Lookup[GroupBy[Transpose[{bin, allDefs[[order]]}], First -> Last], Range[nUnits], {}]]];
 (* the shared decl header: net-builder + CSE-accessor forward declarations (the units that call the
    lc<k>()/dc<k>() accessors #include this — emitted ONCE here, not duplicated per unit). *)
     decl =
