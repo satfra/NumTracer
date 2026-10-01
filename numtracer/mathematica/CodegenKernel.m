@@ -358,7 +358,7 @@ ntAssertADTyped[params_List, adNames_List] :=
    offline/no-generator drops the request with a warning. *)
 mkGenerateKernel::prunedata = "PruneRealTraces: the diagram-coefficient table has `1` entries but the trace grouping references diagram index `2`. The table and the grouping have gone out of step, so the per-group real/complex verdict below would be read off the wrong diagram — or off nothing at all. This is the shape of the bug this guard exists for (an unassigned diagData read as vacuously real).";
 
-mkGenerateKernel::pruneall = "PruneRealTraces: the flow is COMPLEX, yet every one of its `1` trace groups was judged real and would have its imaginary half dropped. That is exactly what the historic bug produced from an unassigned coefficient table, and it is indistinguishable by inspection from a legitimately all-real grouping. If it is legitimate, the flow should not have tripped the complex test at all. Refusing to emit; re-run without \"PruneRealTraces\" -> True to get the full complex kernel.";
+mkGenerateKernel::pruneall = "PruneRealTraces: the flow is complex, yet all `1` trace groups were judged real and would lose their imaginary halves. That is the signature of an unassigned coefficient table, not a plausible result. Refusing to emit; re-run without \"PruneRealTraces\" -> True to get the full complex kernel.";
 
 ntkPruneSpec[diagData_, groups_, complexQ_, offline_, pruneRequested_, realProbe_, runGenerator_] :=
   Module[{pruneG, realOnlyG, probeWillRun},

@@ -403,7 +403,7 @@ diracSlotSumQ[_] := False;
    legs]`, where each option is `{residualScalarCoeff, structureProduct}` and `structureProduct` is the
    term's Dirac + Lorentz-net factors (colour and the common scalar factored out). $Failed if the colour
    factor is not common across terms (then the sum is left to distribute). *)
-NumTrace::slotorient = "diracSlotDecompose: a collected Dirac slot has `1` candidate in-legs, not 1. A slot is an OPEN chain din->dout, so exactly one of its open spinor labels must be some head's IN leg and no head's OUT leg; two means both ends are IN (an anomalous qq vertex), zero means both are OUT (its q̄q̄ conjugate). Either way the chain has no orientation, and the slot's tokens are spliced into the surrounding spinor loop IN CHAIN ORDER — so guessing one would emit that segment backwards, silently. Open spinor labels: `2`. First term: `3`. Aborting instead of guessing.";
+NumTrace::slotorient = "diracSlotDecompose: a collected Dirac slot has `1` candidate in-legs, not 1. A slot is an open chain din->dout, so exactly one open spinor label must be an IN leg and no OUT leg; two (an anomalous qq vertex) or zero (its qbar qbar conjugate) leave it without an orientation, and guessing one could emit the segment backwards. Open spinor labels: `2`. First term: `3`.";
 
 diracSlotDecomposeRaw[p_Plus] := Module[
   {terms = List @@ Expand[p], legs, opens, din, dout, io, ins, outs, dinCands, rows, cols, common, scals, commonScal, opts},
@@ -925,7 +925,7 @@ likely cause: a flavour delta buried inside an eager (un-distributed) Plus that 
 did not lift out, so promoteFlavResidue saw it as already closed. Offending delta(s):\n`1`";
 
 NumTrace::badlabel = "Diagram `1`: index label `2` occurs `3` times (expected 1 = free, \
-2 = contracted). The et engine contracts axes by matching id, so `3` axes sharing this label \
+2 = contracted). The engine contracts axes by matching id, so `3` axes sharing this label \
 are silently mis-paired into a wrong number. Offending diagram:\n`4`";
 NumTrace::plusfree = "Diagram `1`: the summands of an eager (un-distributed) sum expose \
 DIFFERENT free indices `2` — the eager add(...) cannot align them. Offending sum:\n`3`";

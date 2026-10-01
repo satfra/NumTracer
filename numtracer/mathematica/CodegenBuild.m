@@ -207,7 +207,7 @@ resolveIncludeDir[] := Module[{envDir, dir, pathsFile},
    is plausible but wrong, and kernel.hh (which only names the traces) stays byte-identical. mtime is
    a coarse proxy, but the failure is silent and total, so an archive older than any header aborts. *)
 
-MakeNTKernel::stalelib = "The prebuilt engine archive\n  `1`\nis OLDER than the header\n  `2`\nthat the generator will compile against. Linking them mixes two source vintages of the engine's types (MPoly/SUNNet/fold buffers) — an ODR/ABI mismatch that SILENTLY produces wrong traces in kernels.hh while leaving kernel.hh byte-identical. Rebuild the library first, e.g.\n  cmake --build <repo>/numtracer/build --target NumTracer\nthen regenerate. (Set NT_GEN_LIB to a specific archive, or NT_ALLOW_STALE_LIB=1 to override — the latter is almost never right.)";
+MakeNTKernel::stalelib = "The engine archive\n  `1`\nis older than the header\n  `2`\nthe generator compiles against. Linking them mixes two versions of the engine types and silently produces wrong traces. Rebuild it first:\n  cmake --build <repo>/numtracer/build --target NumTracer\n(NT_GEN_LIB selects a specific archive; NT_ALLOW_STALE_LIB=1 overrides this check.)";
 
 genLibStaleQ[lib_, incDir_] := Module[{hdrs, newest},
     hdrs = FileNames["*.hpp" | "*.h", incDir, Infinity];

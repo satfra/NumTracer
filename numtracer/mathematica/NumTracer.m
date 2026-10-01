@@ -30,7 +30,7 @@ NTKernel::usage = "NTKernel[assoc] is the analysed intermediate-expression tree 
 
 (* Attached to the package's primary entry point rather than to a symbol of its own: the file that
    failed may be the one that would have defined any more specific symbol. See ntLoadPart below. *)
-NumTrace::loadsyntax = "NumTracer FAILED TO LOAD: `1` has a syntax error (see the Syntax:: message just above for the line). Mathematica does not treat this as a failure — Get returns Null, every definition before the malformed expression is installed and every one after it silently is not — so loading would otherwise continue and the package would be SILENTLY HALF-DEFINED. The usual symptom is far away and unrecognisable: a missing Options[] surfacing as SetOptions::optnf, a generator that emits nothing yet exits 0. An unbalanced bracket swallows everything to the end of the file, so the reported line is where parsing gave up, NOT where the error is — look for the unclosed bracket earlier. Aborting instead.";
+NumTrace::loadsyntax = "NumTracer FAILED TO LOAD: `1` has a syntax error (see the Syntax:: message above). Get does not fail on it — the definitions after the error are silently missing — so loading is aborted. An unbalanced bracket is reported where parsing gave up, not where it is: look for the unclosed bracket earlier in the file.";
 
 FromFunKit::usage = "FromFunKit[flow, \"FlavourGroup\"->n] rewrites a FunKit traced flow (after // dressingRules) into the NumTracer DSL; scalar products become ntSP, resolved by the frame. SU(N) group tokens get their rank baked into the ntSUN* heads — colour from Global`Nc, the isospin group from \"FlavourGroup\" (default Global`Nf or 2).";
 
@@ -102,7 +102,7 @@ ntGamma::usage = "ntGamma[mu, din, dout] — Dirac gamma^mu carrying a Lorentz a
 
 ntGamma5::usage = "ntGamma5[din, dout] — Dirac gamma_5 on spinor axes din,dout.";
 
-ntC::usage = "ntC[din, dout] — the charge-conjugation matrix C = gamma^2 gamma^4 on spinor axes din,dout. Satisfies C^T = C^-1 = -C, C gamma_mu^T C^-1 = -gamma_mu and C gamma5^T C^-1 = +gamma5 (arXiv:2606.23772 Eq. 46). Like gamma5 it is block-diagonal in the Weyl basis, so it does not flip the odd-trace parity. It is what makes an anomalous (qq / qbar qbar) vertex writable — see the orientation guard in Codegen.m.";
+ntC::usage = "ntC[din, dout] — the charge-conjugation matrix C = gamma^2 gamma^4 on spinor axes din,dout. Satisfies C^T = C^-1 = -C, C gamma_mu^T C^-1 = -gamma_mu and C gamma5^T C^-1 = +gamma5 (arXiv:2606.23772 Eq. 46). Like gamma5 it is block-diagonal in the Weyl basis, so it does not flip the odd-trace parity. It is what makes an anomalous (qq / qbar qbar) vertex writable — see orderDiracFacs in CodegenNets.m.";
 
 ntSigma::usage = "ntSigma[legA, legB, din, dout] — INTERNAL codegen token for the bare γ-commutator [A,B] on spinor axes din,dout, folded from the struct-7 quark-gluon-vertex σ^{μν}. Each leg is {\"slash\", mom} (a slashed momentum) or {\"free\", mu} (an open Lorentz id). Emitted by foldDiracSigma so the antisymmetric γ-pair is never distributed into two traces.";
 

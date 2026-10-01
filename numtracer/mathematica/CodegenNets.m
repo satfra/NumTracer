@@ -567,7 +567,7 @@ orderDiracFacs::open = "the spinor-loop walk consumed `1` of `2` token-bearing D
    its `diracIn`, then always leave by the OTHER endpoint. This also closes loops through a symmetric
    external spinor-δ (e.g. a scalar external projector); the trace is cyclic, so the start is free. *)
 orderDiracFacs[facs_] :=
-  Module[{nodeFacs = Association[], cur = 1, prevLabel, out = {}, seen = {}, labels, exitLabel, nexts, nTok, revs = {}, fwds = {}, revQ},
+  Module[{nodeFacs = Association[], cur = 1, prevLabel, out = {}, seen = {}, labels, exitLabel, nexts, nTok, revQ},
     Do[
       Module[{ls = spinorLabelsHead[facs[[i]]]},
         (nodeFacs[#] = Append[Lookup[nodeFacs, #, {}], i])& /@ ls],
@@ -584,8 +584,6 @@ orderDiracFacs[facs_] :=
          A reversed factor is only MARKED here; the engine transposes it. Do not replace this by a sign
          rule: the untransposed walk differs from the network by a sign segment parity does not predict. *)
       revQ = ! diracSpinorSymmetricQ[facs[[cur]]] && prevLabel =!= diracIn[facs[[cur]]];
-      If[! diracSpinorSymmetricQ[facs[[cur]]],
-        If[revQ, AppendTo[revs, facs[[cur]]], AppendTo[fwds, facs[[cur]]]]];
       If[MatchQ[facs[[cur]], _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDressedNum | _ntDiracSlot],
         AppendTo[out, If[revQ, ntTransposed[facs[[cur]]], facs[[cur]]]]];
       labels = spinorLabelsHead[facs[[cur]]];
