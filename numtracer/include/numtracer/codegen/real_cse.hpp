@@ -1,5 +1,5 @@
 /// @file real_cse.hpp
-/// @brief The runtime real-SSA CSE builder driven by `codegen/lower.hpp::horner`.
+/// @brief The build-time real-SSA CSE builder driven by `codegen/lower.hpp::horner`.
 ///
 /// Lowering a contracted diagram polynomial to straight-line code needs a place to accumulate
 /// real arithmetic instructions while sharing every repeated subexpression exactly once. That is
@@ -26,7 +26,7 @@ namespace numtracer::network
 
   /// @brief Opcode tag for a real-SSA instruction.
   enum ROp : int {
-    RCONST, ///< Real constant (value in @ref RInstr::k).
+    RCONST, ///< Real constant (value in @ref RInstr::value).
     RVAR,   ///< Real variable (environment index in @ref RInstr::a).
     RADD,   ///< `a + b`.
     RMUL,   ///< `a * b`.

@@ -64,8 +64,8 @@ namespace numtracer::numeric
     int nsym = 0;
     std::vector<std::pair<DMono, MPoly>> terms; ///< sorted by DMono; each MPoly is non-empty
 
-    // Sanctioned construction paths (see @ref MPoly). The in-header DPoly arithmetic keeps constructing
-    // results directly, so the dressing hot path is unchanged.
+    // Sanctioned construction paths (see @ref MPoly). The in-header DPoly arithmetic constructs its
+    // results directly.
     friend class LorentzEnv;
     friend struct DPolyFactory;
     friend DPoly operator+(const DPoly &a, const DPoly &b);
@@ -163,10 +163,8 @@ namespace numtracer::numeric
     if (c.re == 0 && c.im == 0) return r;
     r.terms.reserve(a.terms.size());
     for (const auto &[d, mp] : a.terms) {
-      // Direct coefficient scaling instead of `mp * constant(c)`: skips the n·m scratch and the dead
-      // std::sort a constant multiply pays (see MPoly::scaled). Bit-identical (Cx multiply commutes
-      // componentwise). Each stored `mp` is non-empty and `c != 0`, so `s` is non-empty; the guard is
-      // kept for parity with the previous body.
+      // Direct coefficient scaling instead of `mp * constant(c)`: bit-identical (see MPoly::scaled),
+      // without the scratch and sort. The emptiness guard is defensive: `mp` is non-empty and `c != 0`.
       MPoly s = MPolyFactory::scaled(a.nsym, mp, c);
       if (!s.empty()) r.terms.push_back({d, std::move(s)});
     }

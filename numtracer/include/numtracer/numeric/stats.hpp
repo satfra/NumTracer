@@ -3,10 +3,9 @@
 ///
 /// Compile-time gated on `NT_PHASEA_STATS`. When the macro is absent (the default, and the only
 /// configuration ever installed/shipped) every hook expands to `((void)0)` and this header adds no
-/// includes beyond nothing — the engine object code is byte-identical. A stats build is a
-/// throwaway profiling binary: compile EVERY TU of that binary with `-DNT_PHASEA_STATS=1`
-/// (mixing stats and non-stats TUs is an ODR violation on the inline hot paths — the same failure
-/// mode as the documented stale-libNumTracer.a bug) and never install it.
+/// includes — the engine object code is byte-identical. A stats build is a throwaway profiling
+/// binary: compile EVERY TU of that binary with `-DNT_PHASEA_STATS=1` (mixing stats and non-stats
+/// TUs is an ODR violation on the inline hot paths) and never install it.
 ///
 /// Include constraints (same as the rest of the numeric engine): this header is pulled into
 /// `mpoly.hpp`/`numeric_contract.hpp`, which the `-O0 -fno-exceptions` net-builder TUs may see —
@@ -48,7 +47,7 @@ namespace numtracer::numeric::stats
     nt_u64 ru_work = 0;        ///< Σ work-stack items popped in reduce_units (branch blowup)
     nt_u64 dma_calls = 0;      ///< divThroughMonomialAtoms invocations
     nt_u64 dpa_calls = 0;      ///< divThroughPolyAtoms invocations
-    nt_u64 dpa_trials = 0;     ///< trial divisions attempted (each pays a Grp map copy today)
+    nt_u64 dpa_trials = 0;     ///< trial divisions attempted (past the lead pre-filter)
     nt_u64 dpa_exact = 0;      ///< trial divisions that were exact
     nt_u64 dpa_noop = 0;       ///< divThroughPolyAtoms pass-throughs (no multi-term atom present)
     // Dirac fold (numeric_contract.hpp)

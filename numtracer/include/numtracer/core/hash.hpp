@@ -1,14 +1,12 @@
 /// @file core/hash.hpp
 /// @brief The 64-bit hash mixers the engine's open-addressed indices are built on.
 ///
-/// Two copies of exactly these two functions used to live in `network/network.hpp` and
-/// `codegen/real_cse.hpp` (as `mix64`/`hcomb`), each commented "local copy" — `real_cse.hpp`
-/// deliberately does not include `network.hpp`, which is the heavier header. Neither copy could be
-/// dropped in favour of the other without creating that dependency, so both are here instead: this
-/// header pulls in nothing but `<cstdint>`.
+/// Pulls in nothing but `<cstdint>`, so the light `codegen/real_cse.hpp` can share it without
+/// depending on the heavier `network/network.hpp`.
 ///
 /// Nothing about the emitted code depends on the choice of hash. Both indices
-/// (@ref numtracer::network::GlobalEnv, @ref numtracer::network::rdetail::RBuilder) return
+/// (@ref numtracer::network::GlobalEnv in `codegen/gen.hpp`, @ref numtracer::network::rdetail::RBuilder
+/// in `codegen/real_cse.hpp`) return
 /// *insertion* positions and compare candidates by equality, so the hash picks buckets only — any
 /// mixer with the same signature would emit byte-identical kernels.
 #pragma once

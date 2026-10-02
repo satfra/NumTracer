@@ -3,8 +3,8 @@
 ///        (`1/k²`) atoms in the monomial key. The arithmetic core of the **numeric contraction
 ///        backend**: contract a diagram as 4×4 spinor matrix products whose entries are
 ///        these polynomials, so γ/metric/projector stay numeric and only the user's symbolic
-///        momentum data enters the result — bounded by the matrix structure, not the `(2n−1)!!`
-///        sp-monomial blowup of the symbolic `reduce_product` path.
+///        momentum data enters the result — bounded by the matrix structure, not by the `(2n−1)!!`
+///        terms of a symbolic trace expansion.
 ///
 /// A `MPoly` is a map from monomial → complex coefficient. A monomial is
 ///   (exponent vector over the `nsym` user symbols, a sorted multiset of inverse-atom ids).
@@ -19,8 +19,8 @@
 ///     routinely carry a factor of the very `k²` beneath them, so this fires often.
 /// Only an atom that survives both is lowered to an `inv` env slot (a runtime division).
 ///
-/// Map-based (sizes are tens of monomials with frame inputs — the regime where this backend wins);
-/// the symbol *meaning* lives only in the kernel's `fill`, so the engine is frame-agnostic.
+/// Stored as a sorted vector (see @ref MPoly); the symbol *meaning* lives only in the kernel's `fill`,
+/// so the engine is frame-agnostic.
 ///
 /// This header is the polynomial type alone; the 4×4 spinor matrix of `MPoly` (`Mat4`) and the
 /// γ/slash builders that consume it live in `numeric/spinor_mat.hpp`.
@@ -55,11 +55,9 @@ namespace numtracer::numeric
   /// size (single digits to low tens), while `atoms` is usually empty and rarely more than a few — so
   /// with these buffers a monomial holds its whole payload inline and never touches the heap.
   ///
-  /// This matters because `operator*` materialises all n·m product monomials: with `std::vector`
-  /// members that was one heap allocation per product term, and profiling the generator run showed
-  /// malloc/free at ~17% of total time (plus the pointer-chasing it forces on every sort comparison).
-  /// Larger flows overflow these buffers gracefully — small_vector just falls back to the heap, i.e.
-  /// exactly the old behaviour, so correctness never depends on the capacity being big enough.
+  /// This matters because `operator*` materialises all n·m product monomials; heap-backed members
+  /// would cost one allocation per product term. Larger flows overflow these buffers gracefully
+  /// (small_vector falls back to the heap), so correctness never depends on the capacity.
   ///
   /// Exponents and atom ids are `int16_t`, not `int`. Both are small by construction — an exponent is
   /// a polynomial degree (single digits in practice) and an atom id indexes the flow's atom table — so
@@ -74,11 +72,9 @@ namespace numtracer::numeric
   /// A stateless allocator identical to `std::allocator<T>` but advertising a 32-bit `size_type`.
   /// `gch::small_vector` stores its size and capacity in the allocator's `size_type` (packed to the
   /// smallest int that fits it — see small_vector.hpp), so this halves the @ref MonoAtoms header from
-  /// 24 B (ptr + 8-byte size + 8-byte cap) to 16 B — one step of the `Mono` 112→96→56 B chain
-  /// documented on @ref MonoExp. A monomial's atom count is single digits by construction, so the 2³²
-  /// capacity ceiling is never approached; only the WIDTH of the bookkeeping changes, never a value —
-  /// so every emitted kernel is bit-identical. Empty (EBO) like `std::allocator`, so it adds no bytes
-  /// of its own.
+  /// 24 B to 16 B. A monomial's atom count is single digits by construction, so the 2³² capacity
+  /// ceiling is never approached; only the WIDTH of the bookkeeping changes, never a value. Empty
+  /// (EBO) like `std::allocator`, so it adds no bytes of its own.
   template <class T> struct NarrowAlloc : std::allocator<T> {
     using size_type = std::uint32_t;
     using difference_type = std::int32_t;
@@ -89,29 +85,20 @@ namespace numtracer::numeric
 
   /// @brief Packed exponent vector: the per-symbol exponents of a monomial stored as a fixed 128-bit
   ///        key (`kExpBits` = 5 bits/symbol → degree ≤ 31, up to 24 symbols) instead of the 72-byte
-  ///        `small_vector`. This is the single largest RAM lever, and it makes `Mono::operator<`/`==`
-  ///        two 64-bit integer compares instead of an nsym-long element walk.
-  ///
-  /// Size chain, measured: the stored polynomial term `pair<Mono,Cx>` went 128 B → 112 B (@ref
-  /// NarrowAlloc on the atom list) → **72 B** here, i.e. −43.75% overall, which is why every
-  /// `poly_bytes` estimate has a lower floor than it used to. The struct itself is 2 words + one
-  /// pointer = 24 B, taking `Mono` to 56 B.
+  ///        `small_vector`. This is the single largest RAM lever (a stored term is 72 B, `Mono` 56 B), and
+  ///        it makes `Mono::operator<`/`==` two 64-bit integer compares instead of an nsym-long walk.
   ///
   /// Packing is **big-endian within each word** (symbol 0 in the high bits, 12 symbols per 64-bit word,
-  /// so no symbol straddles the word boundary). That is deliberate: it makes the array's own ordering
-  /// (`packed[0]` then `packed[1]`, integer compares) reproduce the OLD element-wise lexicographic order
-  /// of the exponent vector EXACTLY — symbol 0 dominates, then symbol 1, … — for two monomials of equal
-  /// nsym (always the case in one polynomial), with unused high slots zero in both. So sort/merge/lookup
-  /// keep the identical order and the emitted kernel is byte-for-byte unchanged; only the STORAGE of the
-  /// exponents changes, never a value or an ordering.
+  /// so no symbol straddles the word boundary). That is deliberate: the array's own ordering
+  /// (`packed[0]` then `packed[1]`, integer compares) IS the element-wise lexicographic order of the
+  /// exponent vector — symbol 0 dominates, then symbol 1, … — for two monomials of equal nsym (always
+  /// the case in one polynomial), with unused high slots zero in both. Sort/merge order, and with it
+  /// the emitted kernel, depend on that.
   ///
-  /// The common inline range is nsym ≤ 24 with degree ≤ 31 — which covers every flow in practice (the
-  /// same 24 the old `small_vector` inlined; the largest `nsym` across all committed flows is 6). It is
-  /// NOT a hard cap: a symbol index ≥ 24, an exponent > 31, or a negative exponent transparently falls
-  /// back to a heap `std::vector<MonoExpT>` holding the full exponent list, so nsym and degree are
-  /// bounded only by `MonoExpT` (`int16_t`, ≤ 32767) — exactly like the old heap-expanding
-  /// `small_vector`. The overflow path never triggers for the practical flows, so they keep the fast
-  /// inline path; only an atypically large flow pays the indirection.
+  /// The inline range is nsym ≤ 24 with degree ≤ 31, which covers every flow in practice (the largest
+  /// committed `nsym` is 6). It is NOT a hard cap: a symbol index ≥ 24, an exponent > 31, or a negative
+  /// exponent transparently falls back to a heap `std::vector<MonoExpT>` holding the full exponent
+  /// list, so nsym and degree are bounded only by `MonoExpT` (`int16_t`, ≤ 32767).
   struct MonoExp {
     static constexpr unsigned kExpBits = 5;
     static constexpr unsigned kPerWord = 64u / kExpBits;         ///< 12 symbols per 64-bit word (no straddle)
@@ -255,10 +242,9 @@ namespace numtracer::numeric
   using MonoAtoms = gch::small_vector<MonoAtomT, kMonoAtomInline, NarrowAlloc<MonoAtomT>>;
 
   struct Mono;
-  /// Scratch list of (monomial, coeff) handed to @ref MPoly::from_scratch. Measured on a real flow,
-  /// from_scratch is called tens of millions of times with a MEAN of ~4 terms — it is not one big
-  /// sort, it is a flood of tiny ones — so a heap-backed scratch vector paid an allocation per call.
-  /// Inline storage covers the common case; larger products fall back to the heap as before.
+  /// Scratch list of (monomial, coeff) handed to @ref MPoly::from_scratch. from_scratch runs tens of
+  /// millions of times with a MEAN of ~4 terms, so inline storage saves an allocation per call;
+  /// larger products fall back to the heap.
   inline constexpr unsigned kMPolyScratchInline = 8;
 
   /// @brief A monomial: exponents over the user symbols plus a sorted multiset of inverse-atom ids.
@@ -289,20 +275,18 @@ namespace numtracer::numeric
   /// Storage is a **sorted, like-terms-combined `std::vector`** (not a `std::map`): the per-insert
   /// red-black-tree overhead of a map dominates for the large (10⁴+ monomial) pure-gauge polynomials,
   /// so `operator*` collects all `n·m` products into a scratch vector and **sort-collects once**
-  /// (O(nm log nm), no per-term tree churn) and `operator+` is a linear merge. `t` stays sorted by
+  /// (O(nm log nm), no per-term tree churn) and `operator+` is a linear merge. `terms` stays sorted by
   /// @ref Mono and carries no zero coefficients, so iteration order is deterministic (reproducible
   /// kernel) and equality/lookup are binary searches.
   struct MPoly {
     int nsym = 0;
-    /// Heap-backed on purpose. Giving `t` inline storage (capacity 4) was measured: it bought ~2% of
-    /// run time but pushed sizeof(Mat4) from ~0.5 KB to ~8.7 KB and peak RSS up ~20% — a bad trade on
-    /// the dense flows, which are memory-bound before they are time-bound.
+    /// Heap-backed on purpose: inline storage (capacity 4) is a measured dead end — ~2% faster, but
+    /// sizeof(Mat4) 0.5 KB -> 8.7 KB and peak RSS +20% on the memory-bound dense flows.
     std::vector<std::pair<Mono, Cx>> terms; ///< sorted by Mono, like terms combined, no zeros
 
     // Sanctioned construction paths (see the note above @ref MPoly). The env and the internal attorney
-    // reach the nsym-taking ctor/factories; the in-header arithmetic operators keep constructing result
-    // polynomials directly (they already have a definite `nsym` from their operands), so their bodies
-    // stay byte-for-byte unchanged — the hot path is untouched.
+    // reach the nsym-taking ctor/factories; the in-header arithmetic operators construct result
+    // polynomials directly (they already have a definite `nsym` from their operands).
     friend class LorentzEnv;
     friend struct MPolyFactory;
     friend MPoly operator+(const MPoly &a, const MPoly &b);
@@ -321,8 +305,8 @@ namespace numtracer::numeric
 
   private:
     // Bare-`nsym` construction — reachable only through @ref LorentzEnv / @ref MPolyFactory (friends).
-    // Making these private is what turns "every MPoly in one trace shares an nsym" from a debug-time
-    // assert into a compile-time guarantee: outside the sanctioned env you cannot mint a non-empty MPoly
+    // Making these private turns "every MPoly in one trace shares an nsym" into a compile-time
+    // guarantee: outside the sanctioned env you cannot mint a non-empty MPoly
     // with a hand-picked nsym. The empty default ctor above stays public (an nsym==0 zero used by the
     // operator short-circuits and by std::array/std::vector default members).
     explicit MPoly(int ns) : nsym(ns) {}
@@ -679,7 +663,7 @@ namespace numtracer::numeric
     /// A bare inverse atom `1/D` (atom id `aid`), coefficient 1.
     ///
     /// The narrowing to @ref MonoAtomT (`int16_t`) is the ONE place an atom id enters the monomial
-    /// key, and it was unguarded: `aid >= 32768` wraps to a different — possibly negative — id, so
+    /// key, hence the guard: `aid >= 32768` would wrap to a different — possibly negative — id, so
     /// the term then carries somebody else's denominator and @ref divThroughMonomialAtoms cancels
     /// against the wrong `atomDen` entry. Silent, and value-wrong. The id space is small by
     /// construction (one per projector denominator in the flow), so tripping this means the front
@@ -758,8 +742,8 @@ namespace numtracer::numeric
   /// Rvalue overloads of operator+: the hot paths add PRVALUE products (`x[0]*y[0] + x[1]*y[2]` in
   /// the Weyl-block fold) where one side is very often the zero polynomial — a γ Weyl block is
   /// diagonal-or-antidiagonal, so half its entry products are empty. The const& overload must COPY
-  /// the surviving side in that case (measured: 70-85% of ALL operator+ calls); these move it.
-  /// Value- and byte-identical: the merge path and term order are untouched.
+  /// the surviving side in that case (70-85% of ALL operator+ calls); these move it. Value- and
+  /// byte-identical: the merge path and term order are the same.
   inline MPoly operator+(MPoly &&a, MPoly &&b)
   {
     if (a.terms.empty()) {
@@ -801,10 +785,10 @@ namespace numtracer::numeric
   /// outer operand and folds the chunks, so peak scratch is bounded by ~`kMulMaxScratch` instead of the
   /// full `|a|·|b|`. This is the single-contraction RAM lever: `operator*` builds every `n·m` product
   /// monomial before `from_scratch` collapses like terms, so on a "collapsing" multiply (result ≪
-  /// scratch) the transient peak — not the result — is what spikes RAM. Below the threshold the exact
-  /// byte-for-byte path runs, so the mean-few-term hot path and every small/test flow are untouched.
-  /// Blocking only REASSOCIATES the like-term sums across chunk boundaries (≤ 1 ulp, exactly as the
-  /// already-shipped phase-B tree fold does); the monomial SET is identical.
+  /// scratch) the transient peak — not the result — is what spikes RAM. Below the threshold the
+  /// unblocked path runs, so the mean-few-term hot path and every small/test flow are unaffected.
+  /// Blocking only REASSOCIATES the like-term sums across chunk boundaries (≤ 1 ulp, like the phase-B
+  /// tree fold); the monomial SET is identical.
   inline constexpr std::size_t kMulMaxScratch = std::size_t(1) << 20;
   /// Smallest product size (`|a|·|b|`) that takes the atom-ranked keyed multiply.
   inline constexpr std::size_t kMulKeyedMin = 32;
@@ -821,8 +805,8 @@ namespace numtracer::numeric
     NT_STAT_ADD(mul_calls, 1);
     NT_STAT_ADD(mul_prod_terms, na * nb);
 
-    // Emit the product monomial ma·mb (coefficient ca·cb) into scratch `s`. Build IN PLACE (the old
-    // code kept a scratch `e` and copied it in, an allocation per product term).
+    // Emit the product monomial ma·mb (coefficient ca·cb) into scratch `s`, built IN PLACE (no
+    // allocation per product term).
     auto emit = [ns](MPolyScratch &s, const Mono &ma, Cx ca, const Mono &mb, Cx cb) {
       auto &slot = s.emplace_back(Mono{}, ca * cb);
       Mono &m = slot.first;
@@ -830,8 +814,8 @@ namespace numtracer::numeric
       // per-symbol sum whenever no 5-bit field carries out (SWAR carry-out test against the field
       // top-bit mask) — two 64-bit adds replace the nsym unpack/shift/mask/repack round trips of
       // the innermost loop of the innermost operation. Exact integer arithmetic: any carry (a
-      // field sum > 31) falls back to the per-symbol path, which spills to the heap exactly as
-      // before, so values and ordering are bit-identical in every case.
+      // field sum > 31) falls back to the per-symbol path, which spills to the heap, so values and
+      // ordering are bit-identical in every case.
       bool fast = !ma.e.overflow && !mb.e.overflow;
       if (fast) {
         // `wa`/`wb`, not `a`/`b`: those name this operator's two POLYNOMIAL operands in the enclosing
@@ -849,7 +833,7 @@ namespace numtracer::numeric
       if (!fast)
         for (int k = 0; k < ns; ++k) m.e[k] = ma.e[k] + mb.e[k]; // packed exponents: set each directly
       // Only ask for capacity when the merge would overflow the inline buffer — most monomials carry
-      // NO atoms, and an unconditional reserve() here cost ~7% of the run.
+      // NO atoms (an unconditional reserve() here cost ~7% of the run).
       const std::size_t nat = ma.atoms.size() + mb.atoms.size();
       if (nat > kMonoAtomInline) m.atoms.reserve(nat);
       std::size_t i = 0, j = 0; // merge the two sorted atom multisets
@@ -906,7 +890,7 @@ namespace numtracer::numeric
       if (auto r = MPoly::mulKeyed(a, b)) return std::move(*r);
     }
 
-    if (na * nb <= kMulMaxScratch) { // exact byte-for-byte path — the common case
+    if (na * nb <= kMulMaxScratch) { // unblocked path — the common case
       MPolyScratch s;
       s.reserve(na * nb);
       for (const auto &[ma, ca] : a.terms)
@@ -975,20 +959,6 @@ namespace numtracer::numeric
     return fromKeyed(ns, m.data(), m.size());
   }
 
-  /// @brief Cancel each numerator monomial against any atom whose denominator is a single monomial.
-  ///
-  /// `atomDen[aid]` is the atom's denominator polynomial `k²`. If it is a single monomial
-  /// `c·∏ x^d`, then one power of the atom `1/D` cancels whenever the numerator exponents dominate
-  /// `d` componentwise: subtract `d`, divide the coefficient by `c`, drop one atom instance. Repeat
-  /// per atom occurrence. Atoms with a non-monomial denominator (shifted lines) are left intact here
-  /// and handed to @ref divThroughPolyAtoms, which trial-divides them into the numerator; only an atom
-  /// surviving both passes reaches the lowering as an `inv` env slot. Value-preserving, frame-agnostic.
-  ///
-  /// Split into a no-op TEST + a REBUILD so the `const MPoly&` and `MPoly&&` overloads below can share
-  /// both and cannot drift apart. The `&&` overload exists because the pass-through case fires on ~95%
-  /// of calls and `return p` on a `const&` is a full DEEP COPY of the polynomial — on the
-  /// `eliminate` in-step reduction that is one copy per output index of every elimination step, which
-  /// is the hottest loop in the engine. Same shape as the landed rvalue `operator+` lever.
   /// @brief The @ref divThroughMonomialAtoms pass-through test. True ⇒ the rebuild is the identity.
   inline bool dmaIsNoop(const MPoly &p, const std::vector<MPoly> &atomDen)
   {
@@ -1036,6 +1006,18 @@ namespace numtracer::numeric
     return MPoly::from_scratch(p.nsym, std::move(out));
   }
 
+  /// @brief Cancel each numerator monomial against any atom whose denominator is a single monomial.
+  ///
+  /// `atomDen[aid]` is the atom's denominator polynomial `k²`. If it is a single monomial
+  /// `c·∏ x^d`, then one power of the atom `1/D` cancels whenever the numerator exponents dominate
+  /// `d` componentwise: subtract `d`, divide the coefficient by `c`, drop one atom instance. Repeat
+  /// per atom occurrence. Atoms with a non-monomial denominator (shifted lines) are left intact here
+  /// and handed to @ref divThroughPolyAtoms, which trial-divides them into the numerator; only an atom
+  /// surviving both passes reaches the lowering as an `inv` env slot. Value-preserving, frame-agnostic.
+  ///
+  /// Split into a no-op TEST + a REBUILD so the `const MPoly&` and `MPoly&&` overloads share both and
+  /// cannot drift apart. The `&&` overload exists because the pass-through fires on ~95% of calls, and
+  /// `return p` on a `const&` deep-copies — once per output index of every `eliminate` step.
   inline MPoly divThroughMonomialAtoms(const MPoly &p, const std::vector<MPoly> &atomDen)
   {
     NT_STAT_ADD(dma_calls, 1);
@@ -1057,18 +1039,6 @@ namespace numtracer::numeric
     return dmaRebuild(p, atomDen);
   }
 
-  /// @brief Apply unit-vector constraints `Σ_μ Uμ² = 1` to reduce each unit group's LAST component to
-  ///        power ≤ 1: `U_last² → 1 − Σ_{μ<last} Uμ²`. A `group` is the list of symbol indices of one
-  ///        unit direction's components (e.g. the loop direction `{U0,U1,U2}` with `U0²+U1²+U2²=1`, or a
-  ///        `{cos,sin}` pair). This is the general form of `sin²→1−cos²` and is the crux of the numeric
-  ///        backend's compactness: it (a) collapses the bare-loop denominator `Σ(l1·Uμ)² = l1²·ΣUμ²` to
-  ///        the **monomial `l1²`** so @ref divThroughMonomialAtoms cancels it (like inv's `rel`), and
-  ///        (b) collapses the `U·U` factors transverse projectors generate. Value-preserving;
-  ///        terminates because each rewrite strictly lowers the last component's exponent.
-  ///
-  /// Split into a no-op TEST + a REBUILD so the `const MPoly&` and `MPoly&&` overloads below share
-  /// both. The `&&` overload matters because the pass-through fires on ~88% of calls and `return p`
-  /// on a `const&` deep-copies the whole polynomial; see @ref divThroughMonomialAtoms.
   /// @brief The @ref reduce_units pass-through test: no term carries any group's LAST component at
   ///        power >= 2, so the work-stack rebuild would be the identity (`p` is already sorted and
   ///        combined). Fires constantly — `eliminate`'s in-step reduction calls this on every
@@ -1226,9 +1196,21 @@ namespace numtracer::numeric
         assert(idx >= 0 && idx < p.nsym);
   }
 
+  /// @brief Apply unit-vector constraints `Σ_μ Uμ² = 1` to reduce each unit group's LAST component to
+  ///        power ≤ 1: `U_last² → 1 − Σ_{μ<last} Uμ²`. A `group` is the list of symbol indices of one
+  ///        unit direction's components (e.g. the loop direction `{U0,U1,U2}` with `U0²+U1²+U2²=1`, or a
+  ///        `{cos,sin}` pair). This is the general form of `sin²→1−cos²` and is the crux of the numeric
+  ///        backend's compactness: it (a) collapses the bare-loop denominator `Σ(l1·Uμ)² = l1²·ΣUμ²` to
+  ///        the **monomial `l1²`** so @ref divThroughMonomialAtoms cancels it, and
+  ///        (b) collapses the `U·U` factors transverse projectors generate. Value-preserving;
+  ///        terminates because each rewrite strictly lowers the last component's exponent.
+  ///
+  /// Split into a no-op TEST + a REBUILD so the `const MPoly&` and `MPoly&&` overloads below share
+  /// both. The `&&` overload matters because the pass-through fires on ~88% of calls and `return p`
+  /// on a `const&` deep-copies the whole polynomial; see @ref divThroughMonomialAtoms.
   inline MPoly reduce_units(const MPoly &p, const std::vector<std::vector<int>> &groups)
   {
-    if (groups.empty()) return p; // NOT counted as a call, exactly as before
+    if (groups.empty()) return p; // NOT counted as a call
     NT_STAT_ADD(ru_calls, 1);
     reduceUnitsCheckGroups(p, groups);
     if (reduceUnitsIsNoop(p, groups)) {
@@ -1241,7 +1223,7 @@ namespace numtracer::numeric
   /// Rvalue overload: identical decision, but both pass-through cases MOVE instead of deep-copying.
   inline MPoly reduce_units(MPoly &&p, const std::vector<std::vector<int>> &groups)
   {
-    if (groups.empty()) return std::move(p); // NOT counted as a call, exactly as before
+    if (groups.empty()) return std::move(p); // NOT counted as a call
     NT_STAT_ADD(ru_calls, 1);
     reduceUnitsCheckGroups(p, groups);
     if (reduceUnitsIsNoop(p, groups)) {
@@ -1251,25 +1233,6 @@ namespace numtracer::numeric
     return reduceUnitsRebuild(p, groups);
   }
 
-  /// @brief Cancel a MULTI-TERM inverse atom `1/D` against the numerator by exact polynomial division.
-  ///
-  /// @ref divThroughMonomialAtoms only cancels an atom whose denominator is a single **monomial**, and
-  /// only term-by-term. A shifted line `k = l − q` has `k² = l² − 2 l·q + q²`, which is multi-term, so
-  /// its atom always survived into an `inv` env slot — even when the numerator carries a factor of that
-  /// very `k²`, which Dirac-trace numerators routinely do. This is the partial-fractioning step a
-  /// fixed-frame contraction was assumed not to be able to do.
-  ///
-  /// Terms are grouped by their FULL atom multiset (so within a group every term carries the same
-  /// atoms and the group is `G(x)·∏1/D_a`); each distinct multi-term `D_a` is then trial-divided into
-  /// `G`. On an exact division `G·(1/D) → Q`, dropping one atom instance. Repeated to a fixed point.
-  ///
-  /// Exact and value-preserving: a division is only accepted when the remainder vanishes. "Vanishes"
-  /// uses @ref kPolyDivRelTol, on the scale of the surrounding noise prune, against the dividend's
-  /// largest coefficient — a numeric frame makes exact cancellations land at ~1e-16 relative, far
-  /// inside it, and the polynomial already carries round-off at that scale.
-  ///
-  /// Measured on ZAqbq1_147 Mq-in (real part): monomials 13,269 → 4,832, atom factors 1,168 → 832,
-  /// fused SSA 33,775 → 7,649 (0.23x). 384 of 1,168 trial divisions are exact.
   /// The @ref divThroughPolyAtoms pass-through test: no term carries an atom whose denominator is
   /// multi-term with an atom-free leading term, so no trial division can run. The full pass then only
   /// regroups and re-sorts the (already canonical) terms and rebuilds each coefficient as `0 + c`.
@@ -1295,6 +1258,20 @@ namespace numtracer::numeric
     return std::move(p);
   }
 
+  /// @brief Cancel a MULTI-TERM inverse atom `1/D` against the numerator by exact polynomial division.
+  ///
+  /// @ref divThroughMonomialAtoms only cancels an atom whose denominator is a single **monomial**, and
+  /// only term-by-term. A shifted line `k = l − q` has `k² = l² − 2 l·q + q²`, which is multi-term, yet
+  /// Dirac-trace numerators routinely carry a factor of that very `k²`; this pass cancels it.
+  ///
+  /// Terms are grouped by their FULL atom multiset (so within a group every term carries the same
+  /// atoms and the group is `G(x)·∏1/D_a`); each distinct multi-term `D_a` is then trial-divided into
+  /// `G`. On an exact division `G·(1/D) → Q`, dropping one atom instance. Repeated to a fixed point.
+  ///
+  /// Exact and value-preserving: a division is only accepted when the remainder vanishes. "Vanishes"
+  /// uses @ref kPolyDivRelTol, on the scale of the surrounding noise prune, against the dividend's
+  /// largest coefficient — a numeric frame makes exact cancellations land at ~1e-16 relative, far
+  /// inside it, and the polynomial already carries round-off at that scale.
   inline MPoly divThroughPolyAtoms(const MPoly &p, const std::vector<MPoly> &atomDen)
   {
     NT_STAT_ADD(dpa_calls, 1);
@@ -1319,7 +1296,7 @@ namespace numtracer::numeric
     // false the moment a leading term is not divisible — i.e. the remainder is provably non-zero.
     auto divides = [&](AtomGroup G, const MPoly &D, AtomGroup &Q, double tol) {
       if (D.terms.size() < 2) return false;
-      const auto &dlead = D.terms.back(); // MPoly::t is sorted by Mono, so back() is the lex-largest
+      const auto &dlead = D.terms.back(); // MPoly::terms is sorted by Mono, so back() is the lex-largest
       if (!dlead.first.atoms.empty()) return false;
       while (!G.empty()) {
         auto lead = std::prev(G.end());
@@ -1356,10 +1333,9 @@ namespace numtracer::numeric
           const MPoly &D = atomDen[(std::size_t)aid];
           // Lead pre-filter: replicate EXACTLY the first check `divides` would make — its
           // multi-term/atom-free guards, then divisibility of the first significant (above-tol)
-          // lead of G by D's lead — without paying the by-value map copy `divides` takes. A trial
-          // failing on its first leading monomial is the common case (measured: >= 2/3 of trials,
-          // and on some flows 100%). Trials that pass here still run `divides` unchanged, so the
-          // accepted-division set and the resulting values are identical.
+          // lead of G by D's lead — without paying the by-value copy `divides` takes. A trial failing
+          // on its first leading monomial is the common case (>= 2/3 of trials). Trials that pass here
+          // still run `divides` unchanged, so the accepted-division set and the values are identical.
           if (D.terms.size() < 2 || !D.terms.back().first.atoms.empty()) {
             NT_STAT_ADD(dpa_pref, 1);
             continue;

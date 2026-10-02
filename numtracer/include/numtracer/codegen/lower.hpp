@@ -36,12 +36,9 @@ struct LMono {
 /// @brief Pick the Horner pivot: the variable occurring in the most terms, and the lowest exponent
 ///        `pivotExp` it appears with (the most we can factor out). Returns `{pivot envId, pivotExp}`.
 ///
-///        The tally is a DENSE id-indexed count (env ids are small contiguous ints) plus a
-///        first-appearance-ordered id list: O(Σ|vp| + V) instead of the old per-factor linear scan's
-///        O(Σ|vp|·V), which at V≈40 distinct ids was the dominant term of the whole lowering
-///        (O(N·|vp|·V²) per trace). Ties MUST resolve to the id that first appears walking the terms
-///        in order — that reproduces the old insertion-order scan exactly, and any other tie-break
-///        (e.g. smallest id) changes pivots and thus the emitted kernel bytes.
+///        The tally is a DENSE id-indexed count (env ids are small contiguous ints), O(Σ|vp| + V).
+///        Ties MUST resolve to the id that first appears walking the terms in order: any other
+///        tie-break (e.g. smallest id) changes pivots and thus the emitted kernel bytes.
 inline std::pair<int, int> choose_pivot(const std::vector<LMono> &terms) {
   std::vector<int> count;  // indexed by envId
   std::vector<int> order;  // envIds in first-appearance order (the tie-break)
@@ -66,10 +63,8 @@ inline std::pair<std::vector<LMono>, std::vector<LMono>>
 partition_pivot(std::vector<LMono> terms, int pivot, int pivotExp) {
   std::vector<LMono> with, without;
   for (LMono &m : terms) {
-    // Divide `pivot^pivotExp` out IN PLACE — adjust or erase the pivot entry and move the monomial,
-    // reusing its vp buffer, instead of rebuilding a fresh vector per monomial per recursion level
-    // (that was O(N·V) heap allocations per trace). Entry order is untouched by the in-place edit
-    // (entries stay sorted by envId), so the result — and the emitted kernel — is byte-identical.
+    // Divide `pivot^pivotExp` out IN PLACE, reusing the vp buffer (no allocation per recursion
+    // level). Entries stay sorted by envId, which the emitted kernel depends on.
     bool has = false;
     for (std::size_t i = 0; i < m.vp.size(); ++i)
       if (m.vp[i].first == pivot) {
@@ -119,9 +114,8 @@ inline int scale_into(rdetail::RBuilder &builder, NVal v)
 ///        onto the `{0.0, -1}` form the invariant requires.
 ///
 /// Needed because `-1` means two different things on the two sides of this type: to the builder it is
-/// structural ZERO, to an `NVal` shape it is the structural ONE. `{1.0, -1}` would therefore read back
-/// as the constant 1 -- which is exactly how a polynomial that cancelled to nothing turned into a
-/// kernel returning 1.0 instead of 0.0.
+/// structural ZERO, to an `NVal` shape it is the structural ONE. `{1.0, -1}` would read back as the
+/// constant 1, so a polynomial that cancelled to nothing would emit 1.0 instead of 0.0.
 inline NVal from_slot(int s) { return s < 0 ? NVal{0.0, -1} : NVal{1.0, s}; }
 
 /// @brief `pivotPow * shape`, where a shape of `s < 0` is the structural one.
@@ -140,13 +134,9 @@ inline int mul_shape(rdetail::RBuilder &builder, int pivotPow, int shape)
 /// the smaller, because on a trace with no repeated shapes normalising buys nothing and still
 /// restructures.
 ///
-/// A common-factor extraction at the combine (`A*X + A*Y*Z -> A*(X+Y*Z)`) was implemented and
-/// REJECTED: at a combine the two addends are `pivot^n * W` and `ratio * Wo`, whose only factors are
-/// the pivot chain (absent from the other by construction) and the branch sums themselves, so a shared
-/// factor needs `W == Wo`. Measured 1.000x/0.996x/0.999x ops on ZAqbq{1,4,7}_147 and no runtime gain on
-/// either CPU or GPU. The structure it wants is real but lives elsewhere — 27% of add nodes on the
-/// production with_mesons/ZA4 kernel versus 4-9% here — so it would need a post-pass over the finished
-/// instruction stream, not a hook at this combine.
+/// Common-factor extraction at the combine (`A*X + A*Y*Z -> A*(X+Y*Z)`) is a measured dead end here
+/// (≤0.4% ops): the two addends can only share a factor when `W == Wo`. See
+/// docs/NUMTRACER_DESIGN_NOTES.md.
 inline NVal horner(rdetail::RBuilder &builder, std::vector<LMono> terms, bool normalise)
 {
   using namespace rdetail;
@@ -192,14 +182,9 @@ inline NVal horner(rdetail::RBuilder &builder, std::vector<LMono> terms, bool no
   // scalar there regardless of magnitude.
   const bool keepW = Wo.s < 0 || std::fabs(W.g) >= std::fabs(Wo.g);
   const double g = keepW ? W.g : Wo.g;
-  // NOT rounded. Rounding the ratio would merge coefficient noise (`-31.999999999999002` -> `-32`)
-  // and buys ~10% more sharing, but the noise is ~1e-14 relative, so any rounding coarse enough to
-  // merge it perturbs by ~1e-14 — and unlike `snap_coeff`, which acts once per monomial at a leaf,
-  // that lands at EVERY interior node where the ~1e6 cancellation amplification acts. Measured on
-  // ZA3_147 against compare_za3_147_num's 1e-9 gate: unrounded 5.6e-11 (healthy), rounded to 13
-  // significant digits 2.7e-08 (FAILING). No intermediate setting helps, because the noise and the
-  // harmful perturbation are the same size; recovering that 10% needs exact rational coefficients
-  // upstream, not a rounding here.
+  // NOT rounded: rounding the ratio buys ~10% sharing but perturbs every interior node, where the
+  // cancellation amplifies it (ZA3_147: 5.6e-11 -> 2.7e-08, failing the 1e-9 gate). Measured dead end;
+  // see docs/NUMTRACER_DESIGN_NOTES.md.
   const double ratio = (keepW ? Wo.g : W.g) / g;
   // A ratio that underflowed to zero would delete the other branch outright (rconst(0) is the
   // structural-zero sentinel, which rmul propagates and radd then drops); one that overflowed would

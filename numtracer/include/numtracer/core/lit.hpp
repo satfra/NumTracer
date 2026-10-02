@@ -5,8 +5,7 @@
 /// `C` as a non-type template parameter. The numeric backend's generator emits scalar
 /// coefficients as `numtracer::Lit<Cx{...}>` type arguments to the generated `litco`/`sc<L>`
 /// helpers (see `mathematica/CodegenGenerator.m`), which recover the value via a trait specialisation.
-/// It is the only surviving piece of the former compile-time expression algebra — a plain
-/// constant wrapper, not part of the (runtime) lowering machinery.
+/// A plain constant wrapper, not part of the lowering machinery.
 #pragma once
 
 #include "numtracer/core/cx.hpp" // Cx (constexpr complex NTTP)

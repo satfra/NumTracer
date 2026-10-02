@@ -5,7 +5,7 @@
 /// The generator always computes in double; this only decides what the printed kernel computes in.
 /// In single precision every emitted type is `float` and every literal carries an `f` suffix — a
 /// bare double literal would silently promote the surrounding float arithmetic back to double.
-/// Double precision leaves the emitted bytes exactly as they were before this switch existed.
+/// Double precision must stay byte-identical to the emission without this switch.
 
 #include "numtracer/core/config.hpp" // NT_THROW
 
@@ -19,7 +19,8 @@ namespace numtracer::codegen
 {
   enum class EmitPrecision { Double, Single };
 
-  /// Process-wide, set once by the generator's `-p` flag before anything is emitted.
+  /// Process-wide; the emitted generator's main() sets it once, before anything is emitted, when the
+  /// kernel is requested with "ComputeType" -> "float" (mathematica/CodegenGenerator.m).
   inline EmitPrecision &emit_precision()
   {
     static EmitPrecision precision = EmitPrecision::Double;

@@ -96,22 +96,17 @@ namespace numtracer::network
     int rootIm = kRealProgram;
   };
 
-  /// @brief Lower a polynomial's monomials into the shared env via CSE (`RBuilder`) + Horner.
-  ///
-  /// The input is first sorted into a **canonical order** so the emitted program (env-id layout, Horner
-  /// pivot choices, hence the operation count) depends only on the polynomial as a *set*, not on the
-  /// order the upstream reduction happened to produce it. This makes the kernel reproducible across the
-  /// serial and (term-reordering) sharded-parallel rebase paths — the same op count either way.
-  // Lowering internals (Horner ordering sweep) — ODR-used only via to_genprog (the library TU).
+  // Lowering internals (the Horner ordering sweep), ODR-used only via to_genprog (the library TU).
+  // The monomials arrive in MPoly's sorted order, so the emitted program (env-id layout, Horner pivots,
+  // op count) depends only on the polynomial as a SET, not on the order the reduction produced it in.
 #if NUMTRACER_DEFINE_BODIES
   namespace gdetail
   {
     /// The deterministic monomial orderings the greedy (order-sensitive) Horner is tried on; the caller
     /// keeps the factorization with the fewest emitted ops — reproducible and never worse than any single
-    /// order. Only the first @p maxOrders variants are BUILT (each is a full deep copy of the monomial
-    /// set, and best_into sweeps 3 or 1 for mid/large polynomials — building all 8 regardless was pure
-    /// waste). The variant SEQUENCE is frozen: reordering it would change which ordering wins a tie on
-    /// op count, and with it the emitted kernel bytes.
+    /// order. Only the first @p maxOrders variants are BUILT (each is a deep copy of the monomial set).
+    /// The variant SEQUENCE is frozen: reordering it would change which ordering wins a tie on op
+    /// count, and with it the emitted kernel bytes.
     inline std::vector<std::vector<LMono>> make_orderings(const std::vector<LMono> &monos,
                                                           std::size_t maxOrders = 8)
     {
@@ -172,13 +167,10 @@ namespace numtracer::network
     /// @brief Traces at or below this monomial count have BOTH lowerings costed; larger ones are
     ///        normalised unconditionally.
     ///
-    /// Scalar normalisation is a large win on a trace with many repeated shapes and a small LOSS on
-    /// one with none. Measured: on the small fixtures nearly every trace grows ~5-10% (73 of 75 on the
-    /// vendored nf2 ZA4), while on the big flows nearly every trace shrinks (138 of 143 on
-    /// with_mesons/ZA4). Costing both arms and keeping the smaller makes the lever self-guarding, and
-    /// is why no regenerated kernel came out larger than its baseline. It is not free — it is a second
-    /// full Horner pass — so it is spent only where the regression actually lives and where that pass
-    /// is cheap; big traces reliably win and are the expensive ones to re-lower, so they skip it.
+    /// Scalar normalisation is a large win on a trace with many repeated shapes and a small LOSS
+    /// (~5-10%) on one with none; costing both arms keeps the lever self-guarding. The second Horner
+    /// pass is spent only on small traces: big ones reliably win and are expensive to re-lower
+    /// (measurements in docs/NUMTRACER_DESIGN_NOTES.md).
     inline constexpr std::size_t kNormGuardMax = 2000;
 
     /// Pick the cheapest Horner ordering of @p monos (costed on scratch builders), then replay it into
@@ -194,10 +186,8 @@ namespace numtracer::network
     inline int best_into(std::vector<LMono> monos, rdetail::RBuilder &builder)
     {
       // The greedy Horner is order-sensitive, so we cost several deterministic orderings and keep the
-      // cheapest. But each trial is a FULL horner pass: for the dense 1/4/7 traces (tens of thousands of
-      // monomials) the 8-way sweep dominates GENERATION while changing the op count only ~1% (the op count
-      // tracks the monomial count, not the pivot order — see the noise-prune notes). So scale the sweep
-      // down with the polynomial size.
+      // cheapest. Each trial is a FULL horner pass, and on big polynomials the sweep dominates generation
+      // while moving the op count only ~1%, so it shrinks with the polynomial size.
       std::size_t numOrderings = 8;
       if (monos.size() > 2000)
         numOrderings = 1;
@@ -269,11 +259,7 @@ namespace numtracer::network
     ///  - cInline: an RCONST used exactly once is emitted as a (parenthesised) literal at its use
     ///    site instead of occupying its own declaration line.
     ///
-    /// Both rewrites are unconditional. They used to sit behind NT_GEN_NO_FMA / NT_GEN_NO_CONST_INLINE
-    /// A/B controls; both measured as wins, both hatches were referenced nowhere (no test, no
-    /// fixture, no doc), and both were spelled `getenv(x) != nullptr` — under which `NT_GEN_NO_FMA=0`
-    /// turned fma folding OFF. Reinstating an A/B here means deleting the branch, not setting a
-    /// variable.
+    /// Both rewrites are unconditional (both measured as wins).
     struct EmitPlan
     {
       std::vector<int> use;       ///< total references: instruction operands + result roots
@@ -350,8 +336,6 @@ namespace numtracer::network
       return pl;
     }
 
-    /// Print one operand: an inlined single-use constant as a parenthesised literal (parentheses are
-    /// load-bearing: `s5--46.7` would lex as a decrement), anything else as its slot name.
     /// Print a real constant in the emitted precision (see codegen/precision.hpp).
     inline void emit_real(std::ostream &out, double v)
     {
@@ -363,6 +347,8 @@ namespace numtracer::network
 
     inline const char *zero_literal() { return codegen::emit_single() ? "0.f" : "0.0"; }
 
+    /// Print one operand: an inlined single-use constant as a parenthesised literal (parentheses are
+    /// load-bearing: `s5--46.7` would lex as a decrement), anything else as its slot name.
     inline void emit_operand(std::ostream &out, const std::vector<RInstr> &ins, const EmitPlan &pl, int r)
     {
       if (r < 0) {
@@ -441,43 +427,30 @@ namespace numtracer::network
       out << ";\n";
     }
 
+    /// Is this generation targeting device code? The only signal is `NT_GEN_DEVICE`, set by
+    /// CodegenBuild.m (online) or the numtrace manifest's "device" field (offline) from the same
+    /// condition that chooses the decorator, so an explicit `"DeviceTarget" -> False` is honoured even
+    /// with a `__device__` decorator. Read once per process: emission must be consistent across every
+    /// function in a run.
+    inline bool device_target()
+    {
+      static const bool envDevice = env_flag("NT_GEN_DEVICE");
+      return envDevice;
+    }
+
     /// @brief Decide the effective decorator for one emitted trace/chunk function of @p nInstr SSA
     ///        instructions, out-of-lining it when that is faster (see @ref emit_cpp).
     ///
-    /// SIZE-GATED, DEVICE ONLY. Measured on sm_89 (RTX 4070), GPU runtime, sweep over 12 flows: whether a
-    /// trace function should be `inline` tracks its OWN instruction count, not the whole-kernel size. A
-    /// function inlined into the kernel adds its SSA temporaries to the register pool; past ~500
-    /// instructions that spills (up to 26 KB/thread on the dense 4-point flows) and the kernel goes
-    /// memory-bound, so out-of-lining is runtime-FASTER — ZA4 (655 instr/fn) 0.73x, ZAAqbq1 (772) 0.70x —
-    /// as well as ~3x cheaper to compile. BELOW the threshold inlining wins decisively via cross-trace CSE
-    /// and no call overhead: ZAqbq1_147's 108 small (125-instr) functions run 1.66x FASTER inlined, even
-    /// though that kernel is large. So the gate is per-function, and it never picks the losing side on the
-    /// swept flows (>=500: noinline wins or ties; <500: inline wins).
+    /// SIZE-GATED, DEVICE ONLY. A function inlined into the kernel adds its SSA temporaries to the
+    /// register pool; past the threshold that spills and the kernel goes memory-bound, so
+    /// out-of-lining is faster (and cheaper to compile). Below it inlining wins (cross-trace CSE, no
+    /// call overhead). The decision is therefore per function, on its OWN instruction count. The host
+    /// has no register cliff, so host emission stays all-inline and byte-identical.
     ///
-    /// Only for DEVICE code: the host has no 255-register cliff, and its all-inline emission stays
-    /// byte-identical.
-    ///
-    /// HOW DEVICE-NESS IS DECIDED — and why it is no longer a string sniff. This used to test the
-    /// decorator for a literal `__device__` and call that "the CONTRACT". It was silently broken:
-    /// `ntKokkosDecor` (CodegenKernel.m) rewrites `__host__ __device__ inline` to `KOKKOS_INLINE_FUNCTION`
-    /// BEFORE emission, and DiFfRG_compat.m hands the Kokkos spelling directly for a GPU target — so
-    /// no production decorator has ever contained `__device__` and the gate NEVER fired, on any real
-    /// flow, with no diagnostic (measured 2026-08-08: QCD_Nf2/no_mesons ZA4 has 75 trace functions,
-    /// 7 of them over 500 lines, `tr0` at 2281, and zero `noinline`). The measured cost of missing
-    /// it is the 0.70-0.73x above.
-    ///
-    /// Sniffing for `KOKKOS_` instead would be wrong in the other direction: those macros expand to
-    /// plain `inline` on a host-only Kokkos build, where all-inline is correct. So the target is now
-    /// stated EXPLICITLY by the caller via `NT_GEN_DEVICE=1` (CodegenBuild.m sets it from the same
-    /// condition that picks the decorator). The `__device__` test is kept only as a back-compat
-    /// fallback for callers still passing the raw CUDA spelling.
-    ///
-    /// That fix closed the ONLINE path only, and every production flow is generated OFFLINE — the
-    /// generator runs from a `cmake -P` step (NumTracerNumtraceRun.cmake) that inherits nothing of
-    /// the emitting Wolfram kernel's environment, so the shell prefix never reached it and the gate
-    /// stayed dead regardless. Closed 2026-08-11 by carrying a `"device"` field in numtrace.json —
-    /// the same trip the NT_GEN_MAXW thread caps already make, for the same reason. A manifest
-    /// without the field reads as false, so flows keep their all-inline emission until re-emitted.
+    /// Device-ness comes ONLY from `NT_GEN_DEVICE` (see @ref device_target), never from sniffing the
+    /// decorator: production decorators are Kokkos macros that never spell `__device__`, and the
+    /// `KOKKOS_` macros expand to plain `inline` on a host-only build. A gate that silently never
+    /// fires emits a valid all-inline kernel, so tests/test_noinline_gate.cpp asserts that it FIRES.
     ///
     /// Overrides:
     ///   NT_GEN_NOINLINE_TRACES : force out-of-line for EVERY function (host+device) — the compile-cost
@@ -491,27 +464,8 @@ namespace numtracer::network
     ///                            consistent across every function in a run, so changing the variable
     ///                            mid-process deliberately has no effect.
     ///
-    /// WHY THE THRESHOLD IS STILL 500, and what would move it. The 500 came from a 12-flow sm_89
-    /// sweep whose companion figures ("ZA4 0.73x") were later re-measured at −4.8% — wrong by ~5x —
-    /// so the sweep is not a sound basis for the number. What is solid is a static SASS sweep on nf2
-    /// ZA4: on sm_90, ungated leaves 11,636 B of spill at 18% occupancy, min=300 leaves none, min=200
-    /// reaches 25% and min=100 reaches 32%, at +2.6%/+5%/+7.6% ops respectively. That argues for
-    /// 200-300 on the datacenter parts. It is NOT changed here because the one flow claimed to LOSE
-    /// from out-of-lining (ZAqbq1_147, 108 functions of ~125 instructions) sits far below 500 and is
-    /// therefore untouched at this threshold — lowering it is what would put that claim in play, and
-    /// that claim has never been reproduced. Re-measure it before moving the default.
-
-    /// Is this generation targeting device code? The only signal is `NT_GEN_DEVICE`, set by
-    /// CodegenBuild.m (online) or the numtrace manifest's "device" field (offline) from the same
-    /// condition that chooses the decorator, so an explicit `"DeviceTarget" -> False` is honoured even
-    /// with a `__device__` decorator. Read once per process: emission must be consistent across every
-    /// function in a run.
-    inline bool device_target()
-    {
-      static const bool envDevice = env_flag("NT_GEN_DEVICE");
-      return envDevice;
-    }
-
+    /// The default 500 rests on a sweep later shown to be wrong; a static SASS sweep argues for
+    /// 200-300 on sm_90. Re-measure before moving it (docs/NUMTRACER_DESIGN_NOTES.md).
     inline std::string eff_decor(const std::string &decor, std::size_t nInstr = 0)
     {
       std::string effDecor = decor;
@@ -522,9 +476,8 @@ namespace numtracer::network
           if (e == nullptr || *e == '\0') return static_cast<std::size_t>(500); // empty means unset,
                                                                                // NOT the very
                                                                                // aggressive 0 below
-          // "off" / any negative value disables the gate outright (all-inline emission, the
-          // pre-2026-08-11 behaviour). It needs its own spelling because the natural guess, 0,
-          // means the OPPOSITE here: the test is `nInstr > N`, so 0 out-of-lines everything.
+          // "off" / any negative value disables the gate outright (all-inline emission). It needs
+          // its own spelling because the natural guess, 0, means the OPPOSITE here: the test is `nInstr > N`, so 0 out-of-lines everything.
           // Anything unparsable reads as "off" too: silently treating a typo as 0 would
           // out-of-line every device function in the kernel.
           if (std::strcmp(e, "off") == 0) return SIZE_MAX;
@@ -540,12 +493,8 @@ namespace numtracer::network
         // KOKKOS_IMPL_INLINE_FUNCTION = inline) and would not strictly contradict it — but `inline`
         // still biases the inliner, and mixing the two spellings reads as an accident. Swap either
         // for KOKKOS_FUNCTION — same host/device qualification, no inline hint — and only then
-        // attach the attribute.
-        //
-        // Worth knowing what this is actually overriding: nvcc is NOT force-inlining everything
-        // today. On SP_EM ZA4 (55 traces, 435k SSA) it out-of-lines 26 of them on its own; the gate
-        // takes that to 51. So the choice is between nvcc's heuristic and the size rule, not between
-        // "one giant function" and "many small ones".
+        // attach the attribute. (This overrides nvcc's own inlining heuristic, which already
+        // out-of-lines some large functions.)
         for (const char *kokkosInline : {"KOKKOS_FORCEINLINE_FUNCTION", "KOKKOS_INLINE_FUNCTION"}) {
           const std::size_t at = effDecor.find(kokkosInline);
           if (at != std::string::npos) {
@@ -569,11 +518,8 @@ namespace numtracer::network
   NUMTRACER_FUNC void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name,
                                const std::string &decor)
   {
-    // Per-function inline decision (see @ref edetail::eff_decor): on the DEVICE target a trace function
-    // above ~500 SSA instructions is out-of-lined (register isolation — measurably faster AND cheaper to
-    // compile), below that it stays inline (cross-trace CSE wins). Host emission is unchanged (byte-identical).
-    // NT_GEN_NOINLINE_TRACES forces out-of-line everywhere; `__attribute__((noinline))` is honoured by both
-    // g++ and nvcc; fill()/powr stay inline.
+    // Per-function inline decision: see @ref edetail::eff_decor. `__attribute__((noinline))` is
+    // honoured by both g++ and nvcc; fill()/powr stay inline.
     const std::string effDecor = edetail::eff_decor(decor, p.ins.size());
     // Statement plan: liveness ([[maybe_unused]] tagging of dead slots), single-use-constant
     // inlining, and MUL->ADD/SUB fma folding (see edetail::EmitPlan).

@@ -3,8 +3,8 @@
 ///        parameter.
 ///
 /// `std::complex` arithmetic is not fully `constexpr` before C++23, so the
-/// expression algebra and the tensor entries use this minimal complex type
-/// instead. It is a *structural type* (all members are public and of literal
+/// compile-time constants (@ref numtracer::Lit, the Dirac tables) use this minimal
+/// complex type instead. It is a *structural type* (all members are public and of literal
 /// type), which C++20 lets us pass as a non-type template parameter — that is
 /// what makes a compile-time complex literal such as `numtracer::Lit<Cx{0,1}>`
 /// possible. This header is foundational and intentionally has no dependency on
@@ -18,7 +18,7 @@ namespace numtracer
   ///
   /// Defined as a structural type so a `Cx` value can appear as a non-type template
   /// parameter (see @ref numtracer::Lit). Only addition and multiplication are
-  /// provided, which is all the expression algebra needs.
+  /// provided as operators; division is @ref cdiv.
   struct Cx {
     double re = 0; ///< Real part.
     double im = 0; ///< Imaginary part.

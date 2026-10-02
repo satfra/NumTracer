@@ -3,11 +3,11 @@
 ///        by 4×4 spinor matrix **products** over @ref MPoly entries (γ numeric, momenta symbolic),
 ///        then contract the surviving free gluon legs against the pure-Lorentz network (projectors /
 ///        metrics / vectors / Levi-Civita) by a bounded index sum. Neither step suffers the
-///        `(2n−1)!!` Wick blowup or the `2^np` projector-mask blowup of the symbolic `reduce` path.
+///        `(2n−1)!!` Wick blowup or the `2^np` projector-mask blowup of a symbolic expansion.
 ///
 /// Inputs per diagram:
 ///   - a closed Dirac chain @ref network::DiracNet (free legs `dgamma(mu)`, slashed propagators
-///     `dslash(vlc)`); reused verbatim from the inv backend so the Mathematica front-end is unchanged.
+///     `dslash(vlc)`, …; the tokens of `network/dirac.hpp`).
 ///   - a pure-Lorentz network @ref NNet (metrics / vectors / transverse projectors / Levi-Civita)
 ///     over the same Lorentz ids.
 ///   - a **component table** `comp[vid]` = the 4 @ref MPoly components of fundamental momentum `vid`
@@ -113,11 +113,9 @@ namespace numtracer::numeric
                                                const std::vector<std::array<MPoly, 4>> &comp)
     {
       std::array<MPoly, 4> r = {MPolyFactory::zero(nsym), MPolyFactory::zero(nsym), MPolyFactory::zero(nsym), MPolyFactory::zero(nsym)};
-      // `scaled`, not `constant(coeff) * cv[mu]`: same coefficient product in the same operand order,
-      // same monomials, no scratch and no sort. Four of these per `vlc` entry, and this runs for every
-      // Slash token and every projector/vector `elem_factor` — one of the hottest sites in the engine.
-      // The accumulate moves too: on the first entry `r[mu]` is empty, which is exactly the empty-side
-      // deep copy the rvalue `operator+` lever exists to kill.
+      // `scaled`, not `constant(coeff) * cv[mu]`: bit-identical (same operand and monomial order)
+      // without the scratch sort — one of the hottest sites in the engine. The accumulate moves, so
+      // the empty first `r[mu]` is not deep-copied.
       for (const auto &[coeff, vid] : vlc) {
         const auto &cv = comp[vid];
         for (int mu = 0; mu < 4; ++mu)
@@ -235,7 +233,7 @@ namespace numtracer::numeric
     std::vector<int> freeLegs;
     std::vector<Mat4> slashMat; // precomputed Slash matrices, indexed by token
     slashMat.reserve(chain.size());
-    // kind 3 commutator [A,B]: each leg is FREE (a looped component) or SLASH (a fixed momentum matrix).
+    // Comm commutator [A,B]: each leg is FREE (a looped component) or SLASH (a fixed momentum matrix).
     // For a slashed leg we stash its slash matrix here and turn it into 2×2 blocks below (next to sP/sQ).
     // Sized only when the chain has a commutator — almost none do.
     const bool hasComm = std::any_of(chain.begin(), chain.end(),
@@ -338,10 +336,8 @@ namespace numtracer::numeric
     // blocks are shared constants rather than per-token, so a transposed occurrence needs its own
     // copy; slash blocks are already per-token and are transposed at their fill site. Built only when
     // the chain actually carries a transposed token — almost none do.
-    // Held behind a pointer, not by value: `std::array<B2,4>` is 16 MPoly, and two of them plus the
-    // transposed C blocks would default-construct ~40 MPoly on EVERY numeric_dirac call — inside the
-    // phase-A Dirac fold — for a feature almost no chain uses. Measured as +1.4% instructions on an
-    // all-untransposed fold before this was made lazy.
+    // Held behind a pointer, not by value: by value it would default-construct ~40 MPoly on EVERY
+    // numeric_dirac call for a feature almost no chain uses (+1.4% instructions on the fold).
     struct TrBlocks {
       std::array<B2, 4> gP, gQ; ///< transposed gamma blocks (C's ride sP/sQ, see below)
     };
@@ -383,7 +379,7 @@ namespace numtracer::numeric
         sP[i] = chain[i].transposed ? t2(cU0) : cU0;
         sQ[i] = chain[i].transposed ? t2(cL0) : cL0;
       }
-    // kind 3 commutator: 2×2 blocks of any SLASHED leg (the FREE legs index gP/gQ per assignment below).
+    // Comm commutator: 2×2 blocks of any SLASHED leg (the FREE legs index gP/gQ per assignment below).
     std::vector<B2> cAP(nComm), cAQ(nComm), cBP(nComm), cBQ(nComm);
     for (std::size_t i = 0; i < chain.size(); ++i)
       if (chain[i].kind == network::DFac::Comm) {
@@ -410,15 +406,10 @@ namespace numtracer::numeric
     // antidiagonal-factor count is even, so the product is block-diagonal and each leaf's trace is
     // tr(m0)+tr(m1).
     //
-    // Assignments sharing a free-leg prefix share the identical prefix product. The obvious
-    // alternative — decode each of the 4^f assignments and re-fold the whole chain from scratch —
-    // recomputes every such prefix 4^(remaining legs) times; it lived here behind an NT_DIRAC_FLAT=1
-    // hatch as a bit-identical A/B control, measured at 3.64 B mul2 calls against the DFS's 522 M on
-    // a production flow. Nothing ever referenced the hatch, so it and the flat fold are gone.
-    //
-    // The token→mul2 sequence per leaf is unchanged by the sharing, so every tensor entry is
-    // bit-identical to the flat fold — only the redundant recomputation is gone (mul2 count drops
-    // from ~4^f·L toward the 4/3·4^f tree sum). Leaf visit order is ascending flat index: the first
+    // Assignments sharing a free-leg prefix share the identical prefix product, so the mul2 count is
+    // ~4/3·4^f rather than the ~4^f·L of re-folding each assignment from scratch (3.64 B vs 522 M
+    // mul2 on a production flow). The token→mul2 sequence per leaf is the same either way, so every
+    // tensor entry is bit-identical to the flat fold. Leaf visit order is ascending flat index: the first
     // free leg in chain order is the most significant digit, matching the `idx = idx*4 + val` read
     // convention. Live memory is one (m0,m1) pair per recursion level — chain-depth bounded, no
     // cache, no eviction.
@@ -486,10 +477,9 @@ namespace numtracer::numeric
         return;
       }
       if (d.kind == network::DFac::Gamma) { // free leg: 4-way branch on the concrete component
-        // The two arms are DUPLICATED rather than selected by a `const std::array<B2,4>&` bound to
-        // one of two arrays, so the common path's gP[mu] stays a direct access rather than an
-        // indirect load. Measured neutral against the reference form on an all-untransposed fold —
-        // kept because it is the shape that cannot pessimise the hot path, not because it won.
+        // The two arms are DUPLICATED rather than selected by a reference to one of two arrays, so
+        // the common path's gP[mu] stays a direct access (measured neutral; kept as the shape that
+        // cannot pessimise the hot path).
         if (d.transposed) {
           for (int mu = 0; mu < 4; ++mu) {
             const int nf = flat * 4 + mu;
@@ -650,10 +640,8 @@ namespace numtracer::numeric
     /// `v_0` is `atomDen[el.atomS]`: the SPATIAL denominator |k⃗|², which the caller already holds, so
     /// no `k²` polynomial is needed anywhere (`k² − k_0² = |k⃗|²` is what makes that work).
     ///
-    /// The split is unconditional. It used to sit behind an NT_NO_RANK1_PROJE=1 A/B control that
-    /// nothing ever set — `test_rank1_proje` grades the two forms by calling both builders directly,
-    /// precisely so it does not depend on the hatch. The dense builder is still reached, by every
-    /// element the guard below rejects.
+    /// The split is unconditional; `test_rank1_proje` grades the two forms by calling both builders
+    /// directly. The dense builder is still reached, by every element the guard below rejects.
     inline void push_elem_factors(std::vector<Factor> &out, int nsym, const NElem &el,
                                   const std::vector<std::array<MPoly, 4>> &comp,
                                   const std::vector<MPoly> &atomDen)
@@ -757,13 +745,8 @@ namespace numtracer::numeric
         MPoly acc = MPolyFactory::zero(nsym);
         for (int elimVal = 0; elimVal < 4; ++elimVal) {
           idxVal[elimPos] = elimVal;
-          // Seed from the FIRST factor rather than from `constant(1)`: the old form put a one-term
-          // polynomial through the full `operator*` on the first iteration, paying an |e|-entry
-          // scratch and a `from_scratch` sort to compute what is just `1·e`. With 2-4 factors per
-          // group that identity multiply was a quarter to a half of all elimination multiplies, and
-          // this is the innermost loop of the innermost operation. `scaled(e, 1)` applies the very
-          // same coefficient product (`Cx{1,0} * c`) to the same monomials in the same order, so it is
-          // bit-identical — it just skips the scratch and the sort.
+          // Seeded from the first factor: `scaled(e, 1)` is bit-identical to `constant(1) * e` and
+          // avoids a scratch + sort (that identity multiply was 1/4-1/2 of all elimination multiplies).
           MPoly prod = MPolyFactory::zero(nsym);
           bool seeded = false;
           bool zero = false;
@@ -782,7 +765,7 @@ namespace numtracer::numeric
             } else
               prod = prod * e;
           }
-          // an EMPTY group is the empty product = 1, exactly what the old constant(1) seed gave
+          // an EMPTY group is the empty product = 1
           if (!zero && !seeded) prod = MPolyFactory::constant(nsym, Cx{1, 0});
           if (!zero) acc = std::move(acc) + std::move(prod); // rvalue +: first iteration MOVES prod
         }
@@ -791,10 +774,8 @@ namespace numtracer::numeric
         // a long pure-gauge chain (the ZA4 monster nets) — only cleaning at the end is too late.
         if (!units.empty()) {
           NT_STAT_TIMER(t_cf_reduce);
-          // Both reductions pass through on the large majority of calls, and on a `const MPoly&` a
-          // pass-through `return p` is a full DEEP COPY — two of them, per outFlat, per elimination
-          // step. Moving picks the rvalue overloads, which move instead. `acc` is overwritten by the
-          // very assignment whose RHS moves from it, so nothing reads the moved-from value.
+          // Both reductions usually pass through; moving picks the rvalue overloads, which then move
+          // instead of deep-copying. `acc` is overwritten by the assignment whose RHS moves from it.
           acc = divThroughMonomialAtoms(reduce_units(std::move(acc), units), atomDen);
         }
         out.entries[outFlat] = std::move(acc);
@@ -925,8 +906,7 @@ namespace numtracer::numeric
         facs = std::move(rest);
       }
       // remaining factors are scalars (no ids): multiply their single entries. Seeded from the first
-      // factor for the same reason as in `eliminate` above — `constant(1) * e` pays a scratch + sort
-      // for an identity. A zero factor absorbs, so stop there rather than multiplying zero through.
+      // factor, as in `eliminate` above. A zero factor absorbs, so stop there.
       MPoly prod = MPolyFactory::zero(nsym);
       bool seeded = false;
       for (const Factor &F : facs) {
@@ -941,7 +921,7 @@ namespace numtracer::numeric
         } else
           prod = prod * F.data()[0];
       }
-      if (!seeded) prod = MPolyFactory::constant(nsym, Cx{1, 0}); // empty product = 1, as before
+      if (!seeded) prod = MPolyFactory::constant(nsym, Cx{1, 0}); // empty product = 1
       return prod;
     }
 
@@ -1161,7 +1141,7 @@ namespace numtracer::numeric
                                             const std::vector<std::vector<int>> &units = {});
 
 #if NUMTRACER_DEFINE_BODIES
-  /// @brief Map one inv-backend @ref network::Elem to a numeric @ref NElem. The projector's loop momentum
+  /// @brief Map one @ref network::Elem to a numeric @ref NElem. The projector's loop momentum
   ///        is stored as a single vector id (`vid`) and its `1/k²` env id (`inv`) becomes the atom id.
   inline NElem elem_to_nelem(const network::Elem &e)
   {
@@ -1189,8 +1169,8 @@ namespace numtracer::numeric
   ///        closes their legs. This is the exact Lorentz structure the distributed diagram emits, which
   ///        is why it can reuse all the validated contraction machinery unchanged.
   ///
-  /// An empty @p facs returns @p lor untouched — that is the case for every option whose structure is
-  /// purely Dirac-side, and it keeps the byte-identical fast path of the pre-Stage-4 δ/slash collection.
+  /// An empty @p facs returns @p lor untouched — the case for every option whose structure is purely
+  /// Dirac-side (the fast path).
   /// Both overloads exist because the two dressed entry points read different net representations
   /// (@ref network::NetVal for the codegen path, @ref NNet for the numeric one).
   ///
@@ -1200,8 +1180,7 @@ namespace numtracer::numeric
   /// @ref close_free_legs, where the option's now-unclosed legs abort (or, when they happen to pair
   /// up, self-contract to a wrong number). An empty net means "the Lorentz rest is the scalar 1", and
   /// that is exactly a default-constructed `PTerm`/`NTerm` (coefficient 1, no elements) — the same
-  /// thing the front end emits as `konst(1.0)`. Only reached when @p facs is non-empty, so no
-  /// currently-working flow changes shape.
+  /// thing the front end emits as `konst(1.0)`.
   inline network::NetVal with_slot_facs(const network::NetVal &lor, const std::vector<network::Elem> &facs)
   {
     if (facs.empty()) return lor;
@@ -1221,7 +1200,7 @@ namespace numtracer::numeric
   }
 
   /// Multi-term denominator cancellation (@ref divThroughPolyAtoms) — on by default; `NT_GEN_NO_POLYDIV=1`
-  /// disables it, which is how it was A/B'd. See that function for the measurement.
+  /// disables it (the A/B control).
   inline bool polydiv_enabled()
   {
     static const bool on = !env_flag("NT_GEN_NO_POLYDIV");
@@ -1253,12 +1232,9 @@ namespace numtracer::numeric
       // pre-reduce the atom denominators (idempotent if the caller already did) so monomial-cancellation
       // detection works during the per-step intermediate reduction inside contract_factors.
       //
-      // The caller — the generated driver — already does exactly this once at setup, so on every trace
-      // the reduction is a NO-OP. It nevertheless used to cost a deep copy of the whole table plus one
-      // more deep copy per entry (reduce_units' pass-through returned `p` by value), on 10^5 traces ×
-      // combinations. So: test the pass-through predicate first and only materialise a reduced copy when
-      // an entry genuinely needs rewriting; otherwise alias the caller's table. When every entry passes
-      // through, `reduce_units` would have returned it unchanged, so aliasing is value-identical.
+      // The generated driver already reduces the table once at setup, so this is normally a no-op:
+      // test the pass-through predicate and alias the caller's table unless an entry needs rewriting
+      // (value-identical, and no per-trace deep copy of the table).
       std::vector<MPoly> adenOwned;
       bool needReduce = false;
       for (const MPoly &a : atomDen)
@@ -1324,8 +1300,8 @@ namespace numtracer::numeric
   } // namespace ndetail
 
   /// @brief Contract a diagram (Dirac chain ⊗ Lorentz network) to its scalar trace polynomial, the
-  ///        Lorentz part given as an inv-backend @ref network::NetVal (so the generator reuses the
-  ///        net-string emission: `proj`/`met`/`vec`/`epsilon` builders). This is the production path.
+  ///        Lorentz part given as a @ref network::NetVal (the `proj`/`met`/`vec`/`epsilon` builders the
+  ///        generator's net strings call). This is the production path.
   /// @param nsym     number of user symbols (MPoly variable count)
   /// @param dirac    the closed Dirac chain (may be empty for a pure-gauge diagram)
   /// @param lor      the pure-Lorentz network (metrics / vectors / projectors / Levi-Civita)
@@ -1370,7 +1346,7 @@ namespace numtracer::numeric
   // verbatim), and accumulate the results into ONE @ref DPoly keyed by the dressing monomial. The whole
   // diagram then lowers to ONE trace function whose dressing factors the shared CSE/Horner collects.
 
-  /// @brief One structure option of a collected Dirac slot (Stage 4, general form): a numeric
+  /// @brief One structure option of a collected Dirac slot: a numeric
   ///        coefficient × a product of dressing atoms (`dress`) × a Dirac structure, where the
   ///        structure is
   ///          - a **Dirac-token chain** @ref toks spliced in place of the slot (spinor `din→dout`);
@@ -1425,7 +1401,7 @@ namespace numtracer::numeric
                                                     const std::vector<std::vector<int>> &units = {});
   /// @brief STRUCTURAL variant of @ref numeric_value_dressed_netval: contract the collected slots into a
   ///        PLAIN @ref MPoly, DISCARDING the dressing dimension (the dressing monomial keys are summed
-  ///        away). This is lever (b): the generator strips each option's dressing (`coeff`→1, `dress`→{})
+  ///        away). The generator strips each option's dressing (`coeff`→1, `dress`→{})
   ///        into a per-sub-term scalar/monomial and feeds the dressing-free structure here, so the trace
   ///        table dedups on structure alone (dressing variants of one concrete trace collapse) and each
   ///        entry is a plain `MPoly` with no dressing dimension. The 4^(#collapsed loop) tr(1)=4 factor
@@ -1470,7 +1446,7 @@ namespace numtracer::numeric
       // an empty segment: split_loops drops it and close_loops returns 1, silently losing that loop's
       // tr(1)=4 — a 4× undercount (e.g. the all-mass channel of a Yukawa self-energy quark loop). Count the
       // loops up front so each combination can restore 4^(#collapsed loops). Flows whose every loop keeps a
-      // fixed γ (Zq/ZAqbq{1,4,7}, …) never collapse ⇒ nEmpty==0 ⇒ output byte-identical.
+      // fixed γ (Zq/ZAqbq{1,4,7}, …) never collapse (nEmpty==0).
       int nloops = 1;
       for (const DChainTok &tok : chain)
         if (!tok.isSlot && tok.fac.kind == network::DFac::LoopSep) ++nloops;
@@ -1491,11 +1467,11 @@ namespace numtracer::numeric
           const DSlotOpt &opt = slots[tok.slot][choice[tok.slot]];
           combCoeff = combCoeff * opt.coeff;
           dressMono.insert(dressMono.end(), opt.dress.begin(), opt.dress.end());
-          // General collected Dirac slot (Stage 4): splice this option's Dirac-token chain in place of
+          // General collected Dirac slot: splice this option's Dirac-token chain in place of
           // the slot (its free-Lorentz tokens are open legs), and collect its Lorentz-net factors — the
           // surrounding net closes every open leg for all structure choices alike. An option with an
           // empty `toks` is the spinor identity δ (tr(1)=4 restored by nCollapsed below when a whole
-          // loop collapses); empty `netFacs` ⇒ no net change (the byte-identical fast path).
+          // loop collapses); empty `netFacs` ⇒ no net change (the fast path).
           if (tok.transposed) {
             // (A1..An)^T = An^T..A1^T: reverse the option's chain and transpose every token in it.
             // netFacs are pure Lorentz and untouched. Loop accounting below is order-insensitive
@@ -1539,20 +1515,16 @@ namespace numtracer::numeric
       return out;
     }
 
-    /// @brief The STRUCTURAL MPoly reduction (lever (b)): sum every combination into ONE plain MPoly,
+    /// @brief The STRUCTURAL MPoly reduction: sum every combination into ONE plain MPoly,
     ///        discarding the dressing monomial. Correct only when the slots carry no dressing (the
     ///        generator strips it out first); see @ref numeric_value_dressed_netval_mp. The debug
     ///        assert below makes that precondition checkable instead of comment-only: fed genuine
     ///        dressings, this would silently sum structures that belong in different channels.
     ///
-    /// The left-to-right accumulation is deliberate and is NOT a quadratic hazard, despite looking
-    /// like one. Under lever (b) the generator expands each structure×dressing combination into its
-    /// own SINGLE-option sub-term at codegen time (`CodegenGenerator.m`, `sdsl[k].push_back(DSlot{optp[oi]})`),
-    /// so every production call has exactly one combination and this loop body runs once. Folding the
-    /// sum as a balanced tree instead would reassociate the like-term coefficient sums (≤ 1 ulp) and
-    /// so could shift the emitted kernel's literals — a real cost for a case no caller reaches. Every
-    /// caller today (the generator, and test_dpoly.cpp case K, which mirrors it) passes single-option
-    /// dressing-free slots; the general loop is kept only so the entry point stays total.
+    /// The left-to-right accumulation is deliberate and is NOT a quadratic hazard: the generator
+    /// expands each structure×dressing combination into its own SINGLE-option sub-term
+    /// (mathematica/CodegenGenerator.m), so every caller has exactly one combination. A tree fold would
+    /// reassociate the sums (≤ 1 ulp) and could shift the emitted literals for no gain.
     template <class ContractFn>
     inline MPoly dress_collect_mp(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
                                   ContractFn &&contract)
@@ -1586,7 +1558,7 @@ namespace numtracer::numeric
         });
   }
 
-  /// @brief STRUCTURAL MPoly reduction of a collected diagram (lever (b)). Same contraction machinery as
+  /// @brief STRUCTURAL MPoly reduction of a collected diagram. Same contraction machinery as
   ///        @ref numeric_value_dressed_netval, but the dressing dimension is summed away, yielding a plain
   ///        @ref MPoly. The generator feeds this dressing-free slots (each option's `coeff`=1, `dress`={})
   ///        so the returned MPoly is the concrete structural trace (including its tr(1)=4 collapse
@@ -1640,12 +1612,11 @@ namespace numtracer::numeric
             if (e.invS > maxId) maxId = e.invS; // spatial 1/|k⃗|² atom (ProjE/ProjM)
           }
     std::vector<MPoly> atomDen(maxId + 1, MPolyFactory::zero(nsym));
-    // An atom id names ONE denominator. The front end is supposed to guarantee that, but the writes
-    // below were unconditional `atomDen[id] = ...`, so two projectors sharing an id while carrying
-    // different momenta silently gave the second one's k² to both — every cancellation against that
-    // id then divides by the wrong polynomial. Record which ids have been written so a genuine
-    // rewrite (same id, DIFFERENT denominator) is caught; a repeat of the identical denominator is
-    // the normal case (the same projector appearing in many terms) and must stay silent.
+    // An atom id names ONE denominator. The front end is supposed to guarantee that; if two projectors
+    // shared an id while carrying different momenta, every cancellation against that id would divide
+    // by the wrong polynomial. Record which ids have been written so a genuine rewrite (same id,
+    // DIFFERENT denominator) is caught; a repeat of the identical denominator is the normal case (the
+    // same projector appearing in many terms) and must stay silent.
     std::vector<char> written(static_cast<std::size_t>(maxId + 1), 0);
     // Exact term-wise equality is the right test here (there is no MPoly::operator==): both sides
     // are built by the same deterministic Σ_μ comp[μ]² over the same component table, so equal
@@ -1712,21 +1683,13 @@ namespace numtracer::numeric
   /// orders. That matters because the SSA CSE keys constants on RAW BITS
   /// (`codegen/real_cse.hpp` ihash/ieq), so each variant becomes its own RCONST, every downstream
   /// RMUL that consumes it also differs, and one dirty ulp at a leaf duplicates an entire subtree.
-  /// The bit-exact folds (`k == 1.0`, `k == 0.0`) miss for the same reason, emitting free multiplies.
+  /// The bit-exact folds (`== 1.0` in `rmul`, `== 0.0` in `rconst`) miss for the same reason,
+  /// emitting free multiplies.
   ///
-  /// MEASURED tradeoff on ZAqbq1_147 (Mq in), 200k points, vs the FormTracer oracle. Note the trace
-  /// sums cancel heavily, so a coefficient perturbation is amplified ~1e6 in the result — do NOT
-  /// pick this from the literal-collapse count alone:
-  ///
-  ///   digits | multiplies | distinct lits | ns/eval | NT/FORM | rel-err vs FORM
-  ///   -------|------------|---------------|---------|---------|----------------
-  ///   off    |     29,395 |          2931 |    3508 |  2.90x  | 4.26e-09
-  ///   15     |     27,049 |           740 |    3371 |  2.75x  | 2.98e-09
-  ///   14     |     26,096 |           378 |    3283 |  2.64x  | 6.43e-09   <- default
-  ///   12     |     25,988 |           338 |    3220 |  2.63x  | 4.55e-06   <- 1000x accuracy loss
-  ///
-  /// 14 captures essentially the whole speed win at no accuracy cost; 12 buys a further 2% for three
-  /// orders of magnitude of accuracy, which is a bad trade. Re-measure this table before changing it.
+  /// The trace sums cancel heavily (a coefficient perturbation is amplified ~1e6), so do NOT pick
+  /// this from the literal-collapse count alone: 14 captures the speed win at no accuracy cost, 12
+  /// buys a further 2% for a 1000x accuracy loss. Re-measure the table in
+  /// docs/NUMTRACER_DESIGN_NOTES.md before changing it.
   inline constexpr int kCoeffSnapDigits = 14;
 
   /// @brief Round @p v to @ref kCoeffSnapDigits significant decimal digits.
@@ -1736,14 +1699,12 @@ namespace numtracer::numeric
   /// cancellation, only canonicalise what survived. Perturbation is ~1e-12 relative, three orders
   /// below the numeric-vs-FORM correctness gate.
   ///
-  /// It is also the chokepoint where a NON-FINITE coefficient is caught. This function used to pass
-  /// NaN/Inf through untouched, and nothing downstream stopped them: `RBuilder::ieq`
-  /// (`codegen/real_cse.hpp`) compares constants with `k == k`, so a NaN never compares equal to
-  /// itself and `find_or_add` appends a fresh SSA slot on every single call — unbounded duplicate
-  /// instructions — and the printer then writes a literal `nan` into a COMMITTED kernel header. A
-  /// non-finite coefficient is always an upstream bug (a division by an identically-zero denominator,
-  /// an uninitialised component), never something to round, so it aborts here where the trace is
-  /// still identifiable rather than becoming a mysterious `nan` in generated source.
+  /// It is also the chokepoint where a NON-FINITE coefficient is caught. Nothing downstream stops one:
+  /// `RBuilder::ieq` (`codegen/real_cse.hpp`) compares constants with `==`, so a NaN never matches
+  /// itself and `find_or_add` appends a fresh SSA slot on every call, and the printer would write a
+  /// literal `nan` into a committed kernel. A non-finite coefficient is always an upstream bug (a
+  /// division by an identically-zero denominator, an uninitialised component), so it aborts here,
+  /// where the trace is still identifiable.
   inline double snap_coeff(double v)
   {
     if (!std::isfinite(v))

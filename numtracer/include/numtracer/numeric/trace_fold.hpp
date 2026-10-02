@@ -2,23 +2,17 @@
 /// @brief The generator's two contraction phases: contract each DISTINCT Dirac trace once (phase A),
 ///        then fold each net's traces with its own scalars (phase B).
 ///
-/// The generator's cost is one trace contraction per `(net, sub-term)`, but the same
-/// `(dnet, lnet, dch, dsl)` tuple recurs across nets and colour branches, so most of those
-/// contractions recompute a trace that was already computed. Measured on dense flows: 30,807
-/// contractions for 6,041 distinct traces (5.1x), and 246,456 for 32,784 (7.5x). CodegenGenerator.m therefore
-/// emits a table of the distinct traces and, per net, the indices into it; this header contracts and
-/// folds that table. Two independent wins:
+/// The same `(dnet, lnet, dch, dsl)` trace recurs across nets and colour branches (5-7.5x on dense
+/// flows), so CodegenGenerator.m emits a table of the DISTINCT traces and, per net, the indices into
+/// it; this header contracts and folds that table. Two wins:
 ///
 ///  - **the contraction shrinks by the redundancy factor** — each distinct trace is contracted once;
-///  - **the parallel phase becomes a FLAT list of uniform work items.** Scheduling per *net* could
-///    not use the machine: sub-terms per net are wildly skewed (max 2880 vs a median of 27), so the
-///    single biggest net alone exceeded the ideal per-thread load and pinned utilisation at ~33%
-///    however many cores were available.
+///  - **the parallel phase becomes a FLAT list of uniform work items.** Sub-terms per net are wildly
+///    skewed, so scheduling per *net* lets the single biggest net pin utilisation.
 ///
 /// Phase B reduces each net as a **balanced binary-counter tree** rather than a left fold against a
-/// growing accumulator: heavy nets fold >1000 terms, and a left fold pays O(|acc|) on every one of
-/// them. Reassociating perturbs the emitted kernel only in the last ulp (measured: worst relative
-/// deviation ~7e-15), which is within the accepted tolerance for the generated coefficients.
+/// growing accumulator (heavy nets fold >1000 terms). Reassociating perturbs the emitted kernel only
+/// in the last ulp (worst relative deviation ~7e-15). Measurements: docs/NUMTRACER_DESIGN_NOTES.md.
 ///
 /// Only the generator's main TU includes this (it is host-only: it spawns threads). The `-O0` net
 /// builder units are compiled `-fno-exceptions -fno-rtti` and must not see it.
@@ -78,9 +72,9 @@ namespace numtracer::numeric
 
   /// @brief Run `f(i)` for `i` in `[0, n)` across `W` threads, dispatched off one flat atomic counter.
   ///        Work-stealing rather than a static split: even a uniform work list has a long tail, and
-  ///        this is also what lets phase A ignore the per-net skew entirely. Returns the worker count
-  ///        actually used. Falls back to fewer threads (down to the caller's own) if the system
-  ///        refuses to spawn them.
+  ///        this is also what lets phase A ignore the per-net skew entirely. Falls back to fewer
+  ///        threads (down to the caller's own) if the system refuses to spawn them. Returns the
+  ///        REQUESTED worker count `min(W, n)`, even when fewer threads could be spawned.
   template <class F> unsigned parallel_flat(long n, unsigned W, F &&f)
   {
     if (n <= 0) return 0u;
@@ -105,16 +99,6 @@ namespace numtracer::numeric
     return nw;
   }
 
-  /// @brief PHASE A — contract traces `[0, nCache)` once each, in parallel over a flat work list.
-  ///
-  /// `nCache` is how many of the distinct traces are cached. CodegenGenerator.m orders the traces by
-  /// *descending reference count*, so a cap keeps the traces that repay caching most; traces at index
-  /// `>= nCache` are recomputed on demand in phase B (see @ref fold_net). Two reasons to cap:
-  ///  - a trace referenced exactly once costs the same either way, so caching it is pure RAM for no
-  ///    saving — CodegenGenerator.m's default `nCache` therefore excludes the singletons;
-  ///  - `NT_GEN_MEMO_MAX` trims it further when memory is tight (the RAM lever: the dense flows are
-  ///    memory-bound before they are compute-bound).
-  ///
 #if NT_PHASEA_STATS
   /// Print the merged phase-A counter/timer report plus the per-trace wall-time distribution.
   /// Stats builds only (see stats.hpp); called by contract_traces after the workers have joined, so
@@ -174,6 +158,16 @@ namespace numtracer::numeric
   }
 #endif // NT_PHASEA_STATS
 
+  /// @brief PHASE A — contract traces `[0, nCache)` once each, in parallel over a flat work list.
+  ///
+  /// `nCache` is how many of the distinct traces are cached. CodegenGenerator.m orders the traces by
+  /// *descending reference count*, so a cap keeps the traces that repay caching most; traces at index
+  /// `>= nCache` are recomputed on demand in phase B (see @ref fold_net). Two reasons to cap:
+  ///  - a trace referenced exactly once costs the same either way, so caching it is pure RAM for no
+  ///    saving — CodegenGenerator.m's default `nCache` therefore excludes the singletons;
+  ///  - `NT_GEN_MEMO_MAX` trims it further when memory is tight (the RAM lever: the dense flows are
+  ///    memory-bound before they are compute-bound).
+  ///
   /// @param trace `trace(k) -> P`, the contraction of distinct trace `k`. Must be pure and safe to
   ///        call concurrently (the numeric_value_* entry points take everything by const reference).
   template <class P, class TraceFn>
@@ -252,13 +246,13 @@ namespace numtracer::numeric
     });
   }
 
-  /// @brief PHASE B (lever (b), dressed) — fold one net whose traces are PLAIN @ref MPoly into a
+  /// @brief PHASE B (dressed) — fold one net whose traces are PLAIN @ref MPoly into a
   ///        @ref DPoly: `Σ_j subScale[j] · traceTable[traceIdx[j]] ⊗ subDress[j]`.
   ///
   /// This is the dressed analogue of @ref fold_net. The trace table is plain `MPoly` (the dressing
   /// dimension was stripped at codegen time and lives in the per-sub-term `subDress`/`subScale`), so the
-  /// same net can reference one concrete trace across MANY dressing channels without re-contracting it —
-  /// the whole point of lever (b). Each sub-term becomes a one-term `DPoly` (`subDress[j]` →
+  /// same net can reference one concrete trace across MANY dressing channels without re-contracting it.
+  /// Each sub-term becomes a one-term `DPoly` (`subDress[j]` →
   /// `subScale[j]·trace`), and those are summed by the same @ref tree_sum as @ref fold_net;
   /// `DPoly::operator+` collects the channels.
   template <class TraceFn>
@@ -312,18 +306,14 @@ namespace numtracer::numeric
   ///        `NT_GEN_GROUP_WINDOW` overrides; 0/unset picks `max(kMinNetWindow, kNetsPerWorker*W)`.
   ///
   /// This is the RAM lever for phase B, and it is a monotone dial: a window >= the net count lifts the
-  /// bound entirely, reproducing the old all-resident schedule, so the pre-streaming behaviour stays
-  /// reachable for A/B.
+  /// bound entirely (the all-resident schedule, for A/B).
   ///
   /// The budget is counted in NETS, not groups, for two reasons. Nets are the unit that actually costs
   /// memory (a group accumulator is roughly one net's worth, while a group spans 1..30 nets depending
   /// on the flow), so nets are the honest currency for a RAM bound. And nets are the unit of
   /// PARALLELISM: @ref fold_groups_streaming dispatches a flat work list of nets, never of groups.
-  /// Making the group the work item looks tempting — it needs no per-net storage — but it serialises
-  /// every net inside a group onto one thread, which on a flow with few fat groups is catastrophic
-  /// (measured on ZA4: 54 nets in 6 groups, one of them 27 nets, took the generator run 0.78 s -> 3.8 s).
-  /// The flat net-level work list is the whole reason phase A scales — see this file's header note on
-  /// per-net skew — and phase B must not give it up.
+  /// Making the group the work item serialises every net inside a group onto one thread: a measured
+  /// dead end (ZA4, 54 nets in 6 groups: 0.78 s -> 3.8 s).
   inline long net_window(long nNet, unsigned W)
   {
     static const long ov = env_int("NT_GEN_GROUP_WINDOW", 0); // 0 = no override, use the rule below
@@ -359,14 +349,9 @@ namespace numtracer::numeric
 
   /// @brief Abort the generation if `groups` does not partition the nets.
   ///
-  /// FATAL, and run on EVERY generation. It used to be emitted behind `if(ntprof)` — i.e. gated on
-  /// NT_GEN_PROFILE, which no production regeneration sets — and it only warned to stderr, where the
-  /// line was lost in the generator log. So the one guard standing between a mis-built group list and
-  /// a silently wrong kernel had, in practice, never run at all. It is O(nNet) once per generation
-  /// (nets are tens to low thousands) against a build measured in seconds to minutes.
-  ///
-  /// Verified before being made fatal: a full regeneration of all 29 flows in DEFAULT_FLOWS reported
-  /// zero violations, so no committed flow legitimately produces a non-partition.
+  /// FATAL, and run on EVERY generation (never behind a profiling flag): it is the one guard between a
+  /// mis-built group list and a silently wrong kernel, and costs O(nNet) once. No committed flow
+  /// produces a non-partition.
   ///
   /// Exits rather than throwing: a nonzero exit is already the generator's wired-up failure signal
   /// (`MakeNTKernel::genfail`, which tests/gen/regen_check.sh greps for), and parts of the generator
@@ -383,88 +368,13 @@ namespace numtracer::numeric
     std::exit(1);
   }
 
-  /// @brief PHASE B, streaming driver — fold nets in bounded waves and hand each group's accumulator
-  ///        straight to `sink`, so no net polynomial outlives the group that consumes it.
-  ///
-  /// `fold_nets` materialises one fully-expanded polynomial per net and returns them all; the caller
-  /// then sums them into per-group accumulators. Both sets are live at once and neither is ever
-  /// released, which on the dense 4-point flows is 20+ GB (488 nets x ~41 MB) against a 20 MB trace
-  /// table — a ~1000x ratio between what is *cached* and what is merely *retained*. Nothing is
-  /// revisited: each net polynomial is written once, read once by its group, then dead. So this is a
-  /// streaming workload, and running it as a batch is the entire bug.
-  ///
-  /// Here at most `window` net polynomials are ever live, regardless of the flow's shape.
-  ///
-  /// Equivalence with `fold_nets` + an eager left fold is exact, not approximate:
-  ///  - each group still sums its members left-to-right in group order over the same `fold_net`
-  ///    results, so the floating-point association is unchanged bit-for-bit;
-  ///  - `sink` is called on the CALLING thread for `gi = 0, 1, 2, ...` strictly ascending, exactly once
-  ///    per group, which is what keeps `GlobalEnv` symbol-intern order and the shared CSE builder's
-  ///    instruction stream identical to the non-streamed lowering.
-  ///
-  /// @param scale `scale(d, P&&) -> P` applies net `d`'s colour weight. Deliberately a caller-supplied
-  ///        callable rather than @ref scale_trace: the emitted MPoly branches write
-  ///        `mp[d] * env.constant(colv[d])` (poly x constant) while `scale_trace` computes
-  ///        constant x poly. `MPoly::operator*` sort-collects so the two almost certainly agree — but a
-  ///        refactor that must not move a single ulp should not rest on "almost certainly", and a
-  ///        lambda preserves each branch's exact expression while keeping `colv` out of this signature.
-  /// @param trace as in @ref fold_net: pure and safe to call concurrently.
-  ///
-  // Forward declaration: the two drivers below are thin wrappers over this shared skeleton (defined
-  // just after them).
-  template <class P, class FoldScaledFn, class Sink>
-  void fold_groups_streaming_impl(int nsym, const std::vector<std::vector<int>> &groups, unsigned W,
-                                  long window, FoldScaledFn &&foldScaledNet, Sink &&sink);
-
-  /// The wave/streaming SKELETON is factored into @ref fold_groups_streaming_impl so the plain and the
-  /// dressed (lever (b)) drivers share it: the only thing that varies between them is how one net's
-  /// polynomial is produced (`fold_net<P>` + colour scale vs `fold_net_dressed` + colour scale), which
-  /// each passes as a `foldScaledNet(netId) -> P` callable. The wrapper below reproduces the previous
-  /// body's operations exactly, so the non-dressed emitted kernel is byte-identical.
-  template <class P, class TraceFn, class ScaleFn, class Sink>
-  void fold_groups_streaming(int nsym, const std::vector<std::vector<int>> &traceIdx,
-                             const std::vector<std::vector<Cx>> &subScale,
-                             const std::vector<std::vector<int>> &groups, const std::vector<P> &traceTable,
-                             long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
-                             Sink &&sink)
-  {
-    fold_groups_streaming_impl<P>(
-        nsym, groups, W, window,
-        [&](int netId) {
-          const auto netIdx = static_cast<std::size_t>(netId);
-          return scale(netId,
-                       fold_net<P>(nsym, traceIdx[netIdx], subScale[netIdx], traceTable, nCache, trace));
-        },
-        std::forward<Sink>(sink));
-  }
-
-  /// @brief PHASE B, streaming driver — lever (b) dressed variant. Trace table is plain @ref MPoly; each
-  ///        net folds into a @ref DPoly via @ref fold_net_dressed (carrying the per-sub-term dressing
-  ///        monomials @p subDress), then the colour @p scale and @p sink run exactly as in the plain
-  ///        driver. Same bounded live set and ascending-group sink order, so `GlobalEnv` intern order /
-  ///        the CSE instruction stream are governed identically.
-  template <class TraceFn, class ScaleFn, class Sink>
-  void fold_groups_streaming_dressed(int nsym, const std::vector<std::vector<int>> &traceIdx,
-                                     const std::vector<std::vector<Cx>> &subScale,
-                                     const std::vector<std::vector<DMono>> &subDress,
-                                     const std::vector<std::vector<int>> &groups,
-                                     const std::vector<MPoly> &traceTable, long nCache, unsigned W,
-                                     long window, TraceFn &&trace, ScaleFn &&scale, Sink &&sink)
-  {
-    fold_groups_streaming_impl<DPoly>(
-        nsym, groups, W, window,
-        [&](int netId) {
-          const auto netIdx = static_cast<std::size_t>(netId);
-          return scale(netId, fold_net_dressed(nsym, traceIdx[netIdx], subScale[netIdx], subDress[netIdx],
-                                               traceTable, nCache, trace));
-        },
-        std::forward<Sink>(sink));
-  }
-
   /// @brief The shared wave/streaming skeleton of the phase-B drivers. @p foldScaledNet returns the
   ///        colour-scaled polynomial of the net it is given; @p sink absorbs each group's accumulator in
   ///        ascending group order on the calling thread. Bounded live set: at most `window` net
   ///        polynomials in flight.
+  ///
+  /// The plain and dressed drivers differ only in how one net's polynomial is produced, which each
+  /// passes as `foldScaledNet(netId) -> P`.
   template <class P, class FoldScaledFn, class Sink>
   void fold_groups_streaming_impl(int nsym, const std::vector<std::vector<int>> &groups, unsigned W,
                                   long window, FoldScaledFn &&foldScaledNet, Sink &&sink)
@@ -574,6 +484,66 @@ namespace numtracer::numeric
                    foldSec, W, drainSec, sinkSec);
       std::fflush(stderr);
     }
+  }
+
+  /// @brief PHASE B, streaming driver — fold nets in bounded waves and hand each group's accumulator
+  ///        straight to `sink`, so no net polynomial outlives the group that consumes it.
+  ///
+  /// Each net polynomial is written once, read once by its group, then dead, so this streams: at most
+  /// `window` net polynomials are ever live, regardless of the flow's shape. (Materialising them all,
+  /// as `fold_nets` does, is 20+ GB on the dense 4-point flows.)
+  ///
+  /// Equivalence with `fold_nets` + an eager left fold is exact, not approximate:
+  ///  - each group still sums its members left-to-right in group order over the same `fold_net`
+  ///    results, so the floating-point association is unchanged bit-for-bit;
+  ///  - `sink` is called on the CALLING thread for `gi = 0, 1, 2, ...` strictly ascending, exactly once
+  ///    per group, which is what keeps `GlobalEnv` symbol-intern order and the shared CSE builder's
+  ///    instruction stream identical to the non-streamed lowering.
+  ///
+  /// @param scale `scale(d, P&&) -> P` applies net `d`'s colour weight. Deliberately a caller-supplied
+  ///        callable rather than @ref scale_trace: the emitted MPoly branches write
+  ///        `mp[d] * env.constant(colv[d])` (poly x constant) while `scale_trace` computes
+  ///        constant x poly. The two are bit-identical (see `MPoly::scaled`); the lambda keeps each
+  ///        branch's exact expression and `colv` out of this signature.
+  /// @param trace as in @ref fold_net: pure and safe to call concurrently.
+  template <class P, class TraceFn, class ScaleFn, class Sink>
+  void fold_groups_streaming(int nsym, const std::vector<std::vector<int>> &traceIdx,
+                             const std::vector<std::vector<Cx>> &subScale,
+                             const std::vector<std::vector<int>> &groups, const std::vector<P> &traceTable,
+                             long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
+                             Sink &&sink)
+  {
+    fold_groups_streaming_impl<P>(
+        nsym, groups, W, window,
+        [&](int netId) {
+          const auto netIdx = static_cast<std::size_t>(netId);
+          return scale(netId,
+                       fold_net<P>(nsym, traceIdx[netIdx], subScale[netIdx], traceTable, nCache, trace));
+        },
+        std::forward<Sink>(sink));
+  }
+
+  /// @brief PHASE B, streaming driver — dressed variant. Trace table is plain @ref MPoly; each
+  ///        net folds into a @ref DPoly via @ref fold_net_dressed (carrying the per-sub-term dressing
+  ///        monomials @p subDress), then the colour @p scale and @p sink run exactly as in the plain
+  ///        driver. Same bounded live set and ascending-group sink order, so `GlobalEnv` intern order /
+  ///        the CSE instruction stream are governed identically.
+  template <class TraceFn, class ScaleFn, class Sink>
+  void fold_groups_streaming_dressed(int nsym, const std::vector<std::vector<int>> &traceIdx,
+                                     const std::vector<std::vector<Cx>> &subScale,
+                                     const std::vector<std::vector<DMono>> &subDress,
+                                     const std::vector<std::vector<int>> &groups,
+                                     const std::vector<MPoly> &traceTable, long nCache, unsigned W,
+                                     long window, TraceFn &&trace, ScaleFn &&scale, Sink &&sink)
+  {
+    fold_groups_streaming_impl<DPoly>(
+        nsym, groups, W, window,
+        [&](int netId) {
+          const auto netIdx = static_cast<std::size_t>(netId);
+          return scale(netId, fold_net_dressed(nsym, traceIdx[netIdx], subScale[netIdx], subDress[netIdx],
+                                               traceTable, nCache, trace));
+        },
+        std::forward<Sink>(sink));
   }
 
 } // namespace numtracer::numeric

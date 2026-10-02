@@ -4,9 +4,7 @@
 ///        @ref MPoly / @ref DPoly.
 ///
 /// Every polynomial fed into one trace must share an `nsym` (the length of each monomial's exponent
-/// vector); mismatches were previously guarded only by debug asserts in the arithmetic operators and
-/// were easy to introduce (a bare integer threaded through dozens of call sites). `LorentzEnv` captures
-/// `nsym` once so a wrong value is unconstructible at the API surface: `env.var(i)`, `env.constant(c)`,
+/// vector). `LorentzEnv` captures `nsym` once so a wrong value is unconstructible at the API surface: `env.var(i)`, `env.constant(c)`,
 /// `env.numeric_value_netval(...)` all bake in the env's `nsym`. It is a construction-time factory only
 /// — the polynomials it mints still carry a bare inline `int nsym`, so the arithmetic hot path is
 /// unchanged (no env pointer is stored per object). It is a `friend` of @ref MPoly / @ref DPoly, so it
@@ -129,7 +127,7 @@ namespace numtracer::numeric
                                                      window, std::forward<TraceFn>(trace),
                                                      std::forward<ScaleFn>(scale), std::forward<Sink>(sink));
     }
-    /// Streaming phase B, lever (b) dressed variant: a plain-MPoly `traceTable` + the per-sub-term
+    /// Streaming phase B, dressed variant: a plain-MPoly `traceTable` + the per-sub-term
     /// dressing monomials `subDress` fold into a DPoly per net. See `trace_fold.hpp`'s
     /// `fold_groups_streaming_dressed`.
     template <class TraceFn, class ScaleFn, class Sink>

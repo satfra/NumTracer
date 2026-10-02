@@ -38,9 +38,7 @@ namespace numtracer::network
   struct Elem {
     enum Kind { Metric, Vector, Epsilon, ProjT, ProjL, ProjE, ProjM };
     Kind kind = Metric;
-    // Field docs name the VARIANT, never its enum ordinal: the ordinals shifted when `Epsilon` was
-    // inserted into the middle of `Kind`, and the old "kind 2 / kind 3" tags then pointed at the
-    // wrong variant in every one of these lines.
+    // Field docs name the VARIANT, never its enum ordinal: ordinals shift whenever `Kind` grows.
     // The ints sit together ahead of `vlc` so the struct packs into 56 B, not 64. Build it with
     // designated initializers only: a positional `Elem{…}` would silently mis-bind on a reorder.
     int a = 0, b = 0;                        ///< Lorentz index ids (Metric, Epsilon, and every projector)
@@ -126,7 +124,7 @@ namespace numtracer::network
   ///        vector sums on the same index (a vertex's momentum sub-combination), they collapse into a
   ///        single compound-vector leaf instead of two product terms, so @ref contract never
   ///        distributes the combination (the A4 explosion). Genuine structure sums (a vertex's sum of
-  ///        metric×vector tensors) are *not* collapsible and concatenate as before.
+  ///        metric×vector tensors) are *not* collapsible and concatenate.
   inline NetVal add(NetVal a, const NetVal &b)
   {
     int ia = 0, ib = 0;

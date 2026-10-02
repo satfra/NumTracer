@@ -6,16 +6,9 @@
 /// in a function-local `static` at the call site — emission and contraction must be uniform across
 /// a run, so a variable changed mid-process deliberately has no effect.
 ///
-/// WHY THIS EXISTS. Four mutually incompatible spellings of "is this flag set" used to coexist in
-/// the headers: `getenv(x) != nullptr` (presence-only), `e && e[0] == '1'` (exact leading char),
-/// an open-coded copy of the rule below, and the rule itself, which was private to
-/// `codegen/gen.hpp` and therefore unreachable from `numeric/`. Under the presence-only spelling
-/// `FOO=` and `FOO=0` both read as TRUE, so *unsetting a flag by emptying it silently left it on*
-/// — and under the leading-char spelling `FOO=true` silently did nothing. The Wolfram front end
-/// solved the same problem with `ntEnvFlag` (mathematica/DSL.m) after `NT_NO_LABEL_CHECK=0`
-/// disabled a correctness guard; this is the C++ half of that fix, and the two agree on the rule.
-///
 /// The rule: a flag is ON when the variable is set, non-empty, and not the single character "0".
+/// Every reader must use it — a presence-only test reads `FOO=` and `FOO=0` as ON, a leading-char
+/// test ignores `FOO=true` — and it must match `ntEnvFlag` in mathematica/DSL.m.
 #pragma once
 
 #include <cstdlib>

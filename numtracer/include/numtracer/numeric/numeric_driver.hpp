@@ -3,10 +3,8 @@
 ///        expression in the user symbol names, for the generator's `FillFormulas` — the
 ///        `inv(atom) = 1/k²` and `var(k) = <name>` slots.
 ///
-/// This file used to also hold a `run_numeric` driver that contracted and lowered every net in one
-/// serial loop. CodegenGenerator.m emits the parallel `contract_traces` + `fold_groups_streaming` pair
-/// (numeric/trace_fold.hpp) instead, and had done for long enough that nothing called the driver;
-/// it and its `NumericNet` net type are gone.
+/// The contraction driver itself is `contract_traces` + `fold_groups_streaming`
+/// (numeric/trace_fold.hpp), emitted by mathematica/CodegenGenerator.m.
 #pragma once
 
 #include "numtracer/numeric/mpoly.hpp"

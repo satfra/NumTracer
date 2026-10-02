@@ -1,20 +1,15 @@
 /// @file dirac.hpp
-/// @brief Numeric Dirac gamma-trace for the **build-time generator** — contracts a closed spinor
-///        (gamma) loop into a Lorentz @ref NetVal (metrics / vectors / Levi-Civita over the free
-///        gluon legs), at codegen time — the trace is contracted here numerically, not expanded
-///        symbolically in the Mathematica front-end.
+/// @brief The closed gamma-chain tokens (@ref DFac / @ref DiracNet) the generator builds, plus
+///        `dirac_value`, a Wick-pairing trace used as a TEST ORACLE.
 ///
-/// This is the Dirac analogue of @ref sun_net.hpp's `SUNNet`: colour folds to a scalar `Cx`, but a
-/// Dirac trace `tr(γ^{μ1} … γ^{μn})` is a **Lorentz tensor** over the free legs `μ_i` whose
-/// coefficients are momentum-dependent (the slashed propagator momenta). So `dirac_value` folds to a
-/// `NetVal` (not a scalar): the same metric/vector structure the symbolic `gammaTraceSum` produced
-/// in Mathematica, but built in C++ and fed straight into the numeric contraction
-/// (@ref numtracer::numeric::numeric_value_netval). Moving it here removes the
-/// `(2n−1)!!`-terms-×-(hundreds-of-distributed-branches) explosion from the Mathematica codegen
-/// (a 3-gluon-vertex quark triangle was minutes/GBs there).
+/// The production trace is `numeric_dirac` (numeric/numeric_contract.hpp): it multiplies the chain
+/// as 4×4 Weyl-block matrices of polynomials and handles every token kind. `dirac_value` instead
+/// folds a FREE/SLASH-only chain into a Lorentz @ref NetVal (metrics / vectors over the free legs)
+/// by the Wick pairing recursion — an independent algorithm that tests/test_numeric_contract.cpp
+/// grades `numeric_dirac` against. It refuses every token kind it cannot trace.
 ///
 /// A chain is a list of trace-ordered tokens (already cyclically closed by the front-end's
-/// `orderDiracChain`): each is either a FREE gluon leg `γ^μ` (an open Lorentz id `mu`, contracts the
+/// `orderDiracFacs`, mathematica/CodegenNets.m): each is either a FREE gluon leg `γ^μ` (an open Lorentz id `mu`, contracts the
 /// projector later), a SLASHED propagator `γ·p` (the momentum `p = Σ coeff·fund(vid)` as a `vlc`,
 /// mirroring @ref Elem's vector linear combination), or a γ5 marker.
 ///
@@ -23,7 +18,7 @@
 /// with `g(free μa, free μb)=δ` → @ref met, `g(free μ, slash p)=p^μ` → @ref vec, and
 /// `g(slash p, slash q)=p·q` emitted as two @ref vec leaves on a **fresh** internal Lorentz label so
 /// the numeric contraction sums the two-vector index class into one scalar product. The overall `tr(1)=4` is
-/// folded into the coefficient. An odd number of gammas traces to 0. (Generator-only — runtime.)
+/// folded into the coefficient. An odd number of gammas traces to 0.
 #pragma once
 
 #include "numtracer/network/network.hpp"
@@ -51,9 +46,7 @@ namespace numtracer::network
   struct DFac {
     enum Kind { Gamma, Gamma5, Slash, Comm, LoopSep, C };
     Kind kind = Gamma;
-    // Field docs name the VARIANT, never its enum ordinal — the ordinal tags that used to be here
-    // pointed at the wrong variant (`vlc` is the Slash momentum, which was tagged "kind 1" = Gamma5,
-    // a variant that carries nothing at all).
+    // Field docs name the VARIANT, never its enum ordinal: ordinals shift whenever `Kind` grows.
     int mu = -1; ///< Gamma: open Lorentz id. Comm: leg-A FREE id (-1 ⇒ leg-A is a slash, use `vlc`)
     std::vector<std::pair<double, int>>
         vlc;     ///< Slash: the momentum lin. comb. Comm: leg-A slash momentum (when mu < 0)
@@ -67,9 +60,8 @@ namespace numtracer::network
     /// entered backwards and marks them; this flag carries that marking. Handled entirely at
     /// BLOCK-PRECOMPUTE time in `numeric_dirac`, so the fold itself is unaffected.
     ///
-    /// Placed HERE, between `nu` and `vlc2`, so it lands in the 4 bytes of padding the int/vector
-    /// alignment already leaves: appended at the end instead it pushed sizeof(DFac) 64 -> 72, and a
-    /// DiracNet is a vector of these that the fold walks per DFS node — measured +1.4% instructions.
+    /// Placed HERE, between `nu` and `vlc2`, so it lands in existing padding: sizeof(DFac) stays 64
+    /// (72 at the end cost +1.4% instructions in the fold).
     bool transposed = false;
     std::vector<std::pair<double, int>> vlc2; ///< Comm: leg-B slash momentum (when nu < 0)
   };
@@ -173,7 +165,7 @@ namespace numtracer::network
   } // namespace dirac_detail
 
   /// @brief Contract a closed gamma chain into a Lorentz @ref NetVal over its free legs.
-  /// @param chain          the trace-ordered tokens (free legs / slashes; γ5 not yet handled here).
+  /// @param chain          the trace-ordered tokens (free legs / slashes only; anything else throws).
   /// @param firstFreeLabel a Lorentz id strictly above every label the surrounding component uses, so
   ///                       the fresh slash–slash labels never collide with the free legs / projector.
   /// @return the trace as a `NetVal` (empty == structural zero, e.g. an odd gamma count).
@@ -183,8 +175,8 @@ namespace numtracer::network
     // non-Gamma token as a slash and reads its `vlc`, which for a Comm (σ) built from two FREE legs
     // is EMPTY — vec_lc then folds to the zero 4-vector and the trace silently collapses. LoopSep is
     // not a gamma at all and would be paired as one. Neither can be traced here, so refuse them
-    // rather than return a plausible-looking wrong answer. (The live engine, numeric_dirac, DOES
-    // handle both; this function is a cross-validation oracle — see tests/test_numeric_contract.cpp.)
+    // rather than return a plausible-looking wrong answer. (The production engine, numeric_dirac,
+    // handles both.)
     for (const DFac &d : chain)
       if (d.kind == DFac::Comm)
         NT_THROW(std::runtime_error,
@@ -211,18 +203,15 @@ namespace numtracer::network
                  "recursion knows only the Clifford algebra, and C is not a gamma — pair_factor "
                  "would read its empty vlc and silently collapse the trace. Use numeric_dirac, "
                  "or fold C away in the front end before tracing here.");
-    // Gamma parity. Count ONLY the antidiagonal-block tokens, exactly as numeric_dirac does
-    // (numeric_contract.hpp): a Comm is two gammas, a LoopSep none and a C two, so all contribute 0 mod 2
-    // — counting either as ONE gamma (the old `!= Gamma5` test) inverted the verdict, returning a
-    // structural zero for a nonzero 4-gamma trace like {sigma, gamma, gamma} and passing a genuinely
-    // odd chain like {sigma, gamma} through to trace_rec. Both are now refused above, but keep the
-    // count in step with its sibling so the two engines cannot drift again.
+    // Gamma parity. Count ONLY the antidiagonal-block tokens, exactly as numeric_dirac does: a Comm
+    // is two gammas, a LoopSep none and a C two, so all contribute 0 mod 2. Keep the two counts in
+    // step even though those kinds are refused above.
     std::size_t nAntidiag = 0;
     for (const DFac &d : chain)
       if (d.kind == DFac::Gamma || d.kind == DFac::Slash) ++nAntidiag;
     if (nAntidiag % 2 == 1) return {}; // odd chain → 0
     int fresh = firstFreeLabel;
-    NetVal r = dirac_detail::trace_rec(chain, fresh); // stage 1: no γ5 tokens
+    NetVal r = dirac_detail::trace_rec(chain, fresh); // no γ5 tokens (refused above)
     return scale(Cx{4.0, 0}, std::move(r));               // tr(1) = 4
   }
 

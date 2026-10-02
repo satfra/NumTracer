@@ -3,9 +3,9 @@
 ///
 /// This header is a foundational leaf — it has no dependency on the Lorentz/Dirac/SU(N)
 /// sector headers. It provides a stack-allocated `N×N` complex matrix (`std::complex<double>`
-/// entries) with element access, a sparse-aware matrix product, and a trace. The SU(N) sector
-/// (`sun/sun_data.hpp`, `network/sun_net.hpp`) builds its generators and structure constants on
-/// top of these primitives; the matmul skips structurally-zero left entries because those
+/// entries) with element access, a sparse-aware matrix product, and a trace. `sun/sun_data.hpp`
+/// stores its typed-out generators as `Mat<N>`; `network/sun_net.hpp` copies them into its own
+/// runtime-sized `DynMat`. The matmul skips structurally-zero left entries because the
 /// generators are sparse.
 #pragma once
 
