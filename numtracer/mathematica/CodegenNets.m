@@ -38,23 +38,29 @@ lorentzNetStr[ntEpsilon[a_, b_, c_, d_], ids_, env_, nonzeroCompMask_] :=
 
 (* A Lorentz factor as a single `network::Elem{...}` literal (for a collected Dirac slot's per-option
    `netFacs`). Mirrors lorentzNetStr's id/momentum/atom resolution but emits the Elem aggregate the
-   numeric backend appends to the net, rather than a NetVal builder. Field order (network.hpp):
-   {kind, a, b, vid, inv, vlc, c, d, invS}. A projector's momentum rides `vid = env Base` (elem_to_nelem
-   reconstructs it as {{1.0, vid}}); a vector's rides `vlc`. *)
+   numeric backend appends to the net, rather than a NetVal builder. Emitted with C++20 designated
+   initializers, so the fields must be given in network.hpp's declaration order
+   (kind, a, b, vid, inv, c, d, invS, vlc); omitted ones take their defaults. A projector's momentum
+   rides `vid = env Base` (elem_to_nelem reconstructs it as {{1.0, vid}}); a vector's rides `vlc`. *)
+ntElemStr[fields___Rule] :=
+  "Elem{" <> StringRiffle[("." <> #[[1]] <> " = " <> ToString[#[[2]]]) & /@ {fields}, ", "] <> "}";
 lorentzElemStr[ntMetric[mu_, nu_], ids_, env_] :=
-  "Elem{" <> ntLorArgs["Elem::Metric", ids[mu], ids[nu], -1, -1, "{}"] <> "}";
+  ntElemStr["kind" -> "Elem::Metric", "a" -> ids[mu], "b" -> ids[nu], "vid" -> -1, "inv" -> -1];
 lorentzElemStr[ntVec[q_, mu_], ids_, env_] :=
-  "Elem{" <> ntLorArgs["Elem::Vector", ids[mu], -1, -1, -1, "{{" <> ntLorArgs["1.0", env[q]["Base"]] <> "}}"] <> "}";
+  ntElemStr["kind" -> "Elem::Vector", "a" -> ids[mu], "b" -> -1, "vid" -> -1, "inv" -> -1,
+    "vlc" -> "{{" <> ntLorArgs["1.0", env[q]["Base"]] <> "}}"];
 lorentzElemStr[ntTransProj[q_, mu_, nu_], ids_, env_] :=
-  "Elem{" <> ntLorArgs["Elem::ProjT", ids[mu], ids[nu], env[q]["Base"], env[q]["Inv"], "{}"] <> "}";
+  ntElemStr["kind" -> "Elem::ProjT", "a" -> ids[mu], "b" -> ids[nu], "vid" -> env[q]["Base"], "inv" -> env[q]["Inv"]];
 lorentzElemStr[ntLongProj[q_, mu_, nu_], ids_, env_] :=
-  "Elem{" <> ntLorArgs["Elem::ProjL", ids[mu], ids[nu], env[q]["Base"], env[q]["Inv"], "{}"] <> "}";
+  ntElemStr["kind" -> "Elem::ProjL", "a" -> ids[mu], "b" -> ids[nu], "vid" -> env[q]["Base"], "inv" -> env[q]["Inv"]];
 lorentzElemStr[ntMagneticProj[q_, mu_, nu_], ids_, env_] :=
-  "Elem{" <> ntLorArgs["Elem::ProjM", ids[mu], ids[nu], env[q]["Base"], -1, "{}", 0, 0, env[q]["InvS"]] <> "}";
+  ntElemStr["kind" -> "Elem::ProjM", "a" -> ids[mu], "b" -> ids[nu], "vid" -> env[q]["Base"], "inv" -> -1,
+    "invS" -> env[q]["InvS"]];
 lorentzElemStr[ntElectricProj[q_, mu_, nu_], ids_, env_] :=
-  "Elem{" <> ntLorArgs["Elem::ProjE", ids[mu], ids[nu], env[q]["Base"], env[q]["Inv"], "{}", 0, 0, env[q]["InvS"]] <> "}";
+  ntElemStr["kind" -> "Elem::ProjE", "a" -> ids[mu], "b" -> ids[nu], "vid" -> env[q]["Base"], "inv" -> env[q]["Inv"],
+    "invS" -> env[q]["InvS"]];
 lorentzElemStr[ntEpsilon[a_, b_, c_, d_], ids_, env_] :=
-  "Elem{" <> ntLorArgs["Elem::Epsilon", ids[a], ids[b], -1, -1, "{}", ids[c], ids[d]] <> "}";
+  ntElemStr["kind" -> "Elem::Epsilon", "a" -> ids[a], "b" -> ids[b], "vid" -> -1, "inv" -> -1, "c" -> ids[c], "d" -> ids[d]];
 
 scaleStr[str_, 1] := str;
 

@@ -11,7 +11,7 @@
 /// `MPoly::operator*`/`operator+` verbatim, so the numeric backend's hot path is untouched and only
 /// diagrams that genuinely carry a dressed structure sum pay for the dressing layer.
 ///
-/// At lowering (@ref numtracer::numeric::to_genprog) each dressing atom becomes a kind-2 `dress`
+/// At lowering (@ref numtracer::numeric::to_genprog) each dressing atom becomes a `SymKind::dress`
 /// env leaf (@ref network::GlobalEnv::dr_id) — an opaque runtime value the kernel evaluates once,
 /// exactly like an `inv(1/k²)` leaf — and the shared CSE/Horner pass collects the dressing factors
 /// across monomials (FormTracer parity).

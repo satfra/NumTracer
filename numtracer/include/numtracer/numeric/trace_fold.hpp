@@ -40,6 +40,8 @@
 #include <utility>
 #include <vector>
 
+#include <unistd.h> // sysconf(_SC_PAGESIZE) for the RSS profile
+
 namespace numtracer::numeric
 {
 
@@ -299,8 +301,15 @@ namespace numtracer::numeric
     return mp;
   }
 
+  /// Nets in flight per worker: several, so one fat net (per-net cost is heavily skewed) does not
+  /// leave the other workers idle until the wave ends.
+  inline constexpr long kNetsPerWorker = 8;
+  /// Floor of the default window, so a low worker count still gets waves long enough to amortise the
+  /// serial per-wave drain.
+  inline constexpr long kMinNetWindow = 64;
+
   /// @brief How many NET polynomials may be in flight — and therefore held — at once.
-  ///        `NT_GEN_GROUP_WINDOW` overrides; 0/unset picks `max(64, 8*W)`.
+  ///        `NT_GEN_GROUP_WINDOW` overrides; 0/unset picks `max(kMinNetWindow, kNetsPerWorker*W)`.
   ///
   /// This is the RAM lever for phase B, and it is a monotone dial: a window >= the net count lifts the
   /// bound entirely, reproducing the old all-resident schedule, so the pre-streaming behaviour stays
@@ -320,7 +329,7 @@ namespace numtracer::numeric
     static const long ov = env_int("NT_GEN_GROUP_WINDOW", 0); // 0 = no override, use the rule below
     if (nNet <= 0) return 0;
     if (ov > 0) return std::min(ov, nNet);
-    return std::min(nNet, std::max<long>(64, 8L * static_cast<long>(W)));
+    return std::min(nNet, std::max(kMinNetWindow, kNetsPerWorker * static_cast<long>(W)));
   }
 
   /// @brief Does `groups` cover every net exactly once? Pure predicate, so it is unit-testable
@@ -483,7 +492,8 @@ namespace numtracer::numeric
         if (std::fscanf(f, "%ld %ld", &tot, &res) != 2) res = 0;
         std::fclose(f);
       }
-      return res * 4096.0 / 1048576.0; // page size is 4 KiB where this runs
+      static const double pageBytes = static_cast<double>(sysconf(_SC_PAGESIZE));
+      return res * pageBytes / 1048576.0;
     };
     long waveNo = 0;
 

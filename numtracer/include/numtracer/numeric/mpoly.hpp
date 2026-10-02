@@ -29,6 +29,7 @@
 #include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
 #include "numtracer/core/cx.hpp"
 #include "numtracer/numeric/stats.hpp"
+#include "numtracer/numeric/tolerances.hpp" // kPolyDivRelTol
 #include "numtracer/third_party/gch/small_vector.hpp"
 
 #include <algorithm>
@@ -139,9 +140,9 @@ namespace numtracer::numeric
     }
 
     MonoExp() = default;
-    /// `MonoExp(n, 0)`: the all-zero exponent (stays inline — an all-zero monomial never overflows,
-    /// and a heap peer of length n>24 compares correctly against it since get() returns 0 past 24).
-    MonoExp(int /*n*/, int fill) { assert(fill == 0); (void)fill; }
+    /// The all-zero exponent, for any nsym. It stays inline: an all-zero monomial never overflows, and
+    /// a heap peer with nsym > 24 compares correctly against it since get() returns 0 past 24.
+    static MonoExp zero() { return MonoExp{}; }
     /// Pack from an iterator range of integer exponents (the generated component table hands a vector).
     template <class It> MonoExp(It b, It e)
     {
@@ -635,7 +636,7 @@ namespace numtracer::numeric
     static MPoly constant(int ns, Cx c)
     {
       MPoly p(ns);
-      if (!(c.re == 0 && c.im == 0)) p.terms.push_back({Mono{MonoExp(ns, 0), {}}, c});
+      if (!(c.re == 0 && c.im == 0)) p.terms.push_back({Mono{MonoExp::zero(), {}}, c});
       return p;
     }
 
@@ -660,7 +661,7 @@ namespace numtracer::numeric
     static MPoly var(int ns, int i)
     {
       MPoly p(ns);
-      MonoExp e(ns, 0);
+      MonoExp e = MonoExp::zero();
       e[i] = 1;
       p.terms.push_back({Mono{std::move(e), {}}, Cx{1, 0}});
       return p;
@@ -689,7 +690,7 @@ namespace numtracer::numeric
         NT_THROW(std::runtime_error, "MPoly::atom: atom id out of MonoAtomT (int16) range — it would "
                                      "wrap silently and alias another denominator");
       MPoly p(ns);
-      p.terms.push_back({Mono{MonoExp(ns, 0), MonoAtoms{static_cast<MonoAtomT>(aid)}}, Cx{1, 0}});
+      p.terms.push_back({Mono{MonoExp::zero(), MonoAtoms{static_cast<MonoAtomT>(aid)}}, Cx{1, 0}});
       return p;
     }
 
@@ -1263,17 +1264,12 @@ namespace numtracer::numeric
   /// `G`. On an exact division `G·(1/D) → Q`, dropping one atom instance. Repeated to a fixed point.
   ///
   /// Exact and value-preserving: a division is only accepted when the remainder vanishes. "Vanishes"
-  /// uses the same RELATIVE tolerance as the surrounding noise prune (`1e-9` against the dividend's
-  /// largest coefficient) — a numeric frame makes exact cancellations land at ~1e-16 relative, far
+  /// uses @ref kPolyDivRelTol, on the scale of the surrounding noise prune, against the dividend's
+  /// largest coefficient — a numeric frame makes exact cancellations land at ~1e-16 relative, far
   /// inside it, and the polynomial already carries round-off at that scale.
   ///
   /// Measured on ZAqbq1_147 Mq-in (real part): monomials 13,269 → 4,832, atom factors 1,168 → 832,
   /// fused SSA 33,775 → 7,649 (0.23x). 384 of 1,168 trial divisions are exact.
-  /// Relative tolerance for "the division remainder vanishes". Same scale as the surrounding
-  /// noise prune (`numeric_contract.hpp` `kNoisePruneRelTol`); kept local so `mpoly.hpp` stays
-  /// independent of that header.
-  inline constexpr double kPolyDivRelTol = 1e-9;
-
   /// The @ref divThroughPolyAtoms pass-through test: no term carries an atom whose denominator is
   /// multi-term with an atom-free leading term, so no trial division can run. The full pass then only
   /// regroups and re-sorts the (already canonical) terms and rebuilds each coefficient as `0 + c`.

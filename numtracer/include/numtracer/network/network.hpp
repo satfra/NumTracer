@@ -41,12 +41,14 @@ namespace numtracer::network
     // Field docs name the VARIANT, never its enum ordinal: the ordinals shifted when `Epsilon` was
     // inserted into the middle of `Kind`, and the old "kind 2 / kind 3" tags then pointed at the
     // wrong variant in every one of these lines.
+    // The ints sit together ahead of `vlc` so the struct packs into 56 B, not 64. Build it with
+    // designated initializers only: a positional `Elem{…}` would silently mis-bind on a reorder.
     int a = 0, b = 0;                        ///< Lorentz index ids (Metric, Epsilon, and every projector)
     int vid = -1;                            ///< the projector's momentum `l` (ProjT / ProjL / ProjE / ProjM)
     int inv = -1;                            ///< inverse env id `1/l²` (projectors)
-    std::vector<std::pair<double, int>> vlc; ///< vector linear combination `Σ coeff·vec(vid)` (Vector)
     int c = 0, d = 0; ///< ε's 3rd/4th Lorentz index ids (Epsilon only; the default 0 leaves every other kind unchanged)
     int invS = -1;    ///< spatial inverse env id `1/|l⃗|²` (finite-T electric/magnetic projectors only)
+    std::vector<std::pair<double, int>> vlc{}; ///< vector linear combination `Σ coeff·vec(vid)` (Vector)
   };
 
   // ---- network value: a sum of products (built by scale / add / contract) -----
@@ -60,53 +62,53 @@ namespace numtracer::network
   using NetVal = std::vector<PTerm>;
 
   /// @brief A single-factor network (one product term, coefficient 1).
-  inline constexpr NetVal leaf(Elem el) { return {PTerm{Cx{1, 0}, {el}}}; }
+  inline NetVal leaf(Elem el) { return {PTerm{Cx{1, 0}, {el}}}; }
   /// @brief A vector leg `vid` on Lorentz index `Lbl`.
-  inline constexpr NetVal vec(int Lbl, int Vid) { return leaf({Elem::Vector, Lbl, -1, -1, -1, {{1.0, Vid}}}); }
+  inline NetVal vec(int Lbl, int Vid) { return leaf({.kind = Elem::Vector, .a = Lbl, .b = -1, .vid = -1, .inv = -1, .vlc = {{1.0, Vid}}}); }
   /// @brief A metric `δ_{Mu Nu}`.
-  inline constexpr NetVal met(int Mu, int Nu) { return leaf({Elem::Metric, Mu, Nu, -1, -1, {}}); }
+  inline NetVal met(int Mu, int Nu) { return leaf({.kind = Elem::Metric, .a = Mu, .b = Nu, .vid = -1, .inv = -1}); }
   /// @brief A transverse projector `P_T(l)_{Mu Nu} = δ − l_Mu l_Nu/l²`, `l` = vector `Lvid`,
   ///        `1/l²` = env id `Inv`.
-  inline constexpr NetVal projT(int Mu, int Nu, int Lvid, int Inv)
+  inline NetVal projT(int Mu, int Nu, int Lvid, int Inv)
   {
-    return leaf({Elem::ProjT, Mu, Nu, Lvid, Inv, {}});
+    return leaf({.kind = Elem::ProjT, .a = Mu, .b = Nu, .vid = Lvid, .inv = Inv});
   }
   /// @brief A longitudinal projector `P_L(l)_{Mu Nu} = l_Mu l_Nu/l²`, `l` = vector `Lvid`,
   ///        `1/l²` = env id `Inv`.
-  inline constexpr NetVal projL(int Mu, int Nu, int Lvid, int Inv)
+  inline NetVal projL(int Mu, int Nu, int Lvid, int Inv)
   {
-    return leaf({Elem::ProjL, Mu, Nu, Lvid, Inv, {}});
+    return leaf({.kind = Elem::ProjL, .a = Mu, .b = Nu, .vid = Lvid, .inv = Inv});
   }
   /// @brief A finite-T **electric** (time-like-transverse) projector `P_E = P_T − P_M`, `l` = vector
   ///        `Lvid`, `1/l²` = env id `Inv`, `1/|l⃗|²` = env id `InvS`. Heat-bath direction is component 0.
-  inline constexpr NetVal projE(int Mu, int Nu, int Lvid, int Inv, int InvS)
+  inline NetVal projE(int Mu, int Nu, int Lvid, int Inv, int InvS)
   {
-    return leaf({Elem::ProjE, Mu, Nu, Lvid, Inv, {}, 0, 0, InvS});
+    return leaf({.kind = Elem::ProjE, .a = Mu, .b = Nu, .vid = Lvid, .inv = Inv, .invS = InvS});
   }
   /// @brief A finite-T **magnetic** (spatial-transverse) projector `P_M_{ij}=δ_{ij}−l_i l_j/|l⃗|²`
   ///        (i,j spatial; `P_M_{0ν}=P_M_{μ0}=0`), `l` = vector `Lvid`, `1/|l⃗|²` = env id `InvS`.
-  inline constexpr NetVal projM(int Mu, int Nu, int Lvid, int InvS)
+  inline NetVal projM(int Mu, int Nu, int Lvid, int InvS)
   {
-    return leaf({Elem::ProjM, Mu, Nu, Lvid, -1, {}, 0, 0, InvS});
+    return leaf({.kind = Elem::ProjM, .a = Mu, .b = Nu, .vid = Lvid, .inv = -1, .invS = InvS});
   }
   /// @brief A Levi-Civita tensor `ε_{Mu Nu Rho Sig}` (the γ5 trace's antisymmetric tensor).
-  inline constexpr NetVal epsilon(int Mu, int Nu, int Rho, int Sig)
+  inline NetVal epsilon(int Mu, int Nu, int Rho, int Sig)
   {
-    return leaf({Elem::Epsilon, Mu, Nu, -1, -1, {}, Rho, Sig});
+    return leaf({.kind = Elem::Epsilon, .a = Mu, .b = Nu, .vid = -1, .inv = -1, .c = Rho, .d = Sig});
   }
 
   /// @brief Multiply a network by a scalar.
-  inline constexpr NetVal scale(Cx c, NetVal x)
+  inline NetVal scale(Cx c, NetVal x)
   {
     for (PTerm &t : x)
       t.coeff = t.coeff * c;
     return x;
   }
-  inline constexpr NetVal scale(double c, NetVal x) { return scale(Cx{c, 0}, std::move(x)); }
+  inline NetVal scale(double c, NetVal x) { return scale(Cx{c, 0}, std::move(x)); }
 
   /// @brief Whether `nv` is a pure sum of vectors all on the same Lorentz index — i.e. a momentum
   ///        linear combination that can collapse to one compound-vector leaf (eager summation).
-  inline constexpr bool is_vecsum(const NetVal &nv, int &idx)
+  inline bool is_vecsum(const NetVal &nv, int &idx)
   {
     bool first = true;
     for (const PTerm &t : nv) {
@@ -125,7 +127,7 @@ namespace numtracer::network
   ///        single compound-vector leaf instead of two product terms, so @ref contract never
   ///        distributes the combination (the A4 explosion). Genuine structure sums (a vertex's sum of
   ///        metric×vector tensors) are *not* collapsible and concatenate as before.
-  inline constexpr NetVal add(NetVal a, const NetVal &b)
+  inline NetVal add(NetVal a, const NetVal &b)
   {
     int ia = 0, ib = 0;
     if (is_vecsum(a, ia) && is_vecsum(b, ib) && ia == ib) {
@@ -153,13 +155,13 @@ namespace numtracer::network
     a.insert(a.end(), b.begin(), b.end());
     return a;
   }
-  template <class... R> constexpr NetVal add(NetVal a, const NetVal &b, const R &...r)
+  template <class... R> NetVal add(NetVal a, const NetVal &b, const R &...r)
   {
     return add(add(std::move(a), b), r...);
   }
 
   /// @brief Tensor product of networks (Cartesian over their terms).
-  inline constexpr NetVal contract(const NetVal &a, const NetVal &b)
+  inline NetVal contract(const NetVal &a, const NetVal &b)
   {
     NetVal r;
     r.reserve(a.size() * b.size());
@@ -174,7 +176,7 @@ namespace numtracer::network
       }
     return r;
   }
-  template <class... R> constexpr NetVal contract(const NetVal &a, const NetVal &b, const R &...r)
+  template <class... R> NetVal contract(const NetVal &a, const NetVal &b, const R &...r)
   {
     return contract(contract(a, b), r...);
   }

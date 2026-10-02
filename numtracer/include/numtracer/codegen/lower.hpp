@@ -42,7 +42,7 @@ struct LMono {
 ///        (O(N·|vp|·V²) per trace). Ties MUST resolve to the id that first appears walking the terms
 ///        in order — that reproduces the old insertion-order scan exactly, and any other tie-break
 ///        (e.g. smallest id) changes pivots and thus the emitted kernel bytes.
-constexpr std::pair<int, int> choose_pivot(const std::vector<LMono> &terms) {
+inline std::pair<int, int> choose_pivot(const std::vector<LMono> &terms) {
   std::vector<int> count;  // indexed by envId
   std::vector<int> order;  // envIds in first-appearance order (the tie-break)
   for (const LMono &m : terms)
@@ -62,7 +62,7 @@ constexpr std::pair<int, int> choose_pivot(const std::vector<LMono> &terms) {
 
 /// @brief Partition @p terms into `with` (those containing `pivot`, with `pivot^pivotExp` divided
 ///        out) and `without` (the rest). Returns `{with, without}`.
-constexpr std::pair<std::vector<LMono>, std::vector<LMono>>
+inline std::pair<std::vector<LMono>, std::vector<LMono>>
 partition_pivot(std::vector<LMono> terms, int pivot, int pivotExp) {
   std::vector<LMono> with, without;
   for (LMono &m : terms) {

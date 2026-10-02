@@ -34,13 +34,22 @@
 namespace numtracer::network
 {
 
+  /// @brief What an env slot holds. The integer values are hashed (@ref GlobalEnv::SymHash); keep them.
+  enum class SymKind : int {
+    sp = 0,    ///< scalar product `sp(a,b)` of fundamental momenta
+    inv = 1,   ///< inverse `inv(id)` = `1/q_id²`
+    dress = 2, ///< dressing / regulator call `dress(id)`
+    var = 3,   ///< raw user symbol `var(id)` (numeric backend)
+  };
+
   /// @brief A shared fundamental-symbol environment: assigns one global env id (`f[]` index) per
   ///        distinct symbol (a scalar product `sp(a,b)` or an inverse `inv(id)`), across all the
   ///        diagrams of a kernel — so the ~few fundamental symbols are computed once per call.
   struct GlobalEnv {
-    std::vector<std::tuple<int, int, int>> syms; ///< env id i → (kind 0=sp/1=inv, a, b); inv is (1,id,0).
+    using Sym = std::tuple<SymKind, int, int>; ///< (kind, a, b); every kind but sp has b = 0.
+    std::vector<Sym> syms;                     ///< env id i → its symbol
     struct SymHash {
-      std::uint64_t operator()(const std::tuple<int, int, int> &s) const
+      std::uint64_t operator()(const Sym &s) const
       {
         const auto [k, a, b] = s;
         return hash_combine(
@@ -50,23 +59,23 @@ namespace numtracer::network
       }
     };
     struct SymEq {
-      bool operator()(const std::tuple<int, int, int> &x, const std::tuple<int, int, int> &y) const { return x == y; }
+      bool operator()(const Sym &x, const Sym &y) const { return x == y; }
     };
-    InternTable<std::tuple<int, int, int>, SymHash, SymEq> index; ///< hash lookup into @ref syms
+    InternTable<Sym, SymHash, SymEq> index; ///< hash lookup into @ref syms
 
     /// First-seen lookup of symbol `(k,a,b)`; appends on miss so env ids stay in first-seen order.
-    int intern(int k, int a, int b) { return index.intern(syms, {k, a, b}); }
-    int inv_id(int v) { return intern(1, v, 0); }
-    /// A raw USER-SYMBOL leaf (kind 3): a kernel argument (a momentum component / angle) the numeric
-    /// backend interns directly. It fills its `f[]` slot from the argument verbatim (see
-    /// @ref FillFormulas::var) and rides the polynomial as a monomial variable — the inv backend never
-    /// emits kind 3, so its env layout / fill are byte-identical.
-    int var_id(int v) { return intern(3, v, 0); }
-    /// A DRESSING symbol (kind 2): an opaque runtime leaf (a propagator dressing / regulator call)
-    /// the kernel evaluates once and stores in `f[]`. It enters the polynomial only as a monomial
-    /// factor, so it lowers exactly like an `inv` symbol — the difference is purely how the kernel
-    /// fills its slot (a dressing C++ expression vs `1/q²`); see @ref FillFormulas::dress.
-    int dr_id(int id) { return intern(2, id, 0); }
+    int intern(SymKind k, int a, int b) { return index.intern(syms, {k, a, b}); }
+    int inv_id(int v) { return intern(SymKind::inv, v, 0); }
+    /// A raw USER-SYMBOL leaf: a kernel argument (a momentum component / angle) the numeric backend
+    /// interns directly. It fills its `f[]` slot from the argument verbatim (see @ref FillFormulas::var)
+    /// and rides the polynomial as a monomial variable — the inv backend never emits it, so its env
+    /// layout / fill are byte-identical.
+    int var_id(int v) { return intern(SymKind::var, v, 0); }
+    /// A DRESSING symbol: an opaque runtime leaf (a propagator dressing / regulator call) the kernel
+    /// evaluates once and stores in `f[]`. It enters the polynomial only as a monomial factor, so it
+    /// lowers exactly like an `inv` symbol — the difference is purely how the kernel fills its slot
+    /// (a dressing C++ expression vs `1/q²`); see @ref FillFormulas::dress.
+    int dr_id(int id) { return intern(SymKind::dress, id, 0); }
   };
 
   /// @brief Sentinel for @ref GenProg::rootIm: the program has no imaginary part (it is purely real).
@@ -607,14 +616,12 @@ namespace numtracer::network
     out << "// fundamental-symbol env layout (fill f[i] per call):\n";
     for (std::size_t i = 0; i < g.syms.size(); ++i) {
       auto [kind, a, b] = g.syms[i];
-      if (kind == 0)
-        out << "//   f[" << i << "] = sp(" << a << "," << b << ")\n";
-      else if (kind == 1)
-        out << "//   f[" << i << "] = inv(" << a << ")\n";
-      else if (kind == 2)
-        out << "//   f[" << i << "] = dress(" << a << ")\n";
-      else
-        out << "//   f[" << i << "] = var(" << a << ")\n";
+      switch (kind) {
+      case SymKind::sp: out << "//   f[" << i << "] = sp(" << a << "," << b << ")\n"; break;
+      case SymKind::inv: out << "//   f[" << i << "] = inv(" << a << ")\n"; break;
+      case SymKind::dress: out << "//   f[" << i << "] = dress(" << a << ")\n"; break;
+      case SymKind::var: out << "//   f[" << i << "] = var(" << a << ")\n"; break;
+      }
     }
   }
 #endif // NUMTRACER_DEFINE_BODIES
@@ -626,7 +633,7 @@ namespace numtracer::network
     std::function<std::string(int /*a*/, int /*b*/)> sp; ///< C++ for the scalar product `sp(a,b)`.
     std::function<std::string(int /*invId*/)> inv;       ///< C++ for the inverse `inv(invId)`.
     std::function<std::string(int /*drId*/)> dress;      ///< C++ for the dressing/regulator call `dress(drId)`.
-    std::function<std::string(int /*varId*/)> var;       ///< C++ for a raw user symbol (numeric backend, kind 3).
+    std::function<std::string(int /*varId*/)> var;       ///< C++ for a raw user symbol (numeric backend, SymKind::var).
   };
 
   NUMTRACER_FUNC void emit_fill(std::ostream &out, const GlobalEnv &g, const std::string &name,
@@ -647,10 +654,10 @@ namespace numtracer::network
     for (std::size_t i = 0; i < g.syms.size(); ++i) {
       auto [kind, a, b] = g.syms[i];
       out << "  f[" << i << "] = "
-          << (kind == 0   ? fm.sp(a, b)
-              : kind == 1 ? fm.inv(a)
-              : kind == 2 ? fm.dress(a)
-                          : fm.var(a))
+          << (kind == SymKind::sp      ? fm.sp(a, b)
+              : kind == SymKind::inv   ? fm.inv(a)
+              : kind == SymKind::dress ? fm.dress(a)
+                                       : fm.var(a))
           << ";\n";
     }
     out << "}\n";

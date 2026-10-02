@@ -26,6 +26,7 @@
 #include "numtracer/numeric/dpoly.hpp"      // DPoly / DMono (dressing-atom layer)
 #include "numtracer/numeric/mpoly.hpp"      // MPoly (the polynomial type)
 #include "numtracer/numeric/spinor_mat.hpp" // Mat4 / matmul / mtrace / gammaC / slashC
+#include "numtracer/numeric/tolerances.hpp"  // kNoisePruneRelTol
 
 #include <algorithm>
 #include <cassert>
@@ -1692,12 +1693,6 @@ namespace numtracer::numeric
   }
 #endif // NUMTRACER_DEFINE_BODIES
 
-  /// @brief Relative noise-prune tolerance: a monomial whose |coefficient| is below this fraction of
-  ///        the largest coefficient is round-off from the numeric frame (a ~10-order gap separates it
-  ///        from physics), so @ref to_genprog drops it. Tuning this changes which monomials survive —
-  ///        validate against the INTEGRATED numeric-vs-FORM error, not a pointwise round-off floor.
-  inline constexpr double kNoisePruneRelTol = 1e-9;
-
   /// @brief `NT_GEN_POLYSTATS` verbosity: 0 off, 1 the summary counts, 2 the per-monomial key dump.
   ///
   /// Level 2 is a DIFFERENT report, not a superset of level 1: the dump is meant to be piped through
@@ -1762,8 +1757,8 @@ namespace numtracer::numeric
   }
 
   /// @brief Lower a contracted diagram polynomial into the shared env via the CSE + Horner back-end
-  ///        (`gdetail::best_into`). User symbols intern as env kind 3 (`var`), surviving inverse atoms
-  ///        as kind 1 (`inv`). Returns an @ref network::GenProg (real, or complex when the polynomial
+  ///        (`gdetail::best_into`). User symbols intern as `SymKind::var`, surviving inverse atoms
+  ///        as `SymKind::inv`. Returns an @ref network::GenProg (real, or complex when the polynomial
   ///        carries an imaginary coefficient).
   /// @param realOnly when true, emit a REAL program even if the polynomial has imaginary coefficients
   ///        — the caller has proven only `Re(this trace)` is consumed (its assembly coefficient is
@@ -1815,8 +1810,8 @@ namespace numtracer::numeric
     ///        lowering lists.
     ///
     /// Env ids intern in first-seen order, which fixes the emitted kernel: the channel's dressing
-    /// atoms (kind-2 `dress`) first, then per monomial its user symbols (kind-3 `var`) and its
-    /// surviving inverse atoms (kind-1 `inv`). ONE walk builds both halves of a complex trace; the
+    /// atoms (`SymKind::dress`) first, then per monomial its user symbols (`SymKind::var`) and its
+    /// surviving inverse atoms (`SymKind::inv`). ONE walk builds both halves of a complex trace; the
     /// im list holds an entry for EVERY kept monomial (`snap(c.im)`, possibly 0.0).
     inline void append_monos(const LowerChannel &ch, network::GlobalEnv &g, bool cplx,
                              std::vector<network::LMono> &monosRe, std::vector<network::LMono> &monosIm)
@@ -1927,7 +1922,7 @@ namespace numtracer::numeric
 
   /// @brief @ref DPoly counterpart of the @ref MPoly `lower_into`. Each kinematic monomial is emitted
   ///        exactly as in the @ref MPoly overload and additionally carries its dressing monomial's
-  ///        atoms as kind-2 `dress` leaves (@ref network::GlobalEnv::dr_id). A `DPoly` with a single
+  ///        atoms as `SymKind::dress` leaves (@ref network::GlobalEnv::dr_id). A `DPoly` with a single
   ///        empty dressing monomial reduces to exactly the @ref MPoly path.
   NUMTRACER_FUNC std::pair<int, int> lower_into(const DPoly &p, network::GlobalEnv &g,
                                                 network::rdetail::RBuilder &builder, bool realOnly)

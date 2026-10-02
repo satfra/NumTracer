@@ -29,6 +29,7 @@
 #include "numtracer/core/export.hpp" // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
 #include "numtracer/sun/sun_data.hpp" // SUNData<N> tables, Mat<N>, matmul, trace, Cx, sun_detail::FEntry
 #include "numtracer/core/config.hpp"  // NT_THROW (exception-optional guard for -fno-exceptions builds)
+#include "numtracer/numeric/tolerances.hpp" // kZeroSnapTol
 
 #include <algorithm>
 #include <array>
@@ -79,6 +80,9 @@ struct SUNFac {
   int g;        ///< group rank `N` (3 colour, 2 flavour, …)
   int a, b, c;  ///< adjoint/fundamental index labels (see kind table above; `c` unused for kinds 0/3/4/5)
   std::vector<int> comp2dr; ///< kinds 4/5 only: per-component dressing-id (`-1` = drop); empty otherwise
+
+  /// Whether `c` is a label: only `f^{abc}` and `T^a_{ij}` carry a third one; every other kind leaves it at -1.
+  bool has_c() const { return kind == SUNFacKind::F || kind == SUNFacKind::T; }
 };
 /// @brief A fully-contracted SU(N) colour/flavour network (every label appears exactly twice).
 using SUNNet = std::vector<SUNFac>;
@@ -304,8 +308,7 @@ inline void assert_no_open_labels(int N, const std::vector<const SUNFac *> &net)
   for (const SUNFac *f : net) {
     ++cnt[f->a];
     ++cnt[f->b];
-    // only `f^{abc}` and `T^a_{ij}` carry a third label; every other kind leaves `c` at -1
-    if (f->kind == SUNFacKind::F || f->kind == SUNFacKind::T) ++cnt[f->c];
+    if (f->has_c()) ++cnt[f->c];
   }
   for (const auto &[lbl, n] : cnt)
     if (n == 1) {
@@ -318,57 +321,45 @@ inline void assert_no_open_labels(int N, const std::vector<const SUNFac *> &net)
     }
 }
 
-/// @brief Walk the generator chain into its disjoint cycles.
+/// @brief The generator chain split into its disjoint cycles, two aligned views of each.
 ///
 /// Each generator `T^a_{ij}` is a directed edge rowClass(i) → colClass(j); a closed contraction
-/// makes these edges disjoint cycles, one `tr(T^{a_1}…T^{a_m})` per cycle.
-///
-/// `field` picks WHAT each visited generator contributes to its cycle, and is the only difference
-/// between the two things callers want:
-///   - `0` → the generator's ADJOINT class. All the undressed trace needs; a dense matrix product
-///           sums the fundamental indices implicitly. Used by @ref contract_group.
-///   - `2` → the generator's COLUMN class, i.e. the FUNDAMENTAL index sitting immediately AFTER it,
-///           so the last entry is the one closing the trace. A `diagFund` weights one such index per
-///           component, so the dressed contraction has to know which class sits where. Used by
-///           @ref contract_group_dressed.
-///
-/// One walk, so the two results are aligned entry-for-entry by construction. They were two copies of
-/// this function differing in that single subscript, with a comment asking the reader to keep the
-/// orders in step by hand.
-inline std::vector<std::vector<int>> extract_cycles(const std::vector<std::array<int, 3>> &gens,
-                                                    std::size_t field)
+/// makes these edges disjoint cycles, one `tr(T^{a_1}…T^{a_m})` per cycle. `adj[k][n]` and
+/// `fund[k][n]` describe the same generator (n-th on cycle k):
+///   - `adj`  : its ADJOINT class. All the undressed trace needs; a dense matrix product sums the
+///              fundamental indices implicitly. Used by @ref contract_group.
+///   - `fund` : its COLUMN class, i.e. the FUNDAMENTAL index sitting immediately AFTER it, so the
+///              last entry is the one closing the trace. A `diagFund` weights one such index per
+///              component, so the dressed contraction has to know which class sits where. Used by
+///              @ref contract_group_dressed.
+struct Cycles {
+  std::vector<std::vector<int>> adj, fund;
+};
+
+/// @brief Walk the generator chain into its disjoint @ref Cycles (one walk, so both views align).
+inline Cycles extract_cycles(const std::vector<std::array<int, 3>> &gens)
 {
   std::map<int, std::size_t> rowToGen; // rowClass(i) -> generator index
   for (std::size_t gi = 0; gi < gens.size(); ++gi) rowToGen[gens[gi][1]] = gi;
   std::vector<char> seen(gens.size(), 0);
-  std::vector<std::vector<int>> cycles;
+  Cycles cycles;
   for (std::size_t start = 0; start < gens.size(); ++start) {
     if (seen[start]) continue;
-    std::vector<int> cycle;
+    std::vector<int> adj, fund;
     std::size_t curGen = start;
     do {
       seen[curGen] = 1;
-      cycle.push_back(gens[curGen][field]);
+      adj.push_back(gens[curGen][0]);
+      fund.push_back(gens[curGen][2]);
       auto it = rowToGen.find(gens[curGen][2]); // next generator: its row == this col
       if (it == rowToGen.end())
         NT_THROW(std::runtime_error, "sun_net: open fundamental chain (only closed traces supported)");
       curGen = it->second;
     } while (curGen != start);
-    cycles.push_back(std::move(cycle));
+    cycles.adj.push_back(std::move(adj));
+    cycles.fund.push_back(std::move(fund));
   }
   return cycles;
-}
-
-/// Adjoint classes per cycle — see @ref extract_cycles.
-inline std::vector<std::vector<int>> extract_cycles_adj(const std::vector<std::array<int, 3>> &gens)
-{
-  return extract_cycles(gens, 0);
-}
-
-/// Fundamental (column) classes per cycle, aligned with @ref extract_cycles_adj — see @ref extract_cycles.
-inline std::vector<std::vector<int>> extract_cycles_fund(const std::vector<std::array<int, 3>> &gens)
-{
-  return extract_cycles(gens, 2);
 }
 
 /// @brief The product of generator traces `∏_cycles tr(T^{a_1}…T^{a_m})` for a fully-pinned adjoint
@@ -413,7 +404,7 @@ inline GroupClasses classify(const std::vector<const SUNFac *> &net, bool withDi
   int maxlbl = -1;
   for (const SUNFac *f : net) {
     maxlbl = std::max({maxlbl, f->a, f->b});
-    if (f->kind == SUNFacKind::F || f->kind == SUNFacKind::T) maxlbl = std::max(maxlbl, f->c);
+    if (f->has_c()) maxlbl = std::max(maxlbl, f->c);
   }
   if (maxlbl < 0) { g.empty = true; return g; } // avoids UnionFind(-1)
   UnionFind uf(maxlbl);
@@ -509,7 +500,7 @@ void for_each_assignment(const SUNDyn &dat, const std::vector<std::array<int, 3>
 /// Colour/flavour factors are exact rationals (× generator traces), so anything below the tolerance
 /// is round-off, well below any genuine rational magnitude.
 inline void snap_zero(Cx &c) {
-  constexpr double kZeroSnapTol = 1e-9;
+  using numeric::kZeroSnapTol;
   if (std::fabs(c.re) < kZeroSnapTol) c.re = 0.0;
   if (std::fabs(c.im) < kZeroSnapTol) c.im = 0.0;
 }
@@ -547,7 +538,7 @@ inline Cx contract_group(int N, const std::vector<const SUNFac *> &net) {
   for (int c : g.fundClasses)
     if (!g.genFundClasses.count(c)) factorScalar *= static_cast<double>(N);
 
-  const std::vector<std::vector<int>> cycles = extract_cycles_adj(g.gens);
+  const std::vector<std::vector<int>> cycles = extract_cycles(g.gens).adj;
   Cx total{0.0, 0.0};
   for_each_assignment(dat, g.fTriples, g.genOnly, Adim, [&](Cx fProd, const std::map<int, int> &classVal) {
     total = total + fProd * loop_prod(dat, cycles, classVal);
@@ -596,13 +587,11 @@ inline SUNPoly poly_mul(const SUNPoly &a, const SUNPoly &b) {
 /// flows this exists for. Positions whose classes were united by the union-find share one value, so
 /// the enumeration runs over DISTINCT classes, not positions. Cycles with no dressed class take the
 /// dense path and reproduce @ref loop_prod exactly.
-inline SUNPoly loop_poly_dressed(const SUNDyn &dat, int N, const std::vector<std::vector<int>> &cycles,
-                                 const std::vector<std::vector<int>> &cyclesFund,
-                                 const std::map<int, int> &classVal,
+inline SUNPoly loop_poly_dressed(const SUNDyn &dat, int N, const Cycles &cycles, const std::map<int, int> &classVal,
                                  const std::map<int, std::vector<const std::vector<int> *>> &fundDiag) {
   SUNPoly prod{SUNTerm{Cx{1.0, 0.0}, {}}};
-  for (std::size_t ci = 0; ci < cycles.size(); ++ci) {
-    const std::vector<int> &cyc = cycles[ci], &fnd = cyclesFund[ci];
+  for (std::size_t ci = 0; ci < cycles.adj.size(); ++ci) {
+    const std::vector<int> &cyc = cycles.adj[ci], &fnd = cycles.fund[ci];
     const std::size_t m = cyc.size();
     std::vector<std::size_t> pinned; // positions carrying a fundamental dressing
     for (std::size_t k = 0; k < m; ++k)
@@ -743,9 +732,7 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
     if (g.fClasses.count(kv.first) || g.genAdjClasses.count(kv.first)) asgDiag[kv.first] = kv.second;
 
   // ---- fundamental-cycle extraction (generator traces) — shared with contract_group ----
-  const std::vector<std::vector<int>> cycles = extract_cycles_adj(g.gens);
-  // the fundamental classes riding those same cycles, needed only when a diagFund sits on one
-  const std::vector<std::vector<int>> cyclesFund = extract_cycles_fund(g.gens);
+  const Cycles cycles = extract_cycles(g.gens);
 
   // ---- assignment sum, tagging diag-dressed values ----
   SUNPoly total; // 0
@@ -762,7 +749,7 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
     // The generator traces are a POLYNOMIAL now, not a scalar: a diagFund on a cycle tags each
     // fundamental component with its own dressing id. Every cycle term multiplies the adjoint-side
     // key built above.
-    const SUNPoly lp = loop_poly_dressed(dat, N, cycles, cyclesFund, classVal, g.fundDiag);
+    const SUNPoly lp = loop_poly_dressed(dat, N, cycles, classVal, g.fundDiag);
     for (const auto &t : lp) {
       std::vector<int> k2 = key;
       k2.insert(k2.end(), t.dress.begin(), t.dress.end());

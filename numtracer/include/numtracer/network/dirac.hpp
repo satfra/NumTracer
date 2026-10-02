@@ -132,7 +132,7 @@ namespace numtracer::network
     /// @brief A vector leg carrying a full momentum linear combination `vlc` on Lorentz index `lbl`.
     inline NetVal vec_lc(int lbl, const std::vector<std::pair<double, int>> &vlc)
     {
-      return {PTerm{Cx{1, 0}, {Elem{Elem::Vector, lbl, -1, -1, -1, vlc, 0, 0}}}};
+      return {PTerm{Cx{1, 0}, {Elem{.kind = Elem::Vector, .a = lbl, .b = -1, .vid = -1, .inv = -1, .vlc = vlc}}}};
     }
 
     /// @brief The pairing factor `g(a,b)` between two gamma tokens. Slash–slash uses a fresh shared

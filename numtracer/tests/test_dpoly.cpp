@@ -372,7 +372,7 @@ int main()
 
     // a Lorentz-net Vector factor p^μ on leg μ (an open leg routed into the net).
     auto netVec = [](int mu, std::vector<std::pair<double, int>> vlc) {
-      return network::Elem{network::Elem::Vector, mu, -1, -1, -1, std::move(vlc)};
+      return network::Elem{.kind = network::Elem::Vector, .a = mu, .b = -1, .vid = -1, .inv = -1, .vlc = std::move(vlc)};
     };
     // one slot carrying all four vertex structures, sharing the open gluon axis μ = 200.
     nm::DSlotOpt oT1;  oT1.coeff = Cx{1, 0};  oT1.dress = {0}; oT1.toks = {network::dgamma(200)};        // T1: γ^μ
@@ -504,9 +504,9 @@ int main()
     const std::vector<std::pair<double, int>> f1 = {{1.0, 0}}, f2 = {{1.0, 1}}, s = {{1.0, 2}},
                                               q = {{1.0, 3}};
     auto netVec = [](int mu, std::vector<std::pair<double, int>> vlc) {
-      return network::Elem{network::Elem::Vector, mu, -1, -1, -1, std::move(vlc)};
+      return network::Elem{.kind = network::Elem::Vector, .a = mu, .b = -1, .vid = -1, .inv = -1, .vlc = std::move(vlc)};
     };
-    auto netMet = [](int a, int b) { return network::Elem{network::Elem::Metric, a, b, -1, -1, {}}; };
+    auto netMet = [](int a, int b) { return network::Elem{.kind = network::Elem::Metric, .a = a, .b = b, .vid = -1, .inv = -1}; };
     // local Elem→NElem for the distributed reference (public builders; elem_to_nelem is body-only).
     auto toNElem = [](const network::Elem &e) {
       return e.kind == network::Elem::Metric ? nm::nmet(e.a, e.b) : nm::nvec(e.a, e.vlc);
@@ -568,7 +568,7 @@ int main()
     for (int v = 0; v < 2; ++v)
       for (int mu = 0; mu < 4; ++mu)
         comp[v][mu] = env.var(4 * v + mu);
-    auto met = [](int a, int b) { return network::Elem{network::Elem::Metric, a, b, -1, -1, {}}; };
+    auto met = [](int a, int b) { return network::Elem{.kind = network::Elem::Metric, .a = a, .b = b, .vid = -1, .inv = -1}; };
     const std::vector<std::pair<double, int>> f1 = {{1.0, 0}}, f2 = {{1.0, 1}};
     const int MU = 300, NU = 301;
     // γ^MU S(f1) γ5 [slot] γ5 S(f2) γ^NU — even γ count under BOTH options, so neither branch is
@@ -639,7 +639,7 @@ int main()
     // tr( γ^100 · S(p) · γ^101 · S(q) ), closed by metric δ_{100,101}. Both the δδ and the slash-slash
     // combos survive (even parity), so ≥2 distinct dressing channels are assembled and compared.
     // NetVal (the generator's Lorentz representation) rather than NNet, since _mp is the netval path.
-    auto met = [](int a, int b) { return network::Elem{network::Elem::Metric, a, b, -1, -1, {}}; };
+    auto met = [](int a, int b) { return network::Elem{.kind = network::Elem::Metric, .a = a, .b = b, .vid = -1, .inv = -1}; };
     network::NetVal lor = {network::PTerm{Cx{1, 0}, {met(100, 101)}}};
     // Two dressed slots, each with a NON-trivial complex option coeff so the (coeff·dress) split is
     // exercised (σ's −i lands in a slot coeff in the real flow); atoms 0/1 (p), 0/2 (q) as in case C.
