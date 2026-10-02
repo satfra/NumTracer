@@ -1768,52 +1768,64 @@ namespace numtracer::numeric
   NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly = false);
 
 #if NUMTRACER_DEFINE_BODIES
-  /// @brief Lower ONE polynomial into @p builder; returns `{reRoot, imRoot}` with
-  ///        `imRoot == network::kRealProgram` when the polynomial is real. @ref to_genprog is this plus
-  ///        a fresh builder.
-  NUMTRACER_FUNC std::pair<int, int> lower_into(const MPoly &p, network::GlobalEnv &g,
-                                                network::rdetail::RBuilder &builder, bool realOnly)
+  namespace ndetail
   {
-    // Prune numerically-zero monomials. A NUMERIC frame fixes the external momenta to concrete
-    // components, so exact (analytic) cancellations in the trace surface as tiny residual coefficients
-    // (~1e-12 … 1e-30 against real coefficients of O(10²)) — pure round-off, not physics. They don't
-    // affect the value (the kernel matches FORM to ~1e-13) but each spurious monomial costs runtime
-    // arithmetic; on the dense 1/4/7 trace ~half the monomials are such noise. Drop |c| below a RELATIVE
-    // tolerance vs the largest coefficient (a clean ~10-order gap separates noise from real terms).
-    double maxabs = 0.0;
-    for (const auto &[m, c] : p.terms)
-      maxabs = std::max(maxabs, std::max(std::fabs(c.re), std::fabs(c.im)));
-    const double tol = kNoisePruneRelTol * maxabs;
-    auto keep = [&](const Cx &c) { return std::max(std::fabs(c.re), std::fabs(c.im)) >= tol; };
-    bool cplx = false;
-    if (!realOnly)
-      for (const auto &[m, c] : p.terms)
-        if (keep(c) && (c.im > tol || c.im < -tol)) {
-          cplx = true;
-          break;
-        }
-    // ONE walk builds BOTH halves of a complex trace. The old shape — a `build(imag)` lambda called
-    // once for re and again for im — re-derived and re-sorted every monomial's vp (env interning,
-    // atom run-lengths, snap) twice for complex traces, doubling the flatten. The im list must
-    // contain an entry for EVERY kept monomial (with snap(c.im), possibly 0.0), exactly as the
-    // second pass produced; and the env ids intern in the same first-seen sequence as the old re
-    // pass, so the emitted kernel is byte-identical.
-    std::vector<network::LMono> monosRe, monosIm;
+    /// @brief One dressing channel of a lowering: the dressing atoms @ref dress shared by every
+    ///        monomial of @ref poly. A plain @ref MPoly is a single channel with no dressing atoms.
+    struct LowerChannel {
+      const DMono *dress;
+      const MPoly *poly;
+    };
+
+    /// @brief Noise-prune threshold of one channel: @ref kNoisePruneRelTol times its largest
+    ///        coefficient component.
+    ///
+    /// A NUMERIC frame fixes the external momenta to concrete components, so exact (analytic)
+    /// cancellations in a trace surface as tiny residual coefficients (~1e-12 … 1e-30 against real
+    /// coefficients of O(10²)): round-off, not physics. They do not affect the value, but each costs
+    /// runtime arithmetic, and on the dense 1/4/7 trace about half the monomials are such noise.
+    inline double prune_tol(const MPoly &mp)
     {
-      monosRe.reserve(p.terms.size());
-      if (cplx) monosIm.reserve(p.terms.size());
-      for (const auto &[m, c] : p.terms) {
-        if (!keep(c)) continue;
-        std::vector<std::pair<int, int>> vp;
-        for (int k = 0; k < p.nsym; ++k)
+      double maxabs = 0.0;
+      for (const auto &[m, c] : mp.terms)
+        maxabs = std::max(maxabs, std::max(std::fabs(c.re), std::fabs(c.im)));
+      return kNoisePruneRelTol * maxabs;
+    }
+    inline bool keep_coeff(const Cx &c, double tol) { return std::max(std::fabs(c.re), std::fabs(c.im)) >= tol; }
+
+    /// @brief Append `(idOf(a), multiplicity)` for each run of equal ids in the sorted atom list @p atoms.
+    template <class Atoms, class IdOf>
+    void push_atom_runs(std::vector<std::pair<int, int>> &vp, const Atoms &atoms, IdOf idOf)
+    {
+      for (int i = 0; i < (int)atoms.size();) {
+        int j = i;
+        while (j < (int)atoms.size() && atoms[j] == atoms[i])
+          ++j;
+        vp.push_back({idOf(atoms[i]), j - i});
+        i = j;
+      }
+    }
+
+    /// @brief Append the kept monomials of one channel to the real (and, when @p cplx, imaginary)
+    ///        lowering lists.
+    ///
+    /// Env ids intern in first-seen order, which fixes the emitted kernel: the channel's dressing
+    /// atoms (kind-2 `dress`) first, then per monomial its user symbols (kind-3 `var`) and its
+    /// surviving inverse atoms (kind-1 `inv`). ONE walk builds both halves of a complex trace; the
+    /// im list holds an entry for EVERY kept monomial (`snap(c.im)`, possibly 0.0).
+    inline void append_monos(const LowerChannel &ch, network::GlobalEnv &g, bool cplx,
+                             std::vector<network::LMono> &monosRe, std::vector<network::LMono> &monosIm)
+    {
+      const MPoly &mp = *ch.poly;
+      const double tol = prune_tol(mp);
+      std::vector<std::pair<int, int>> drvp;
+      push_atom_runs(drvp, *ch.dress, [&](int a) { return g.dr_id(a); });
+      for (const auto &[m, c] : mp.terms) {
+        if (!keep_coeff(c, tol)) continue;
+        std::vector<std::pair<int, int>> vp = drvp;
+        for (int k = 0; k < mp.nsym; ++k)
           if (m.e[k] > 0) vp.push_back({g.var_id(k), m.e[k]});
-        for (int i = 0; i < (int)m.atoms.size();) {
-          int j = i;
-          while (j < (int)m.atoms.size() && m.atoms[j] == m.atoms[i])
-            ++j;
-          vp.push_back({g.inv_id(m.atoms[i]), j - i});
-          i = j;
-        }
+        push_atom_runs(vp, m.atoms, [&](int a) { return g.inv_id(a); });
         std::sort(vp.begin(), vp.end());
         if (cplx) {
           network::LMono lmIm;
@@ -1827,34 +1839,76 @@ namespace numtracer::numeric
         monosRe.push_back(std::move(lm));
       }
     }
+
+    /// @brief `NT_GEN_POLYSTATS` report of the monomials handed to the Horner lowering.
+    ///
+    /// Level 1: the input term count and the kept monomial count. Monomial count is canonical
+    /// (independent of any factorisation strategy), so comparing it against the emitted instruction
+    /// count says whether a large op count comes from the ALGEBRA or from weak LOWERING.
+    /// Level 2: each monomial's key (env id ^ power). Piped through `sort -u` it counts how many
+    /// monomials summed over all traces are DISTINCT, i.e. what cross-trace term collection (which
+    /// FormTracer gets by summing all diagrams before expanding) could save.
+    inline void dump_polystats(std::size_t nTerms, const std::vector<network::LMono> &monos)
     {
-      const auto &monos = monosRe;
-      // NT_GEN_POLYSTATS=1: report the MONOMIAL count handed to the Horner lowering. Monomial count
-      // is canonical (independent of any factorisation strategy), so comparing it against the
-      // emitted multiply count says whether a large op count comes from the ALGEBRA (many monomials)
-      // or from weak LOWERING (few monomials, many ops).
       if (polystats_level() == 1)
-        std::fprintf(stderr, "[polystats] mpoly terms=%zu kept=%zu nsym=%d\n", p.terms.size(),
-                     monos.size(), p.nsym);
-      {
-        // NT_GEN_POLYSTATS=2: additionally dump each monomial's KEY (variable powers + inv/dressing
-        // atoms). Piping through `sort -u` then answers: how many of the monomials summed over all
-        // traces are actually DISTINCT? FormTracer sums every diagram into ONE polynomial before
-        // expanding, so identical monomials from different diagrams collect; NumTracer keeps one
-        // polynomial per trace, so they cannot. That is term COLLECTION, not CSE -- the compiler
-        // can never do it (it would be a floating-point reassociation across function boundaries).
-        if (polystats_level() == 2)
-          for (const auto &lm : monos) {
-            std::string key;
-            for (const auto &[id, pw] : lm.vp)
-              key += std::to_string(id) + "^" + std::to_string(pw) + " ";
-            std::fprintf(stderr, "[mono] %s\n", key.c_str());
-          }
-      }
+        std::fprintf(stderr, "[polystats] terms=%zu kept=%zu\n", nTerms, monos.size());
+      if (polystats_level() == 2)
+        for (const auto &lm : monos) {
+          std::string key;
+          for (const auto &[id, pw] : lm.vp)
+            key += std::to_string(id) + "^" + std::to_string(pw) + " ";
+          std::fprintf(stderr, "[mono] %s\n", key.c_str());
+        }
     }
-    const int reRoot = network::gdetail::best_into(std::move(monosRe), builder);
-    if (!cplx) return {reRoot, network::kRealProgram};
-    return {reRoot, network::gdetail::best_into(std::move(monosIm), builder)};
+
+    /// @brief Lower the channels into @p builder as ONE monomial list, so the shared CSE/Horner
+    ///        (`gdetail::best_into`) collects the dressing factors across channels.
+    ///
+    /// The noise prune is PER CHANNEL, not one global tolerance: each channel is reweighted at
+    /// runtime by its dressing product, which can swing by many orders across the loop domain, so a
+    /// tolerance taken from the largest channel would delete a small channel's genuine terms.
+    inline std::pair<int, int> lower_channels(const std::vector<LowerChannel> &chans, network::GlobalEnv &g,
+                                              network::rdetail::RBuilder &builder, bool realOnly)
+    {
+      bool cplx = false;
+      if (!realOnly)
+        for (const LowerChannel &ch : chans) {
+          const double tol = prune_tol(*ch.poly);
+          for (const auto &[m, c] : ch.poly->terms)
+            if (keep_coeff(c, tol) && (c.im > tol || c.im < -tol)) {
+              cplx = true;
+              break;
+            }
+          if (cplx) break;
+        }
+      std::size_t nTerms = 0;
+      for (const LowerChannel &ch : chans)
+        nTerms += ch.poly->terms.size();
+      std::vector<network::LMono> monosRe, monosIm;
+      monosRe.reserve(nTerms);
+      if (cplx) monosIm.reserve(nTerms);
+      for (const LowerChannel &ch : chans)
+        append_monos(ch, g, cplx, monosRe, monosIm);
+      dump_polystats(nTerms, monosRe);
+      const int reRoot = network::gdetail::best_into(std::move(monosRe), builder);
+      if (!cplx) {
+        if (polystats_level() == 1) std::fprintf(stderr, "[polystats] ssa instrs=%zu\n", builder.ins.size());
+        return {reRoot, network::kRealProgram};
+      }
+      const int imRoot = network::gdetail::best_into(std::move(monosIm), builder);
+      if (polystats_level() == 1) std::fprintf(stderr, "[polystats] ssa instrs=%zu (re+im)\n", builder.ins.size());
+      return {reRoot, imRoot};
+    }
+  } // namespace ndetail
+
+  /// @brief Lower ONE polynomial into @p builder; returns `{reRoot, imRoot}` with
+  ///        `imRoot == network::kRealProgram` when the polynomial is real. @ref to_genprog is this plus
+  ///        a fresh builder.
+  NUMTRACER_FUNC std::pair<int, int> lower_into(const MPoly &p, network::GlobalEnv &g,
+                                                network::rdetail::RBuilder &builder, bool realOnly)
+  {
+    static const DMono noDress;
+    return ndetail::lower_channels({{&noDress, &p}}, g, builder, realOnly);
   }
 
   NUMTRACER_FUNC network::GenProg to_genprog(const MPoly &p, network::GlobalEnv &g, bool realOnly)
@@ -1866,106 +1920,18 @@ namespace numtracer::numeric
     return gp;
   }
 
-  /// @brief Lower a dressed-diagram @ref DPoly into the shared env. Each kinematic monomial is emitted
-  ///        exactly as in the @ref MPoly overload (user symbols → kind-3 `var`, surviving inverse atoms
-  ///        → kind-1 `inv`) and additionally carries the dressing monomial's atoms as kind-2 `dress`
-  ///        leaves (@ref network::GlobalEnv::dr_id). The whole `DPoly` is flattened into ONE monomial
-  ///        list so the shared CSE/Horner (`gdetail::best_into`) collects the dressing factors across
-  ///        monomials — FormTracer-parity collection in one trace function. A `DPoly` with a single
-  ///        empty dressing monomial reduces to exactly the @ref MPoly path (no `dress` leaves).
-  /// @brief @ref DPoly counterpart of the @ref MPoly `lower_into` — lower into an existing builder.
+  /// @brief @ref DPoly counterpart of the @ref MPoly `lower_into`. Each kinematic monomial is emitted
+  ///        exactly as in the @ref MPoly overload and additionally carries its dressing monomial's
+  ///        atoms as kind-2 `dress` leaves (@ref network::GlobalEnv::dr_id). A `DPoly` with a single
+  ///        empty dressing monomial reduces to exactly the @ref MPoly path.
   NUMTRACER_FUNC std::pair<int, int> lower_into(const DPoly &p, network::GlobalEnv &g,
                                                 network::rdetail::RBuilder &builder, bool realOnly)
   {
-    // PER-DRESSING-CHANNEL noise prune (not one global tolerance). A DPoly is Σ_d (dressing_d)·(kinematic_d);
-    // each channel `d` is reweighted at runtime by its dressing product, which can swing by many orders across
-    // the loop domain. A single global tolerance, taken from the largest-coefficient channel, would delete a
-    // small channel's GENUINE terms — fine while that channel is runtime-small, but wrong the moment a dressing
-    // suppresses the large one (dr→0) and the small one should dominate. So prune each channel against ITS OWN
-    // max, exactly as the @ref MPoly overload does and as the distributed (collection-off) path already does
-    // per trace. `dmonoTol(mp) ≤` any global tol, so this only ever KEEPS more — strictly safer, and identical
-    // when all channels share a scale.
-    auto dmonoTol = [](const MPoly &mp) {
-      double maxabs = 0.0;
-      for (const auto &[m, c] : mp.terms)
-        maxabs = std::max(maxabs, std::max(std::fabs(c.re), std::fabs(c.im)));
-      return kNoisePruneRelTol * maxabs;
-    };
-    auto keepAt = [](const Cx &c, double tol) { return std::max(std::fabs(c.re), std::fabs(c.im)) >= tol; };
-    bool cplx = false;
-    if (!realOnly)
-      for (const auto &[d, mp] : p.terms) {
-        const double tol = dmonoTol(mp);
-        for (const auto &[m, c] : mp.terms)
-          if (keepAt(c, tol) && (c.im > tol || c.im < -tol)) {
-            cplx = true;
-            break;
-          }
-        if (cplx) break;
-      }
-    // ONE walk builds BOTH halves — see the MPoly overload: the old build(imag) lambda re-derived
-    // every monomial's vp (dress/var/inv interning + sort) twice for complex traces. Interning
-    // order and im-list contents (an entry per kept monomial, snap(c.im), possibly 0.0) reproduce
-    // the old two-pass shape exactly, so the emitted kernel is byte-identical.
-    std::vector<network::LMono> monosRe, monosIm;
-    {
-      for (const auto &[d, mp] : p.terms) {
-        const double tol = dmonoTol(mp);
-        // the dressing monomial's atoms become kind-2 `dress` env leaves shared by every monomial of mp
-        std::vector<std::pair<int, int>> drvp;
-        for (int i = 0; i < (int)d.size();) {
-          int j = i;
-          while (j < (int)d.size() && d[j] == d[i])
-            ++j;
-          drvp.push_back({g.dr_id(d[i]), j - i});
-          i = j;
-        }
-        for (const auto &[m, c] : mp.terms) {
-          if (!keepAt(c, tol)) continue;
-          std::vector<std::pair<int, int>> vp = drvp;
-          for (int k = 0; k < mp.nsym; ++k)
-            if (m.e[k] > 0) vp.push_back({g.var_id(k), m.e[k]});
-          for (int i = 0; i < (int)m.atoms.size();) {
-            int j = i;
-            while (j < (int)m.atoms.size() && m.atoms[j] == m.atoms[i])
-              ++j;
-            vp.push_back({g.inv_id(m.atoms[i]), j - i});
-            i = j;
-          }
-          std::sort(vp.begin(), vp.end());
-          if (cplx) {
-            network::LMono lmIm;
-            lmIm.c = snap_coeff(c.im);
-            lmIm.vp = vp; // copy — the re half moves it below
-            monosIm.push_back(std::move(lmIm));
-          }
-          network::LMono lm;
-          lm.c = snap_coeff(c.re);
-          lm.vp = std::move(vp);
-          monosRe.push_back(std::move(lm));
-        }
-      }
-      // see the MPoly overload: monomial count is the optimizer-independent baseline against which
-      // the emitted instruction count is judged.
-      {
-        if (polystats_level() == 1) std::fprintf(stderr, "[polystats] dpoly monos=%zu\n", monosRe.size());
-        if (polystats_level() == 2)
-          for (const auto &lm : monosRe) {
-            std::string key;
-            for (const auto &[id, pw] : lm.vp)
-              key += std::to_string(id) + "^" + std::to_string(pw) + " ";
-            std::fprintf(stderr, "[mono] %s\n", key.c_str());
-          }
-      }
-    }
-    const int reRoot = network::gdetail::best_into(std::move(monosRe), builder);
-    if (!cplx) {
-      if (polystats_level() == 1) std::fprintf(stderr, "[polystats] ssa instrs=%zu\n", builder.ins.size());
-      return {reRoot, network::kRealProgram};
-    }
-    const int imRoot = network::gdetail::best_into(std::move(monosIm), builder);
-    if (polystats_level() == 1) std::fprintf(stderr, "[polystats] ssa instrs=%zu (re+im)\n", builder.ins.size());
-    return {reRoot, imRoot};
+    std::vector<ndetail::LowerChannel> chans;
+    chans.reserve(p.terms.size());
+    for (const auto &[d, mp] : p.terms)
+      chans.push_back({&d, &mp});
+    return ndetail::lower_channels(chans, g, builder, realOnly);
   }
 
   NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly)
