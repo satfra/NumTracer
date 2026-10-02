@@ -268,6 +268,7 @@ namespace numtracer::network
         numOrderings = 3;
 
       std::vector<LMono> chosen;
+      std::size_t sweptOps = 0; // the winning ordering's op count with `norm` lowering; 0 = no sweep ran
       if (numOrderings <= 1)
         chosen = std::move(monos); // canonical (as-built) order only — no sweep, no deep copy
       else {
@@ -285,21 +286,25 @@ namespace numtracer::network
           }
         }
         chosen = std::move(orders[bestIdx]);
+        sweptOps = bestOps;
       }
 
-      // Cost the strategies against each other and keep the smallest. Both levers are wins in
-      // aggregate but losses on individual traces with nothing to share, and this is what makes them
-      // self-guarding. Only traces at or below the guard size pay for the extra passes.
       // Cost the two lowerings against each other and keep the smaller. Normalisation is a large win
       // on a trace with many repeated shapes and a small loss on one with none, and this is what makes
       // it self-guarding. The comparison is STRICT so a tie keeps the normalised form: flipping ties to
       // the plain lowering would change the emitted kernel on those traces for no gain at all.
       bool useNorm = norm;
       if (norm && chosen.size() <= norm_guard_max()) {
-        rdetail::RBuilder sn, sp;
-        scale_into(sn, horner(sn, chosen, true));
+        // The sweep already costed `chosen` with the normalised lowering; reuse that count.
+        std::size_t normOps = sweptOps;
+        if (normOps == 0) {
+          rdetail::RBuilder sn;
+          scale_into(sn, horner(sn, chosen, true));
+          normOps = sn.ins.size();
+        }
+        rdetail::RBuilder sp;
         scale_into(sp, horner(sp, chosen, false));
-        if (sp.ins.size() < sn.ins.size()) useNorm = false;
+        if (sp.ins.size() < normOps) useNorm = false;
       }
       return scale_into(builder, horner(builder, std::move(chosen), useNorm));
     }
