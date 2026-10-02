@@ -230,19 +230,19 @@ namespace numtracer::numeric
     //      block-diagonal product is tr(m0)+tr(m1).
     // collect free-leg ids (in chain order) and precompute the per-token matrices that don't vary.
     std::vector<int> freeLegs;
-    std::vector<int> tokenFree(chain.size(), -1); // token index → free-leg slot, or -1
-    std::vector<int> tokenFree2(chain.size(),
-                                -1); // kind 3 (commutator): leg-B free-leg slot (or -1 if leg-B is a slash)
-    std::vector<Mat4> slashMat;      // precomputed Slash matrices, indexed by token
+    std::vector<Mat4> slashMat; // precomputed Slash matrices, indexed by token
     slashMat.reserve(chain.size());
     // kind 3 commutator [A,B]: each leg is FREE (a looped component) or SLASH (a fixed momentum matrix).
     // For a slashed leg we stash its slash matrix here and turn it into 2×2 blocks below (next to sP/sQ).
-    std::vector<Mat4> commA(chain.size(), Mat4(nsym)), commB(chain.size(), Mat4(nsym));
-    std::vector<char> commAslash(chain.size(), 0), commBslash(chain.size(), 0);
+    // Sized only when the chain has a commutator — almost none do.
+    const bool hasComm = std::any_of(chain.begin(), chain.end(),
+                                     [](const network::DFac &d) { return d.kind == network::DFac::Comm; });
+    const std::size_t nComm = hasComm ? chain.size() : 0;
+    std::vector<Mat4> commA(nComm, Mat4(nsym)), commB(nComm, Mat4(nsym));
+    std::vector<char> commAslash(nComm, 0), commBslash(nComm, 0);
     for (std::size_t i = 0; i < chain.size(); ++i) {
       const network::DFac &d = chain[i];
       if (d.kind == network::DFac::Gamma) {
-        tokenFree[i] = freeLegs.size();
         freeLegs.push_back(d.mu);
         slashMat.emplace_back(nsym); // placeholder
       } else if (d.kind == network::DFac::Slash) {
@@ -250,14 +250,12 @@ namespace numtracer::numeric
       } else if (d.kind ==
                  network::DFac::Comm) { // commutator [A,B]: leg-A then leg-B, each free (open id) or slash (momentum)
         if (d.mu >= 0) {
-          tokenFree[i] = freeLegs.size();
           freeLegs.push_back(d.mu);
         } else {
           commAslash[i] = 1;
           commA[i] = slashC(nsym, ndetail::mom_components(nsym, d.vlc, comp));
         }
         if (d.nu >= 0) {
-          tokenFree2[i] = freeLegs.size();
           freeLegs.push_back(d.nu);
         } else {
           commBslash[i] = 1;
@@ -383,7 +381,7 @@ namespace numtracer::numeric
         sQ[i] = chain[i].transposed ? t2(cL0) : cL0;
       }
     // kind 3 commutator: 2×2 blocks of any SLASHED leg (the FREE legs index gP/gQ per assignment below).
-    std::vector<B2> cAP(chain.size()), cAQ(chain.size()), cBP(chain.size()), cBQ(chain.size());
+    std::vector<B2> cAP(nComm), cAQ(nComm), cBP(nComm), cBQ(nComm);
     for (std::size_t i = 0; i < chain.size(); ++i)
       if (chain[i].kind == network::DFac::Comm) {
         if (commAslash[i]) blocksOf(commA[i], cAP[i], cAQ[i]);
@@ -604,10 +602,11 @@ namespace numtracer::numeric
         const MPoly atS = MPolyFactory::atom(nsym, el.atomS);
         for (int i = 0; i < 4; ++i)
           for (int j = 0; j < 4; ++j) {
+            const MPoly kk = k[i] * k[j];
             MPoly full = (i == j) ? MPolyFactory::constant(nsym, Cx{1, 0}) : MPolyFactory::zero(nsym);
-            full = full - (k[i] * k[j]) * at; // P_T entry
+            full = full - kk * at; // P_T entry
             MPoly mag = (i == j && i > 0) ? MPolyFactory::constant(nsym, Cx{1, 0}) : MPolyFactory::zero(nsym);
-            if (i > 0 && j > 0) mag = mag - (k[i] * k[j]) * atS; // P_M entry
+            if (i > 0 && j > 0) mag = mag - kk * atS; // P_M entry
             F.entries[i * 4 + j] = full - mag;
           }
       } else { // Levi-Civita ε_{a,b,c,d}
@@ -849,7 +848,7 @@ namespace numtracer::numeric
     /// factor of a hash set costs more than it saves.
     inline std::size_t incident_union_size(const std::vector<Factor> &facs, int cand)
     {
-      std::vector<int> unionIds;
+      gch::small_vector<int, 16> unionIds;
       for (const Factor &F : facs) {
         const bool incident = std::find(F.ids.begin(), F.ids.end(), cand) != F.ids.end();
         if (!incident) continue;

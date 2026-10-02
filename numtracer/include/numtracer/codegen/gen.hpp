@@ -154,66 +154,54 @@ namespace numtracer::network
     inline std::vector<std::vector<LMono>> make_orderings(const std::vector<LMono> &monos,
                                                           std::size_t maxOrders = 8)
     {
-      auto compareAscending = [](const LMono &x, const LMono &y) { return x.vp < y.vp; };
-      auto degree = [](const LMono &m) {
-        int d = 0;
-        for (auto [id, e] : m.vp)
-          d += e;
-        return d;
+      // Each ordering sorts monomial INDICES with the comparator on the monomials it refers to: the
+      // same comparisons give the same permutation as sorting copies, without moving LMonos around.
+      const std::size_t n = monos.size();
+      std::vector<int> deg(n, 0);
+      for (std::size_t i = 0; i < n; ++i)
+        for (auto [id, e] : monos[i].vp)
+          deg[i] += e;
+      auto sortedBy = [&](auto less) {
+        std::vector<std::uint32_t> idx(n);
+        for (std::size_t i = 0; i < n; ++i) idx[i] = static_cast<std::uint32_t>(i);
+        std::sort(idx.begin(), idx.end(), less);
+        std::vector<LMono> v;
+        v.reserve(n);
+        for (std::uint32_t i : idx) v.push_back(monos[i]);
+        return v;
       };
+      auto vp = [&](std::uint32_t i) -> const auto & { return monos[i].vp; };
       std::vector<std::vector<LMono>> orders;
       auto want = [&] { return orders.size() < maxOrders; };
       if (want()) orders.push_back(monos); // as-built (canonical)
+      if (want()) orders.push_back(sortedBy([&](std::uint32_t x, std::uint32_t y) { return vp(x) < vp(y); }));
       if (want()) {
-        auto v = monos;
-        std::sort(v.begin(), v.end(), compareAscending);
-        orders.push_back(std::move(v));
-      }
-      if (want()) {
-        auto v = monos;
-        std::sort(v.begin(), v.end(), compareAscending);
+        auto v = sortedBy([&](std::uint32_t x, std::uint32_t y) { return vp(x) < vp(y); });
         std::reverse(v.begin(), v.end());
         orders.push_back(std::move(v));
       }
-      if (want()) {
-        auto v = monos;
-        std::sort(v.begin(), v.end(), [](const LMono &x, const LMono &y) {
-          if (x.vp.size() != y.vp.size()) return x.vp.size() > y.vp.size(); // most-factors first
-          return x.vp < y.vp;
-        });
-        orders.push_back(std::move(v));
-      }
-      if (want()) {
-        auto v = monos;
-        std::sort(v.begin(), v.end(), [](const LMono &x, const LMono &y) {
-          if (x.vp.size() != y.vp.size()) return x.vp.size() < y.vp.size(); // fewest-factors first
-          return x.vp < y.vp;
-        });
-        orders.push_back(std::move(v));
-      }
-      if (want()) {
-        auto v = monos;
-        std::sort(v.begin(), v.end(), [&](const LMono &x, const LMono &y) {
-          const int dx = degree(x), dy = degree(y);
-          if (dx != dy) return dx > dy; // highest total degree first
-          return x.vp < y.vp;
-        });
-        orders.push_back(std::move(v));
-      }
-      if (want()) {
-        auto v = monos;
-        std::sort(v.begin(), v.end(), [&](const LMono &x, const LMono &y) {
-          const int dx = degree(x), dy = degree(y);
-          if (dx != dy) return dx < dy; // lowest total degree first
-          return x.vp < y.vp;
-        });
-        orders.push_back(std::move(v));
-      }
-      if (want()) {
-        auto v = monos;
-        std::sort(v.begin(), v.end(), [](const LMono &x, const LMono &y) { return x.vp > y.vp; });
-        orders.push_back(std::move(v));
-      } // reverse-lex
+      if (want()) // most-factors first
+        orders.push_back(sortedBy([&](std::uint32_t x, std::uint32_t y) {
+          if (vp(x).size() != vp(y).size()) return vp(x).size() > vp(y).size();
+          return vp(x) < vp(y);
+        }));
+      if (want()) // fewest-factors first
+        orders.push_back(sortedBy([&](std::uint32_t x, std::uint32_t y) {
+          if (vp(x).size() != vp(y).size()) return vp(x).size() < vp(y).size();
+          return vp(x) < vp(y);
+        }));
+      if (want()) // highest total degree first
+        orders.push_back(sortedBy([&](std::uint32_t x, std::uint32_t y) {
+          if (deg[x] != deg[y]) return deg[x] > deg[y];
+          return vp(x) < vp(y);
+        }));
+      if (want()) // lowest total degree first
+        orders.push_back(sortedBy([&](std::uint32_t x, std::uint32_t y) {
+          if (deg[x] != deg[y]) return deg[x] < deg[y];
+          return vp(x) < vp(y);
+        }));
+      if (want()) // reverse-lex
+        orders.push_back(sortedBy([&](std::uint32_t x, std::uint32_t y) { return vp(x) > vp(y); }));
       return orders;
     }
   } // namespace gdetail
