@@ -8,7 +8,7 @@
 ///   (A) STRUCTURAL — call fuse_projectors on a hand-built element list and assert the folded list +
 ///       coeff (deterministic; pins the fold logic, incl. all symmetric index-slot variants, chains,
 ///       traces, orthogonality, and the no-op negatives).
-///   (B) VALUE — contract a redundant net vs its hand-simplified form through `numeric_value` and check
+///   (B) VALUE — contract a redundant net vs its hand-simplified form through the contraction and check
 ///       they agree at random points (fusion is value-preserving).
 #include <cstdio>
 #include <random>
@@ -107,7 +107,7 @@ int main()
   // single projector -> early-exit, unchanged
   check(unchanged(fold({PT(10, 11)}), 1), "single projector: no-op");
 
-  // ───────────────────────── (B) value-preserving end-to-end via numeric_value ─────────────────────────
+  // ───────────────────────── (B) value-preserving end-to-end via contract ─────────────────────────
   std::printf("== projector fusion: value-preserving ==\n");
   constexpr int nsym = 16;
   nm::Frame env(ntest::names(nsym));

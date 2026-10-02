@@ -137,6 +137,20 @@ function(nt_tutorial_wls name script checker)
   # normal and not a defect. Real consumers do the same — see QCD_Nf2's flows/CMakeLists.txt.
   target_compile_options(${name} PRIVATE -Wno-unused-parameter -Wno-unused-variable)
   add_test(NAME ${name} COMMAND ${name})
+
+  # The page quotes the program's output and the generated headers; check both still match.
+  get_filename_component(_dir ${CMAKE_CURRENT_SOURCE_DIR}/${checker} DIRECTORY)
+  if(EXISTS ${_dir}/${name}.expected.txt)
+    add_test(NAME ${name}_output
+             COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:${name}> -DEXPECTED=${_dir}/${name}.expected.txt
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/compare_output.cmake)
+  endif()
+  foreach(h IN LISTS ARGN)
+    if(EXISTS ${_dir}/snapshot/${h})
+      add_test(NAME ${name}_snapshot_${h}
+               COMMAND ${CMAKE_COMMAND} -E compare_files ${_gen}/${h} ${_dir}/snapshot/${h})
+    endif()
+  endforeach()
 endfunction()
 
 # ===========================================================================

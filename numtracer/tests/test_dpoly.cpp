@@ -4,7 +4,7 @@
 //   A) DPoly arithmetic — add / operator+ / operator* collect over dressing monomials, and ndetail::eval()
 //      equals the manual sum.
 //   B) Dressing-free reduction — a dressed chain with NO slots produces a DPoly with a single empty
-//      dressing monomial whose Poly is bit-equal to numeric_value(...), and to_genprog(DPoly) emits
+//      dressing monomial whose Poly is bit-equal to ndetail::contract(...), and to_genprog(DPoly) emits
 //      the SAME program (instruction stream + root) as to_genprog(Poly). This guarantees no-regression
 //      for every existing (un-dressed) flow.
 //   C) Dressed contraction — a quark line with dressed numerators S(p)=Mq·δ + Z(p)·p̸ kept EAGER and
@@ -509,7 +509,7 @@ int main()
       return LorentzFactor{.kind = LorentzFactor::Vector, .a = mu, .b = -1, .vid = -1, .atom = -1, .vlc = std::move(vlc)};
     };
     auto netMet = [](int a, int b) { return LorentzFactor{.kind = LorentzFactor::Metric, .a = a, .b = b, .vid = -1, .atom = -1}; };
-    // local LorentzFactor→NElem for the distributed reference (public builders; elem_to_nelem is body-only).
+    // the distributed reference builds its nets from LorentzFactor literals directly.
     auto toNElem = [](const LorentzFactor &e) {
       return e.kind == LorentzFactor::Metric ? ntest::fmet(e.a, e.b) : ntest::fvec(e.a, e.vlc);
     };
@@ -621,15 +621,15 @@ int main()
     if (worst != 0 || !alive) ++fails;
   }
 
-  // ---- K) LEVER (b): structural Poly traces + carried dressing assemble to numeric_value_dressed ----
+  // ---- K) LEVER (b): structural Poly traces + carried dressing assemble to the dressed contraction ----
   // The generator no longer keys its trace table on the dressing: it strips each option's dressing
   // (coeff→1, dress→{}) into a per-sub-term scalar (`sc`, the numeric part) and monomial (`dmono`, the
   // dressing-atom ids), contracts each STRUCTURAL combination once into a plain Poly
-  // (numeric_value_dressed_netval_mp), and folds the table back into a DPoly per net (fold_net_dressed:
+  // (ndetail::contract_structural), and folds the table back into a DPoly per net (fold_net_dressed:
   // Σ_j sc[j]·T[k_j] ⊗ dmono[j]). This must reproduce the collected DPoly EXACTLY — a half-carried
   // dressing would silently drop a channel. Validate the whole decomposition against the reference
-  // numeric_value_dressed_netval on the 147-like chain (multi-γ + σ + two dressed slots).
-  std::printf("\n== K: lever (b) structural-trace + carried-dressing assembly == numeric_value_dressed ==\n");
+  // ndetail::contract_dressed on the 147-like chain (multi-γ + σ + two dressed slots).
+  std::printf("\n== K: lever (b) structural-trace + carried-dressing assembly == the dressed contraction ==\n");
   {
     const int nsym = 8; // p:0..3, q:4..7
     nm::Frame env(ntest::names(nsym));

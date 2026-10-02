@@ -1,0 +1,4 @@
+generated kernel  p.P(l).p / p^2  vs  1 - cos^2(theta)
+  525 kinematic points, 0 off by more than 1e-12   (worst |error| < 1e-15)
+  constant(p=1) = 0   (no loop-independent term in this network)
+ALL TESTS PASSED

@@ -1240,7 +1240,7 @@ ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, 
 ntEmitGeneratorSources[coreNets_, restScalars_, colourNets_, groups_, ncomp_, fillArgSig_, complexQ_,
                        realOnlyG_, mVarIdx_, o_, genFile_] :=
   Module[{genPre, genUnits, genDecl, genMain, nSub, declFile, pchFile, unitFiles},
-    With[{ntT = First @ AbsoluteTiming[{genPre, genUnits, genDecl, genMain, nSub} = emitNumericGenerator[coreNets, restScalars, colourNets, groups, ncomp, o["Namespace"], fillArgSig, o["KernelNamespace"], complexQ, realOnlyG, mVarIdx];]},
+    With[{ntT = First @ AbsoluteTiming[{genPre, genUnits, genDecl, genMain, nSub} = emitNumericGenerator[coreNets, restScalars, colourNets, groups, ncomp, o["Namespace"], fillArgSig, o["KernelNamespace"], complexQ, realOnlyG, mVarIdx, FileNameTake[genFile]];]},
       ntLog["[prof] emitNumericGenerator: ", ntT, " s"]];
     declFile = StringReplace[genFile, ".cpp" -> "_nets.hh"];
 (* Precompiled-header source for the -O0 net-builder units. Deliberately a SUPERSET of what any

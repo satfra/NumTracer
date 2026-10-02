@@ -2,7 +2,7 @@
 //
 // The transverse projector P_T(k)_{μν} = δ_{μν} − k_μ k_ν/k² and the new longitudinal projector
 // P_L(k)_{μν} = k_μ k_ν/k² are built as numeric LorentzFactor factors (nprojT / nprojL) and contracted with
-// the pure-Lorentz path (empty DiracNet, every index closed by a test vector or a metric so the net
+// the pure-Lorentz path (empty DiracChain, every index closed by a test vector or a metric so the net
 // collapses to a scalar). Each projector identity is checked two ways at ~200 random kinematic points:
 //
 //   1. engine-vs-oracle: the engine scalar equals an explicit double contraction of the 4×4 oracle

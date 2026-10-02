@@ -253,7 +253,7 @@ if(NUMTRACER_BUILD_TESTS)
   set_tests_properties(color_su5 PROPERTIES PASS_REGULAR_EXPRESSION "^5\n")
   nt_add_test(test_sun_tables tests/test_sun_tables.cpp NAME sun_tables HEADER_ONLY)
 
-  # Numeric (matrix-product) contraction backend (numeric/*): MPoly-entry gamma trace via 4x4
+  # Numeric (matrix-product) contraction backend (numeric/*): Poly-entry gamma trace via 4x4
   # matrix products + projector index-sum, vs chiral_gamma_trace and direct numeric contraction;
   # validates the monomial-vs-non-monomial projector-atom cancellation. The Part-B correctness gate.
   nt_add_test(test_numeric_contract tests/test_numeric_contract.cpp NAME numeric_contract)
@@ -268,8 +268,8 @@ if(NUMTRACER_BUILD_TESTS)
   # structural folds (all symmetric slot variants, chains, traces, no-op negatives) + value-preserving.
   nt_add_test(test_projector_fusion tests/test_projector_fusion.cpp NAME projector_fusion)
 
-  # Dressing-collection layer (numeric/dpoly.hpp + numeric_value_dressed): DPoly arithmetic, the
-  # dressing-free reduction (DPoly == MPoly path, same emitted program), and a dressed quark line
+  # Dressing-collection layer (numeric/dpoly.hpp + the dressed contraction): DPoly arithmetic, the
+  # dressing-free reduction (DPoly == Poly path, same emitted program), and a dressed quark line
   # collected-vs-distributed. The symbolic-dressing-collection correctness gate.
   nt_add_test(test_dpoly tests/test_dpoly.cpp NAME dpoly)
 
@@ -509,7 +509,7 @@ if(NUMTRACER_BUILD_TESTS)
   # Finite-T SPATIAL VECTOR gate (kernels from tests/gen/gen_spatialvec_numeric.wls): FormTracer's
   # `vecs[q,mu]` acronym and the spatial pslash `vecs[q,mu] gamma[mu,d1,d2]`, which NumTracer routes
   # through the ntSpatialVec momentum leaf (frame components with the temporal slot zeroed) so that a
-  # spatial slash is emitted as an ordinary dslash. Where ftproj_num covers the SCALAR spatial product
+  # spatial slash is emitted as an ordinary slash. Where ftproj_num covers the SCALAR spatial product
   # ntSPS, this covers the spatial VECTOR: barred and unbarred legs interleaved in one Dirac trace, a
   # composite spatial momentum (the linearity push), and a zero identity tying the ntSPS scalar path
   # to the ntSpatialVec engine path — the two must agree.

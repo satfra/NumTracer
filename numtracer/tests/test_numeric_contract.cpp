@@ -258,7 +258,7 @@ int main()
   runProj(false);
 
   // ---- D) the network::LorentzNet adapter path (what the generator uses): proj/met builders ----
-  std::printf("\n== D: numeric_value_netval over network::LorentzNet (generator path) ==\n");
+  std::printf("\n== D: ndetail::contract over a LorentzNet (generator path) ==\n");
   {
     const int nsym = 10;
     nm::Frame env(ntest::names(nsym));

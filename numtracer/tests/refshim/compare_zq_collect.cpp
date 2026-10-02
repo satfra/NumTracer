@@ -3,7 +3,7 @@
 // single DPoly trace) must reproduce the committed DISTRIBUTED Zq kernel (which is itself validated vs
 // the FORM reference by flow_zq_num) to round-off. This exercises the full dressed path — front-end
 // ntDressedNum rewrite (with common colour/flavour/denominator factored out), the DPoly generator
-// branch, the kind-2 `dress` env leaves, and numeric_value_dressed_netval — on a real flow.
+// branch, the kind-2 `dress` env leaves, and the dressed contraction — on a real flow.
 #include "Zq_collect_kernel.hh"
 #include "Zq_num_kernel.hh"
 #include "shim.hpp"

@@ -6,7 +6,7 @@
 
    The point of this example: the inv (build-time) backend is generated with the et-vs-numeric size
    guard forced to ZERO, so the fundamental colour is contracted by the NUMERIC SUNNet path
-   (sun_value_cx in et/inv/col.hpp) instead of an et `constexpr`. The compare test then checks
+   (sun_value in et/inv/col.hpp) instead of an et `constexpr`. The compare test then checks
    inv (numeric colour) == ET (et colour) == Dense — landing the numeric fundamental-colour path on a
    real flow. (The ET/Dense backends ignore the threshold and always fold constants via the et engine.)
 

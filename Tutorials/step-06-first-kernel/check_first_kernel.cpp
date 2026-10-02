@@ -41,7 +41,8 @@ int main() {
   }
 
   std::printf("generated kernel  p.P(l).p / p^2  vs  1 - cos^2(theta)\n");
-  std::printf("  525 kinematic points, worst |error| = %.3e   (%d bad)\n", worst, bad);
+  std::printf("  525 kinematic points, %d off by more than 1e-12   (worst |error| %s 1e-15)\n", bad,
+              worst < 1e-15 ? "<" : ">=");
 
   // The kernel has a second entry point, constant(): the loop-INDEPENDENT term that a flow adds
   // flat to the integral. This network has none, so the front-end emitted a literal 0.

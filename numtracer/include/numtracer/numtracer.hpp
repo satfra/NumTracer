@@ -4,8 +4,8 @@
 ///
 /// This bundles the numeric contraction engine (the hand-coding path: declare a @ref numtracer::Frame,
 /// build a `DiracChain` + `LorentzNet`, contract with `Frame::trace`, evaluate the resulting `Poly`),
-/// the SU(N) fold (@ref numtracer::SUN), and the build-time codegen/lowering helpers. Every header below is `#pragma once`-guarded, so
-/// including this alongside any individual header is harmless.
+/// the SU(N) fold (@ref numtracer::SUN), and the build-time codegen/lowering helpers. Every header
+/// below is `#pragma once`-guarded, so including this alongside any individual header is harmless.
 ///
 /// It does NOT change how the engine ships: the compiled-vs-header-only choice is still governed by
 /// `numtracer/core/export.hpp` (`NUMTRACER_HEADER_ONLY`) — a binary must pick one mode across its
