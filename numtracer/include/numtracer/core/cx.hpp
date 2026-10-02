@@ -32,6 +32,16 @@ namespace numtracer
     constexpr Cx operator*(Cx o) const { return {re * o.re - im * o.im, re * o.im + im * o.re}; }
   };
 
+  /// @brief Complex division `z / w = z·conj(w) / |w|²`.
+  /// @param z Numerator.
+  /// @param w Denominator (nonzero).
+  /// @return The quotient. The operation order is fixed: emitted kernels depend on it bit-for-bit.
+  constexpr Cx cdiv(Cx z, Cx w)
+  {
+    const double d = w.re * w.re + w.im * w.im;
+    return Cx{(z.re * w.re + z.im * w.im) / d, (z.im * w.re - z.re * w.im) / d};
+  }
+
   /// @brief Absolute value of a real number (a `constexpr` `std::abs` for `double`).
   /// @param x The input value.
   /// @return `x` if `x >= 0`, otherwise `-x`.

@@ -15,6 +15,7 @@
 #include "numtracer/core/export.hpp"   // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
 #include "numtracer/core/envvar.hpp"   // env_flag / env_int — the single truth test for NT_* switches
 #include "numtracer/core/hash.hpp"     // splitmix64_finalise / hash_combine (GlobalEnv)
+#include "numtracer/core/intern_table.hpp"
 #include "numtracer/codegen/lower.hpp"
 #include "numtracer/codegen/precision.hpp" // float vs double emission
 #include "numtracer/network/network.hpp" // NetVal / Elem / GenProg
@@ -38,48 +39,23 @@ namespace numtracer::network
   ///        diagrams of a kernel — so the ~few fundamental symbols are computed once per call.
   struct GlobalEnv {
     std::vector<std::tuple<int, int, int>> syms; ///< env id i → (kind 0=sp/1=inv, a, b); inv is (1,id,0).
-    std::vector<int> bucket;                     ///< open-addressed index into @ref syms (or -1).
-    std::size_t mask = 0;                        ///< bucket.size()-1 (power of two); 0 while empty.
+    struct SymHash {
+      std::uint64_t operator()(const std::tuple<int, int, int> &s) const
+      {
+        const auto [k, a, b] = s;
+        return hash_combine(
+            hash_combine(hash_combine(splitmix64_finalise(2), static_cast<std::uint64_t>(static_cast<unsigned>(k))),
+                         static_cast<std::uint64_t>(static_cast<unsigned>(a))),
+            static_cast<std::uint64_t>(static_cast<unsigned>(b)));
+      }
+    };
+    struct SymEq {
+      bool operator()(const std::tuple<int, int, int> &x, const std::tuple<int, int, int> &y) const { return x == y; }
+    };
+    InternTable<std::tuple<int, int, int>, SymHash, SymEq> index; ///< hash lookup into @ref syms
 
-    static std::uint64_t hsym(int k, int a, int b)
-    {
-      return hash_combine(
-          hash_combine(hash_combine(splitmix64_finalise(2), static_cast<std::uint64_t>(static_cast<unsigned>(k))),
-                       static_cast<std::uint64_t>(static_cast<unsigned>(a))),
-          static_cast<std::uint64_t>(static_cast<unsigned>(b)));
-    }
-    void rehash(std::size_t cap)
-    {
-      bucket.assign(cap, -1);
-      mask = cap - 1;
-      for (std::size_t s = 0; s < syms.size(); ++s) {
-        auto [k, a, b] = syms[s];
-        std::size_t p = hsym(k, a, b) & mask;
-        while (bucket[p] != -1)
-          p = (p + 1) & mask;
-        bucket[p] = static_cast<int>(s);
-      }
-    }
     /// First-seen lookup of symbol `(k,a,b)`; appends on miss so env ids stay in first-seen order.
-    int intern(int k, int a, int b)
-    {
-      const std::uint64_t h = hsym(k, a, b);
-      if (mask) {
-        std::size_t p = h & mask;
-        while (bucket[p] != -1) {
-          if (syms[bucket[p]] == std::tuple<int, int, int>{k, a, b}) return bucket[p];
-          p = (p + 1) & mask;
-        }
-      }
-      if ((syms.size() + 1) * 10 >= (mask + 1) * 7) rehash(mask == 0 ? 16 : (mask + 1) * 2);
-      const int s = static_cast<int>(syms.size());
-      syms.push_back({k, a, b});
-      std::size_t p = h & mask;
-      while (bucket[p] != -1)
-        p = (p + 1) & mask;
-      bucket[p] = s;
-      return s;
-    }
+    int intern(int k, int a, int b) { return index.intern(syms, {k, a, b}); }
     int inv_id(int v) { return intern(1, v, 0); }
     /// A raw USER-SYMBOL leaf (kind 3): a kernel argument (a momentum component / angle) the numeric
     /// backend interns directly. It fills its `f[]` slot from the argument verbatim (see

@@ -1020,10 +1020,9 @@ namespace numtracer::numeric
             if (dominates) {
               for (int k = 0; k < p.nsym; ++k)
                 e[k] -= d[k];
-              // coeff /= dc   (complex division: z / w = z·conj(w) / |w|²)
-              const double den = dc.re * dc.re + dc.im * dc.im;
-              assert(den != 0.0); // a stored monomial denominator never has a zero coefficient
-              coeff = Cx{(coeff.re * dc.re + coeff.im * dc.im) / den, (coeff.im * dc.re - coeff.re * dc.im) / den};
+              // a stored monomial denominator never has a zero coefficient
+              assert(dc.re * dc.re + dc.im * dc.im != 0.0);
+              coeff = cdiv(coeff, dc);
               cancelled = true;
             }
           }
@@ -1312,10 +1311,6 @@ namespace numtracer::numeric
     for (const auto &[m, c] : p.terms) // monomials are unique, so each (atoms, e) slot is written once
       byAtoms[m.atoms].emplace(m.e, Cx{0, 0} + c);
 
-    auto cdiv = [](const Cx &z, const Cx &w) { // complex divide; the coefficients are Cx, not double
-      const double d = w.re * w.re + w.im * w.im;
-      return Cx{(z.re * w.re + z.im * w.im) / d, (z.im * w.re - z.re * w.im) / d};
-    };
     // Largest |coefficient| in a group — the scale the exactness test below is relative to. A trial
     // division is accepted only when its remainder is negligible against THIS, never against the
     // individual terms: two roundings of zero always disagree by 100%.

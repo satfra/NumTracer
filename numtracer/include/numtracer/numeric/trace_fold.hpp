@@ -192,38 +192,20 @@ namespace numtracer::numeric
     return T;
   }
 
-  /// @brief PHASE B — fold one net: `Σ_j sc[j] · trace(idx[j])`.
+  /// @brief Sum `leaf(0) + … + leaf(n-1)` as a **binary-counter tree**.
   ///
-  /// Reduced as a **binary-counter tree**: partial sums are kept on a stack tagged with a rank (a
-  /// power of two = how many leaves it covers), and a new term carries into the stack exactly as a
-  /// binary increment does, merging only equal ranks. So every addition combines two operands of
-  /// comparable size, and at most O(log n) partials are ever live — where a left fold against one
-  /// growing accumulator pays O(|acc|) per term, which on the heavy nets (>1000 terms) is the
-  /// difference between O(n log n) and O(n²) element touches. Exactly `n - 1` additions either way.
-  ///
-  /// Traces at `idx[j] >= nCache` are not resident and are recomputed here; by construction those are
-  /// referenced once, so nothing is computed twice.
-  template <class P, class TraceFn>
-  P fold_net(int nsym, const std::vector<int> &traceIdx, const std::vector<Cx> &subScale,
-             const std::vector<P> &traceTable, long nCache, TraceFn &&trace)
+  /// Partial sums are kept on a stack tagged with a rank (a power of two = how many leaves it covers),
+  /// and a new leaf carries into the stack exactly as a binary increment does, merging only equal
+  /// ranks. So every addition combines two operands of comparable size, and at most O(log n) partials
+  /// are ever live — where a left fold against one growing accumulator pays O(|acc|) per term, which on
+  /// the heavy nets (>1000 terms) is the difference between O(n log n) and O(n²) element touches.
+  /// Exactly `n - 1` additions either way, always `earlier + later`.
+  template <class P, class Leaf> P tree_sum(int nsym, std::size_t n, Leaf &&leaf)
   {
     std::vector<P> stack;
     std::vector<std::size_t> stackRank;
-    P recomputed;
-
-    for (std::size_t j = 0; j < traceIdx.size(); ++j) {
-      const int k = traceIdx[j];
-      // Bind, never copy: a ternary over `const P&` and a prvalue would materialise a copy of the
-      // cached polynomial on every use — and the whole point is that these are used 5-8x each.
-      const P *src;
-      if (k < static_cast<int>(nCache)) {
-        src = &traceTable[static_cast<std::size_t>(k)];
-      } else {
-        recomputed = trace(k);
-        src = &recomputed;
-      }
-
-      P cur = scale_trace(nsym, *src, subScale[j]);
+    for (std::size_t j = 0; j < n; ++j) {
+      P cur = leaf(j);
       std::size_t curRank = 1;
       while (!stack.empty() && stackRank.back() == curRank) {
         cur = stack.back() + cur; // earlier + later: the term order of the original left fold
@@ -242,6 +224,32 @@ namespace numtracer::numeric
     return acc;
   }
 
+  /// @brief The trace `idx`: the resident table entry if `idx < nCache`, else recomputed into
+  ///        @p recomputed. Binds, never copies: the cached polynomials are used 5-8x each.
+  template <class P, class TraceFn>
+  const P &resident_or_recompute(int idx, const std::vector<P> &traceTable, long nCache, TraceFn &trace,
+                                 P &recomputed)
+  {
+    if (idx < static_cast<int>(nCache)) return traceTable[static_cast<std::size_t>(idx)];
+    recomputed = trace(idx);
+    return recomputed;
+  }
+
+  /// @brief PHASE B — fold one net: `Σ_j sc[j] · trace(idx[j])`, summed by @ref tree_sum.
+  ///
+  /// Traces at `idx[j] >= nCache` are not resident and are recomputed here; by construction those are
+  /// referenced once, so nothing is computed twice.
+  template <class P, class TraceFn>
+  P fold_net(int nsym, const std::vector<int> &traceIdx, const std::vector<Cx> &subScale,
+             const std::vector<P> &traceTable, long nCache, TraceFn &&trace)
+  {
+    P recomputed;
+    return tree_sum<P>(nsym, traceIdx.size(), [&](std::size_t j) {
+      const P &src = resident_or_recompute(traceIdx[j], traceTable, nCache, trace, recomputed);
+      return scale_trace(nsym, src, subScale[j]);
+    });
+  }
+
   /// @brief PHASE B (lever (b), dressed) — fold one net whose traces are PLAIN @ref MPoly into a
   ///        @ref DPoly: `Σ_j subScale[j] · traceTable[traceIdx[j]] ⊗ subDress[j]`.
   ///
@@ -249,48 +257,22 @@ namespace numtracer::numeric
   /// dimension was stripped at codegen time and lives in the per-sub-term `subDress`/`subScale`), so the
   /// same net can reference one concrete trace across MANY dressing channels without re-contracting it —
   /// the whole point of lever (b). Each sub-term becomes a one-term `DPoly` (`subDress[j]` →
-  /// `subScale[j]·trace`), and those are summed by the SAME balanced binary-counter tree as @ref fold_net
-  /// (so heavy nets stay O(n log n)); `DPoly::operator+` collects the channels. Traces at
-  /// `traceIdx[j] >= nCache` are recomputed here, exactly as in @ref fold_net.
+  /// `subScale[j]·trace`), and those are summed by the same @ref tree_sum as @ref fold_net;
+  /// `DPoly::operator+` collects the channels.
   template <class TraceFn>
   DPoly fold_net_dressed(int nsym, const std::vector<int> &traceIdx, const std::vector<Cx> &subScale,
                          const std::vector<DMono> &subDress, const std::vector<MPoly> &traceTable, long nCache,
                          TraceFn &&trace)
   {
-    std::vector<DPoly> stack;
-    std::vector<std::size_t> stackRank;
     MPoly recomputed;
-
-    for (std::size_t j = 0; j < traceIdx.size(); ++j) {
-      const int k = traceIdx[j];
-      const MPoly *src;
-      if (k < static_cast<int>(nCache)) {
-        src = &traceTable[static_cast<std::size_t>(k)];
-      } else {
-        recomputed = trace(k);
-        src = &recomputed;
-      }
-
-      // one dressing channel for this sub-term: subDress[j] · (subScale[j] · trace). Empty if the scaled
-      // trace cancels to nothing (DPoly::add drops an empty MPoly), matching fold_net's zero handling.
+    return tree_sum<DPoly>(nsym, traceIdx.size(), [&](std::size_t j) {
+      const MPoly &src = resident_or_recompute(traceIdx[j], traceTable, nCache, trace, recomputed);
+      // Empty if the scaled trace cancels to nothing (DPoly::add drops an empty MPoly), matching
+      // fold_net's zero handling.
       DPoly cur = DPolyFactory::zero(nsym);
-      cur.add(subDress[j], scale_trace(nsym, *src, subScale[j]));
-      std::size_t curRank = 1;
-      while (!stack.empty() && stackRank.back() == curRank) {
-        cur = stack.back() + cur; // earlier + later: preserve the original left-fold term order
-        stack.pop_back();
-        stackRank.pop_back();
-        curRank *= 2;
-      }
-      stack.push_back(std::move(cur));
-      stackRank.push_back(curRank);
-    }
-
-    if (stack.empty()) return zero_like<DPoly>(nsym);
-    DPoly acc = std::move(stack.front());
-    for (std::size_t i = 1; i < stack.size(); ++i)
-      acc = acc + stack[i];
-    return acc;
+      cur.add(subDress[j], scale_trace(nsym, src, subScale[j]));
+      return cur;
+    });
   }
 
   /// @brief PHASE B, driver — fold every net, in parallel over the nets.

@@ -17,6 +17,7 @@
 
 #include <bit>
 #include "numtracer/core/hash.hpp" // splitmix64_finalise / hash_combine
+#include "numtracer/core/intern_table.hpp"
 #include <cstdint>
 #include <vector>
 
@@ -46,9 +47,6 @@ namespace numtracer::network
     // value-numbering stays O(w) (not O(w²)) as the real SSA grows.
     struct RBuilder {
       std::vector<RInstr> ins; ///< Real instructions, in emission order.
-      std::vector<int> bucket; ///< Open-addressed index: slot, or -1 if empty.
-      std::size_t mask = 0;    ///< `bucket.size()-1` (power of two); 0 while empty.
-
       static constexpr std::uint64_t ihash(const RInstr &e)
       {
         const std::uint64_t h = hash_combine(hash_combine(e.op, e.a), e.b);
@@ -58,36 +56,16 @@ namespace numtracer::network
       {
         return a.op == b.op && a.a == b.a && a.b == b.b && a.value == b.value;
       }
-      constexpr void rehash(std::size_t cap)
-      {
-        bucket.assign(cap, -1);
-        mask = cap - 1;
-        for (int s = 0; s < (int)ins.size(); ++s) {
-          std::size_t p = ihash(ins[s]) & mask;
-          while (bucket[p] != -1)
-            p = (p + 1) & mask;
-          bucket[p] = s;
-        }
-      }
+      struct IHash {
+        constexpr std::uint64_t operator()(const RInstr &e) const { return ihash(e); }
+      };
+      struct IEq {
+        constexpr bool operator()(const RInstr &a, const RInstr &b) const { return ieq(a, b); }
+      };
+      InternTable<RInstr, IHash, IEq> index; ///< hash lookup into @ref ins
+
       /// @brief Append an instruction, or reuse an identical existing one (value numbering).
-      constexpr int find_or_add(RInstr e)
-      {
-        if (mask) {
-          std::size_t p = ihash(e) & mask;
-          while (bucket[p] != -1) {
-            if (ieq(ins[bucket[p]], e)) return bucket[p];
-            p = (p + 1) & mask;
-          }
-        }
-        if ((ins.size() + 1) * 10 >= (mask + 1) * 7) rehash(mask == 0 ? 16 : (mask + 1) * 2);
-        const int s = static_cast<int>(ins.size());
-        ins.push_back(e);
-        std::size_t p = ihash(e) & mask;
-        while (bucket[p] != -1)
-          p = (p + 1) & mask;
-        bucket[p] = s;
-        return s;
-      }
+      constexpr int find_or_add(RInstr e) { return index.intern(ins, e); }
     };
 
     /// @brief Emit a real constant, mapping `0` to the structural-zero sentinel (`-1`).

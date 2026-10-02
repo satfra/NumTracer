@@ -386,106 +386,107 @@ inline Cx loop_prod(const SUNDyn &dat, const std::vector<std::vector<int>> &cycl
   return prod;
 }
 
-/// @brief Contract a single-group network (all factors share rank `N`) to its scalar value.
+/// @brief The index classes of one single-group net, after the δ union-find.
 ///
-/// Generalises the adjoint-only union-find + sparse-`f`-backtracking to also handle fundamental
-/// generator traces: the fundamental indices form closed cycles (one per quark loop), each cycle a
-/// `tr(T^{a_1}…T^{a_m})`; the adjoint indices on those generators are pinned by the `f`-backtracking
-/// when shared with an `f`, else summed densely. Adjoint indices touched only by `δ^{ab}` close an
-/// adjoint loop (`δ^{aa} = N²−1`); fundamental indices touched only by `δ^{ij}` close a fundamental
-/// loop (`δ^{ii} = N`).
-inline Cx contract_group(int N, const std::vector<const SUNFac *> &net) {
-  // Algorithm:
-  //   1. union-find: each δ identifies its two indices, so every label collapses to an index CLASS.
-  //   2. classify classes by sector (adjoint / fundamental) and by what touches them (δ only, an `f`,
-  //      a generator). A class touched only by δ is a CLOSED LOOP: δ^{aa}=N²−1 adjoint / δ^{ii}=N fund.
-  //   3. the generators' fundamental indices form closed directed cycles → one tr(T^{a_1}…T^{a_m}) each.
-  //   4. sum the value: backtrack over the nonzero `f^{abc}` table to pin the f-shared adjoint classes
-  //      (`sumF`), dense-sum the remaining generator-only adjoint classes (`sumGen`), and for each
-  //      consistent assignment fold in the product of generator traces (`loopProd`). × the closed-loop
-  //      scalar. Snap √3-residual zeros from the generator-table arithmetic.
-  // Step 1 (union-find) destroys the evidence an open leg leaves, so the closure check comes first.
-  assert_no_open_labels(N, net);
-  const SUNDyn &dat = sun_data_for(N);
-  const int Adim = N * N - 1; // adjoint dimension
+/// Every label is replaced by its union-find class representative. The `std::set` members are
+/// iterated in ascending class order by both contractions, which fixes the multiply order of the
+/// closed-loop factors.
+struct GroupClasses {
+  bool empty = false;                               ///< No factor at all (the net is the identity).
+  std::set<int> adjClasses, fClasses, genAdjClasses; ///< adjoint: all / touched by an `f` / on a generator
+  std::set<int> fundClasses, genFundClasses;        ///< fundamental: all / on a generator
+  std::vector<std::array<int, 3>> fTriples;         ///< `f^{abc}` index triples (by class)
+  std::vector<std::array<int, 3>> gens;             ///< {adjClass, rowClass(i), colClass(j)} per generator
+  std::vector<int> genOnly;                         ///< generator adjoint classes not pinned by an `f`
+  /// class -> the per-component dressing maps of every diag factor sitting on it (component →
+  /// dressing-id, `-1` = drop). Filled only when classifying with diagonal dressings.
+  std::map<int, std::vector<const std::vector<int> *>> adjDiag, fundDiag;
+};
 
-  // ---- union-find over labels: a delta identifies its two indices (adjoint *or* fundamental) ----
+/// @brief Union-find the labels of @p net and classify the resulting index classes by sector and by
+///        what touches them.
+///
+/// A δ identifies its two indices; with @p withDiag a diagonal-dressing factor does too and records
+/// its dressing map on its class. Without @p withDiag a diagonal-dressing factor is rejected.
+inline GroupClasses classify(const std::vector<const SUNFac *> &net, bool withDiag) {
+  GroupClasses g;
   int maxlbl = -1;
   for (const SUNFac *f : net) {
     maxlbl = std::max({maxlbl, f->a, f->b});
     if (f->kind == SUNFacKind::F || f->kind == SUNFacKind::T) maxlbl = std::max(maxlbl, f->c);
   }
-  if (maxlbl < 0) return Cx{1.0, 0.0}; // empty colour net: no factor ⇒ identity (avoids UnionFind(-1))
+  if (maxlbl < 0) { g.empty = true; return g; } // avoids UnionFind(-1)
   UnionFind uf(maxlbl);
   auto find = [&](int x) { return uf.find(x); };
   for (const SUNFac *f : net)
-    if (f->kind == SUNFacKind::DeltaAdj || f->kind == SUNFacKind::DeltaFund)
-      uf.unite(f->a, f->b); // delta_adj / delta_fund identify their two indices
+    if (f->kind == SUNFacKind::DeltaAdj || f->kind == SUNFacKind::DeltaFund ||
+        (withDiag && (f->kind == SUNFacKind::DiagFund || f->kind == SUNFacKind::DiagAdj)))
+      uf.unite(f->a, f->b);
 
-  // ---- classify the index classes touched in each sector --------------------------------------
-  std::set<int> adjClasses, fClasses, genAdjClasses;       // adjoint
-  std::set<int> fundClasses, genFundClasses;               // fundamental
-  std::vector<std::array<int, 3>> fTriples;                // f^{abc} index triples (by class)
-  std::vector<std::array<int, 3>> gens;                    // {adjClass, rowClass(i), colClass(j)} per generator
   for (const SUNFac *f : net) {
     switch (f->kind) {
     case SUNFacKind::DeltaAdj:
-      adjClasses.insert(find(f->a)); adjClasses.insert(find(f->b));
+      g.adjClasses.insert(find(f->a)); g.adjClasses.insert(find(f->b));
       break;
     case SUNFacKind::F: { // f^{abc}
       const int a = find(f->a), b = find(f->b), c = find(f->c);
-      adjClasses.insert(a); adjClasses.insert(b); adjClasses.insert(c);
-      fClasses.insert(a); fClasses.insert(b); fClasses.insert(c);
-      fTriples.push_back({a, b, c});
+      g.adjClasses.insert(a); g.adjClasses.insert(b); g.adjClasses.insert(c);
+      g.fClasses.insert(a); g.fClasses.insert(b); g.fClasses.insert(c);
+      g.fTriples.push_back({a, b, c});
       break;
     }
     case SUNFacKind::T: { // T^a_{ij}
       const int a = find(f->a), i = find(f->b), j = find(f->c);
-      adjClasses.insert(a); genAdjClasses.insert(a);
-      fundClasses.insert(i); fundClasses.insert(j);
-      genFundClasses.insert(i); genFundClasses.insert(j);
-      gens.push_back({a, i, j});
+      g.adjClasses.insert(a); g.genAdjClasses.insert(a);
+      g.fundClasses.insert(i); g.fundClasses.insert(j);
+      g.genFundClasses.insert(i); g.genFundClasses.insert(j);
+      g.gens.push_back({a, i, j});
       break;
     }
     case SUNFacKind::DeltaFund:
-      fundClasses.insert(find(f->a)); fundClasses.insert(find(f->b));
+      g.fundClasses.insert(find(f->a)); g.fundClasses.insert(find(f->b));
       break;
+    case SUNFacKind::DiagFund: { // diag_fund: δ^{ij} with a per-component fundamental dressing
+      if (!withDiag) NT_THROW(std::runtime_error, "sun_net: unknown SUNFac kind");
+      const int i = find(f->a);
+      g.fundClasses.insert(i); g.fundClasses.insert(find(f->b));
+      g.fundDiag[i].push_back(&f->comp2dr);
+      break;
+    }
+    case SUNFacKind::DiagAdj: { // diag_adj: δ^{ab} with a per-component adjoint dressing
+      if (!withDiag) NT_THROW(std::runtime_error, "sun_net: unknown SUNFac kind");
+      const int a = find(f->a);
+      g.adjClasses.insert(a); g.adjClasses.insert(find(f->b));
+      g.adjDiag[a].push_back(&f->comp2dr);
+      break;
+    }
     default: NT_THROW(std::runtime_error, "sun_net: unknown SUNFac kind");
     }
   }
+  for (int c : g.genAdjClasses)
+    if (!g.fClasses.count(c)) g.genOnly.push_back(c);
+  return g;
+}
 
-  // ---- closed-loop scalar factors ----
-  // closed adjoint loops (δ^{aa} = N²−1): classes touched only by delta_adj (not by f, not a generator).
-  double factorScalar = 1.0;
-  for (int c : adjClasses)
-    if (!fClasses.count(c) && !genAdjClasses.count(c)) factorScalar *= static_cast<double>(Adim);
-  // closed fundamental loops (δ^{ii} = N): fundamental classes touched only by delta_fund.
-  for (int c : fundClasses)
-    if (!genFundClasses.count(c)) factorScalar *= static_cast<double>(N);
-
-  // generator adjoint classes not pinned by an f are summed densely below.
-  std::vector<int> genOnly;
-  for (int c : genAdjClasses)
-    if (!fClasses.count(c)) genOnly.push_back(c);
-
-  // ---- fundamental-cycle extraction (generator traces) ----
-  const std::vector<std::vector<int>> cycles = extract_cycles_adj(gens);
-  // the product of generator traces for a fully-pinned adjoint assignment (`classVal`: class -> 0..Adim-1).
-  auto loopProd = [&](const std::map<int, int> &classVal) { return loop_prod(dat, cycles, classVal); };
-
-  // dense sum over the gen-only adjoint classes (after the f-classes are pinned).
-  Cx total{0.0, 0.0};
+/// @brief Sum over all consistent adjoint assignments: backtrack over the nonzero `f^{abc}` table to
+///        pin the f-shared classes, then dense-sum the generator-only classes.
+///
+/// For every complete assignment, `leaf(fProd, classVal)` is called with the product of the pinned
+/// `f` values and the map adjoint class → component `0..Adim-1`. The call order is fixed (f-table
+/// order, then ascending component), so a leaf that accumulates sums in a reproducible order.
+template <class Leaf>
+void for_each_assignment(const SUNDyn &dat, const std::vector<std::array<int, 3>> &fTriples,
+                         const std::vector<int> &genOnly, int Adim, Leaf &&leaf) {
   std::map<int, int> classVal; // adjoint class -> its pinned/summed component value
+  const std::map<int, int> &pinned = classVal;
   auto sumGen = [&](auto &&self, std::size_t gi, Cx fProd) -> void {
-    if (gi == genOnly.size()) { total = total + fProd * loopProd(classVal); return; }
+    if (gi == genOnly.size()) { leaf(fProd, pinned); return; }
     const int cls = genOnly[gi];
     for (int v = 0; v < Adim; ++v) { classVal[cls] = v; self(self, gi + 1, fProd); }
     classVal.erase(cls);
   };
-
-  // ---- sparse sum ∏ f over consistent assignments of the f-classes (then fold in generator traces) ----
-  // Backtrack over the nonzero f-table: each f-triple's three classes must agree with whatever earlier
-  // triples already pinned them (`consistent`); newly-pinned classes (`newA/newB/newC`) are un-pinned on return.
+  // Each f-triple's three classes must agree with whatever earlier triples already pinned them
+  // (`consistent`); newly-pinned classes (`newA/newB/newC`) are un-pinned on return.
   auto sumF = [&](auto &&self, std::size_t fi, Cx fProd) -> void {
     if (fi == fTriples.size()) { sumGen(sumGen, 0, fProd); return; }
     const auto [ca, cb, cc] = fTriples[fi];
@@ -501,13 +502,59 @@ inline Cx contract_group(int N, const std::vector<const SUNFac *> &net) {
     }
   };
   sumF(sumF, 0, Cx{1.0, 0.0});
+}
+
+/// @brief Snap the √3-residual zeros that the generator-table arithmetic leaves just above 0.
+///
+/// Colour/flavour factors are exact rationals (× generator traces), so anything below the tolerance
+/// is round-off, well below any genuine rational magnitude.
+inline void snap_zero(Cx &c) {
+  constexpr double kZeroSnapTol = 1e-9;
+  if (std::fabs(c.re) < kZeroSnapTol) c.re = 0.0;
+  if (std::fabs(c.im) < kZeroSnapTol) c.im = 0.0;
+}
+
+/// @brief Contract a single-group network (all factors share rank `N`) to its scalar value.
+///
+/// Generalises the adjoint-only union-find + sparse-`f`-backtracking to also handle fundamental
+/// generator traces: the fundamental indices form closed cycles (one per quark loop), each cycle a
+/// `tr(T^{a_1}…T^{a_m})`; the adjoint indices on those generators are pinned by the `f`-backtracking
+/// when shared with an `f`, else summed densely. Adjoint indices touched only by `δ^{ab}` close an
+/// adjoint loop (`δ^{aa} = N²−1`); fundamental indices touched only by `δ^{ij}` close a fundamental
+/// loop (`δ^{ii} = N`).
+inline Cx contract_group(int N, const std::vector<const SUNFac *> &net) {
+  // Algorithm:
+  //   1. union-find: each δ identifies its two indices, so every label collapses to an index CLASS.
+  //   2. classify classes by sector (adjoint / fundamental) and by what touches them (δ only, an `f`,
+  //      a generator). A class touched only by δ is a CLOSED LOOP: δ^{aa}=N²−1 adjoint / δ^{ii}=N fund.
+  //   3. the generators' fundamental indices form closed directed cycles → one tr(T^{a_1}…T^{a_m}) each.
+  //   4. sum the value over all consistent adjoint assignments (@ref for_each_assignment), folding in
+  //      the product of generator traces for each. × the closed-loop scalar, then snap residual zeros.
+  // Step 1 (union-find) destroys the evidence an open leg leaves, so the closure check comes first.
+  assert_no_open_labels(N, net);
+  const SUNDyn &dat = sun_data_for(N);
+  const int Adim = N * N - 1; // adjoint dimension
+
+  const GroupClasses g = classify(net, /*withDiag=*/false);
+  if (g.empty) return Cx{1.0, 0.0}; // empty colour net: no factor ⇒ identity
+
+  // ---- closed-loop scalar factors ----
+  // closed adjoint loops (δ^{aa} = N²−1): classes touched only by delta_adj (not by f, not a generator).
+  double factorScalar = 1.0;
+  for (int c : g.adjClasses)
+    if (!g.fClasses.count(c) && !g.genAdjClasses.count(c)) factorScalar *= static_cast<double>(Adim);
+  // closed fundamental loops (δ^{ii} = N): fundamental classes touched only by delta_fund.
+  for (int c : g.fundClasses)
+    if (!g.genFundClasses.count(c)) factorScalar *= static_cast<double>(N);
+
+  const std::vector<std::vector<int>> cycles = extract_cycles_adj(g.gens);
+  Cx total{0.0, 0.0};
+  for_each_assignment(dat, g.fTriples, g.genOnly, Adim, [&](Cx fProd, const std::map<int, int> &classVal) {
+    total = total + fProd * loop_prod(dat, cycles, classVal);
+  });
 
   Cx r = total * Cx{factorScalar, 0.0};
-  // colour/flavour factors are exact rationals (× generator traces); snap the √3-residual zeros that
-  // the generator-table arithmetic leaves just above 0 (well below any genuine rational magnitude).
-  constexpr double kZeroSnapTol = 1e-9;
-  if (std::fabs(r.re) < kZeroSnapTol) r.re = 0.0;
-  if (std::fabs(r.im) < kZeroSnapTol) r.im = 0.0;
+  snap_zero(r);
   return r;
 }
 
@@ -648,66 +695,11 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
   const SUNDyn &dat = sun_data_for(N);
   const int Adim = N * N - 1;
 
-  // ---- union-find: a delta OR a diagonal-dressing identifies its two indices ----
-  int maxlbl = -1;
-  for (const SUNFac *f : net) {
-    maxlbl = std::max({maxlbl, f->a, f->b});
-    if (f->kind == SUNFacKind::F || f->kind == SUNFacKind::T) maxlbl = std::max(maxlbl, f->c);
-  }
-  // empty net: no factor ⇒ constant-1 polynomial (avoids UnionFind(-1)). In practice unreachable —
-  // sun_value_dressed routes non-diagonal nets to sun_value_cx — but kept symmetric with contract_group.
-  if (maxlbl < 0) return SUNPoly{SUNTerm{Cx{1.0, 0.0}, {}}};
-  UnionFind uf(maxlbl);
-  auto find = [&](int x) { return uf.find(x); };
-  for (const SUNFac *f : net)
-    if (f->kind == SUNFacKind::DeltaAdj || f->kind == SUNFacKind::DeltaFund ||
-        f->kind == SUNFacKind::DiagFund || f->kind == SUNFacKind::DiagAdj)
-      uf.unite(f->a, f->b);
-
-  // ---- classify, recording the per-component dressings sitting on each class ----
-  std::set<int> adjClasses, fClasses, genAdjClasses, fundClasses, genFundClasses;
-  std::vector<std::array<int, 3>> fTriples, gens;
-  // class -> the per-component dressing maps of every diag factor sitting on it. Each map is
-  // component → dressing-id (`-1` = drop that component); the class value is the product over factors.
-  std::map<int, std::vector<const std::vector<int> *>> adjDiag, fundDiag;
-  for (const SUNFac *f : net) {
-    switch (f->kind) {
-    case SUNFacKind::DeltaAdj:
-      adjClasses.insert(find(f->a)); adjClasses.insert(find(f->b));
-      break;
-    case SUNFacKind::F: {
-      const int a = find(f->a), b = find(f->b), c = find(f->c);
-      adjClasses.insert(a); adjClasses.insert(b); adjClasses.insert(c);
-      fClasses.insert(a); fClasses.insert(b); fClasses.insert(c);
-      fTriples.push_back({a, b, c});
-      break;
-    }
-    case SUNFacKind::T: {
-      const int a = find(f->a), i = find(f->b), j = find(f->c);
-      adjClasses.insert(a); genAdjClasses.insert(a);
-      fundClasses.insert(i); fundClasses.insert(j);
-      genFundClasses.insert(i); genFundClasses.insert(j);
-      gens.push_back({a, i, j});
-      break;
-    }
-    case SUNFacKind::DeltaFund:
-      fundClasses.insert(find(f->a)); fundClasses.insert(find(f->b));
-      break;
-    case SUNFacKind::DiagFund: { // diag_fund: δ^{ij} with a per-component fundamental dressing
-      const int i = find(f->a);
-      fundClasses.insert(i); fundClasses.insert(find(f->b));
-      fundDiag[i].push_back(&f->comp2dr);
-      break;
-    }
-    case SUNFacKind::DiagAdj: { // diag_adj: δ^{ab} with a per-component adjoint dressing
-      const int a = find(f->a);
-      adjClasses.insert(a); adjClasses.insert(find(f->b));
-      adjDiag[a].push_back(&f->comp2dr);
-      break;
-    }
-    default: NT_THROW(std::runtime_error, "sun_net: unknown SUNFac kind");
-    }
-  }
+  // a δ OR a diagonal-dressing identifies its two indices; the dressings are recorded per class
+  const GroupClasses g = classify(net, /*withDiag=*/true);
+  // empty net: no factor ⇒ constant-1 polynomial. In practice unreachable — sun_value_dressed routes
+  // non-diagonal nets to sun_value_cx — but kept symmetric with contract_group.
+  if (g.empty) return SUNPoly{SUNTerm{Cx{1.0, 0.0}, {}}};
   // A per-component fundamental dressing on a generator line is NOT handled here: it stays on the
   // cycle and is folded by loop_poly_dressed below. The closed-loop pass just has to leave it alone
   // (it already does — it skips genFundClasses), so there is nothing to reject.
@@ -732,36 +724,32 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
     }
     return fac;
   };
-  for (int c : adjClasses)
-    if (!fClasses.count(c) && !genAdjClasses.count(c)) {
-      auto it = adjDiag.find(c);
-      if (it == adjDiag.end()) factorScalar *= static_cast<double>(Adim);
+  for (int c : g.adjClasses)
+    if (!g.fClasses.count(c) && !g.genAdjClasses.count(c)) {
+      auto it = g.adjDiag.find(c);
+      if (it == g.adjDiag.end()) factorScalar *= static_cast<double>(Adim);
       else closedPoly = poly_mul(closedPoly, diagLoop(Adim, it->second));
     }
-  for (int c : fundClasses)
-    if (!genFundClasses.count(c)) {
-      auto it = fundDiag.find(c);
-      if (it == fundDiag.end()) factorScalar *= static_cast<double>(N);
+  for (int c : g.fundClasses)
+    if (!g.genFundClasses.count(c)) {
+      auto it = g.fundDiag.find(c);
+      if (it == g.fundDiag.end()) factorScalar *= static_cast<double>(N);
       else closedPoly = poly_mul(closedPoly, diagLoop(N, it->second));
     }
 
-  // generator adjoint classes not pinned by an f are summed densely; those also diag-dressed tag.
-  std::vector<int> genOnly;
-  for (int c : genAdjClasses)
-    if (!fClasses.count(c)) genOnly.push_back(c);
-  std::map<int, std::vector<const std::vector<int> *>> asgDiag; // diag-dressed adjoint classes pinned in the assignment
-  for (const auto &kv : adjDiag)
-    if (fClasses.count(kv.first) || genAdjClasses.count(kv.first)) asgDiag[kv.first] = kv.second;
+  // diag-dressed adjoint classes pinned (f-shared) or summed (generator-only) in the assignment
+  std::map<int, std::vector<const std::vector<int> *>> asgDiag;
+  for (const auto &kv : g.adjDiag)
+    if (g.fClasses.count(kv.first) || g.genAdjClasses.count(kv.first)) asgDiag[kv.first] = kv.second;
 
   // ---- fundamental-cycle extraction (generator traces) — shared with contract_group ----
-  const std::vector<std::vector<int>> cycles = extract_cycles_adj(gens);
+  const std::vector<std::vector<int>> cycles = extract_cycles_adj(g.gens);
   // the fundamental classes riding those same cycles, needed only when a diagFund sits on one
-  const std::vector<std::vector<int>> cyclesFund = extract_cycles_fund(gens);
+  const std::vector<std::vector<int>> cyclesFund = extract_cycles_fund(g.gens);
 
-  // ---- assignment sum (sparse f-backtracking + dense gen-only), tagging diag-dressed values ----
+  // ---- assignment sum, tagging diag-dressed values ----
   SUNPoly total; // 0
-  std::map<int, int> classVal; // adjoint class -> its pinned/summed component value
-  auto emit = [&](Cx fProd) {
+  for_each_assignment(dat, g.fTriples, g.genOnly, Adim, [&](Cx fProd, const std::map<int, int> &classVal) {
     std::vector<int> key;
     for (const auto &kv : asgDiag) {
       const int val = classVal.at(kv.first);
@@ -774,42 +762,19 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
     // The generator traces are a POLYNOMIAL now, not a scalar: a diagFund on a cycle tags each
     // fundamental component with its own dressing id. Every cycle term multiplies the adjoint-side
     // key built above.
-    const SUNPoly lp = loop_poly_dressed(dat, N, cycles, cyclesFund, classVal, fundDiag);
+    const SUNPoly lp = loop_poly_dressed(dat, N, cycles, cyclesFund, classVal, g.fundDiag);
     for (const auto &t : lp) {
       std::vector<int> k2 = key;
       k2.insert(k2.end(), t.dress.begin(), t.dress.end());
       poly_add_term(total, fProd * t.coeff, std::move(k2));
     }
-  };
-  auto sumGen = [&](auto &&self, std::size_t gi, Cx fProd) -> void {
-    if (gi == genOnly.size()) { emit(fProd); return; }
-    const int cls = genOnly[gi];
-    for (int v = 0; v < Adim; ++v) { classVal[cls] = v; self(self, gi + 1, fProd); }
-    classVal.erase(cls);
-  };
-  auto sumF = [&](auto &&self, std::size_t fi, Cx fProd) -> void {
-    if (fi == fTriples.size()) { sumGen(sumGen, 0, fProd); return; }
-    const auto [ca, cb, cc] = fTriples[fi];
-    for (const auto &e : dat.f_nz) {
-      auto consistent = [&](int cl, int v) { auto it = classVal.find(cl); return it == classVal.end() || it->second == v; };
-      if (!consistent(ca, e.a) || !consistent(cb, e.b) || !consistent(cc, e.c)) continue;
-      const bool newA = !classVal.count(ca), newB = !classVal.count(cb), newC = !classVal.count(cc);
-      classVal[ca] = e.a; classVal[cb] = e.b; classVal[cc] = e.c;
-      self(self, fi + 1, fProd * Cx{e.v, 0.0});
-      if (newA) classVal.erase(ca);
-      if (newB) classVal.erase(cb);
-      if (newC) classVal.erase(cc);
-    }
-  };
-  sumF(sumF, 0, Cx{1.0, 0.0});
+  });
 
   // ---- combine: (assignment sum) × (closed-loop diag polys) × factorScalar; snap residual zeros ----
   SUNPoly r = poly_mul(total, closedPoly);
-  constexpr double kZeroSnapTol = 1e-9;
   for (auto &t : r) {
     t.coeff = t.coeff * Cx{factorScalar, 0.0};
-    if (std::fabs(t.coeff.re) < kZeroSnapTol) t.coeff.re = 0.0;
-    if (std::fabs(t.coeff.im) < kZeroSnapTol) t.coeff.im = 0.0;
+    snap_zero(t.coeff);
   }
   r.erase(std::remove_if(r.begin(), r.end(), [](const SUNTerm &t) { return t.coeff.re == 0.0 && t.coeff.im == 0.0; }),
           r.end());
