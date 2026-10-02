@@ -38,6 +38,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -386,6 +387,178 @@ namespace numtracer::numeric
       return true;
     }
 
+    /// Keyed product for atom-free operands (see @ref operator*); `nullopt` on a field carry.
+    [[gnu::noinline]] static std::optional<MPoly> mulKeyedAtomFree(const MPoly &a, const MPoly &b)
+    {
+      const std::size_t na = a.terms.size(), nb = b.terms.size();
+      struct Key {
+        std::uint64_t p0, p1;
+        std::uint32_t idx;
+      };
+      gch::small_vector<Key, 16> keys;
+      gch::small_vector<Cx, 16> coeff;
+      keys.reserve(na * nb);
+      coeff.reserve(na * nb);
+      bool carry = false;
+      for (const auto &[ma, ca] : a.terms) {
+        for (const auto &[mb, cb] : b.terms) {
+          std::uint64_t sum[2];
+          for (int word = 0; word < 2; ++word) {
+            const std::uint64_t wa = ma.e.packed[word], wb = mb.e.packed[word];
+            sum[word] = wa + wb;
+            carry |= (((wa & wb) | ((wa | wb) & ~sum[word])) & MonoExp::kFieldTop) != 0;
+          }
+          keys.push_back({sum[0], sum[1], static_cast<std::uint32_t>(keys.size())});
+          coeff.push_back(ca * cb);
+        }
+        if (carry) return std::nullopt;
+      }
+      NT_STAT_ADD(mul_keyed, 1);
+      auto less = [](const Key &x, const Key &y) { return x.p0 != y.p0 ? x.p0 < y.p0 : x.p1 < y.p1; };
+      bool sorted = true;
+      for (std::size_t k = 1; sorted && k < keys.size(); ++k)
+        sorted = less(keys[k - 1], keys[k]);
+      if (!sorted) std::sort(keys.begin(), keys.end(), less);
+      MPoly p(a.nsym);
+      p.terms.reserve(keys.size());
+      std::uint64_t back0 = 0, back1 = 0;
+      for (const Key &k : keys) {
+        const Cx c = coeff[k.idx];
+        if (c.re == 0 && c.im == 0) continue;
+        if (!p.terms.empty() && back0 == k.p0 && back1 == k.p1) {
+          Cx &acc = p.terms.back().second;
+          acc = acc + c;
+          if (acc.re == 0 && acc.im == 0) {
+            p.terms.pop_back();
+            if (!p.terms.empty()) {
+              back0 = p.terms.back().first.e.packed[0];
+              back1 = p.terms.back().first.e.packed[1];
+            }
+          }
+        } else {
+          p.terms.emplace_back();
+          p.terms.back().first.e.packed = {k.p0, k.p1};
+          p.terms.back().second = c;
+          back0 = k.p0;
+          back1 = k.p1;
+        }
+      }
+      return p;
+    }
+
+    /// Keyed product for operands that carry atoms: the distinct merged atom lists are built once and
+    /// ranked in MonoAtoms order, and the key is (packed exponent sum, atom rank), which compares exactly
+    /// like the full monomial. `nullopt` ⇒ use the scratch path (heap exponents, a field carry, or more
+    /// than kMaxLists distinct atom lists in one operand).
+    [[gnu::noinline]] static std::optional<MPoly> mulKeyed(const MPoly &a, const MPoly &b)
+    {
+      constexpr std::size_t kMaxLists = 64;
+      // Distinct atom lists of one operand, and each term's index into them.
+      auto atomLists = [](const MPoly &p, gch::small_vector<const MonoAtoms *, 8> &lists,
+                          gch::small_vector<std::uint32_t, 16> &of) {
+        of.reserve(p.terms.size());
+        for (const auto &kv : p.terms) {
+          if (kv.first.e.overflow) return false;
+          std::size_t x = 0;
+          while (x < lists.size() && !(*lists[x] == kv.first.atoms)) ++x;
+          if (x == lists.size()) {
+            if (lists.size() == kMaxLists) return false;
+            lists.push_back(&kv.first.atoms);
+          }
+          of.push_back(static_cast<std::uint32_t>(x));
+        }
+        return true;
+      };
+      gch::small_vector<const MonoAtoms *, 8> la, lb;
+      gch::small_vector<std::uint32_t, 16> ofA, ofB;
+      if (!atomLists(a, la, ofA) || !atomLists(b, lb, ofB)) return std::nullopt;
+      // Merged multiset for every list pair, ranked by MonoAtoms order (equal lists share a rank).
+      const std::size_t nPairs = la.size() * lb.size();
+      gch::small_vector<MonoAtoms, 1> merged(nPairs);
+      for (std::size_t x = 0; x < la.size(); ++x)
+        for (std::size_t y = 0; y < lb.size(); ++y) {
+          const MonoAtoms &u = *la[x], &v = *lb[y];
+          MonoAtoms &m = merged[x * lb.size() + y];
+          std::size_t i = 0, j = 0;
+          while (i < u.size() && j < v.size()) m.push_back(u[i] <= v[j] ? u[i++] : v[j++]);
+          while (i < u.size()) m.push_back(u[i++]);
+          while (j < v.size()) m.push_back(v[j++]);
+        }
+      gch::small_vector<std::uint32_t, 1> rank(nPairs, 0);
+      if (nPairs > 1) {
+        gch::small_vector<std::uint32_t, 16> order(nPairs);
+        for (std::size_t q = 0; q < nPairs; ++q) order[q] = static_cast<std::uint32_t>(q);
+        std::sort(order.begin(), order.end(), [&](std::uint32_t x, std::uint32_t y) { return merged[x] < merged[y]; });
+        std::uint32_t r = 0;
+        for (std::size_t q = 0; q < nPairs; ++q) {
+          if (q > 0 && merged[order[q - 1]] < merged[order[q]]) ++r;
+          rank[order[q]] = r;
+        }
+      }
+      gch::small_vector<std::uint32_t, 1> repOfRank(nPairs, 0); // one merged list per rank
+      for (std::size_t q = 0; q < nPairs; ++q) repOfRank[rank[q]] = static_cast<std::uint32_t>(q);
+
+      struct Key {
+        std::uint64_t p0, p1;
+        std::uint32_t rank, idx;
+      };
+      const std::size_t na = a.terms.size(), nb = b.terms.size();
+      gch::small_vector<Key, 16> keys;
+      gch::small_vector<Cx, 16> coeff;
+      keys.reserve(na * nb);
+      coeff.reserve(na * nb);
+      for (std::size_t i = 0; i < na; ++i) {
+        const auto &[ma, ca] = a.terms[i];
+        const std::size_t rowA = ofA[i] * lb.size();
+        bool carry = false;
+        for (std::size_t j = 0; j < nb; ++j) {
+          const auto &[mb, cb] = b.terms[j];
+          std::uint64_t sum[2];
+          for (int word = 0; word < 2; ++word) {
+            const std::uint64_t wa = ma.e.packed[word], wb = mb.e.packed[word];
+            sum[word] = wa + wb;
+            carry |= (((wa & wb) | ((wa | wb) & ~sum[word])) & MonoExp::kFieldTop) != 0;
+          }
+          keys.push_back({sum[0], sum[1], rank[rowA + ofB[j]], static_cast<std::uint32_t>(keys.size())});
+          coeff.push_back(ca * cb);
+        }
+        if (carry) return std::nullopt;
+      }
+      NT_STAT_ADD(mul_keyed, 1);
+      auto less = [](const Key &x, const Key &y) {
+        if (x.p0 != y.p0) return x.p0 < y.p0;
+        if (x.p1 != y.p1) return x.p1 < y.p1;
+        return x.rank < y.rank;
+      };
+      bool sorted = true;
+      for (std::size_t k = 1; sorted && k < keys.size(); ++k)
+        sorted = less(keys[k - 1], keys[k]);
+      if (!sorted) std::sort(keys.begin(), keys.end(), less);
+      MPoly p(a.nsym);
+      p.terms.reserve(keys.size());
+      gch::small_vector<const Key *, 16> backKey; // the key of each result term, for the like-term test
+      for (const Key &k : keys) {
+        const Cx c = coeff[k.idx];
+        if (c.re == 0 && c.im == 0) continue;
+        if (!backKey.empty() && backKey.back()->p0 == k.p0 && backKey.back()->p1 == k.p1 &&
+            backKey.back()->rank == k.rank) {
+          Cx &acc = p.terms.back().second;
+          acc = acc + c;
+          if (acc.re == 0 && acc.im == 0) {
+            p.terms.pop_back();
+            backKey.pop_back();
+          }
+          continue;
+        }
+        p.terms.emplace_back();
+        p.terms.back().first.e.packed = {k.p0, k.p1};
+        p.terms.back().first.atoms = merged[repOfRank[k.rank]];
+        p.terms.back().second = c;
+        backKey.push_back(&k);
+      }
+      return p;
+    }
+
     static MPoly constant(int ns, Cx c)
     {
       MPoly p(ns);
@@ -570,6 +743,8 @@ namespace numtracer::numeric
   /// Blocking only REASSOCIATES the like-term sums across chunk boundaries (≤ 1 ulp, exactly as the
   /// already-shipped phase-B tree fold does); the monomial SET is identical.
   inline constexpr std::size_t kMulMaxScratch = std::size_t(1) << 20;
+  /// Smallest product size (`|a|·|b|`) that takes the atom-ranked keyed multiply.
+  inline constexpr std::size_t kMulKeyedMin = 32;
 
   inline MPoly operator*(const MPoly &a, const MPoly &b)
   {
@@ -660,61 +835,12 @@ namespace numtracer::numeric
     // sort permutation and every like-term sum are identical. A field carry (an exponent > 31) needs
     // the heap representation and falls back to the scratch path below.
     if (na * nb <= kMulMaxScratch && MPoly::atomFreeInline(a) && MPoly::atomFreeInline(b)) {
-      struct Key {
-        std::uint64_t p0, p1;
-        std::uint32_t idx;
-      };
-      gch::small_vector<Key, 16> keys;
-      gch::small_vector<Cx, 16> coeff;
-      keys.reserve(na * nb);
-      coeff.reserve(na * nb);
-      bool carry = false;
-      for (const auto &[ma, ca] : a.terms) {
-        for (const auto &[mb, cb] : b.terms) {
-          std::uint64_t sum[2];
-          for (int word = 0; word < 2; ++word) {
-            const std::uint64_t wa = ma.e.packed[word], wb = mb.e.packed[word];
-            sum[word] = wa + wb;
-            carry |= (((wa & wb) | ((wa | wb) & ~sum[word])) & MonoExp::kFieldTop) != 0;
-          }
-          keys.push_back({sum[0], sum[1], static_cast<std::uint32_t>(keys.size())});
-          coeff.push_back(ca * cb);
-        }
-        if (carry) break;
-      }
-      if (!carry) {
-        NT_STAT_ADD(mul_keyed, 1);
-        auto less = [](const Key &x, const Key &y) { return x.p0 != y.p0 ? x.p0 < y.p0 : x.p1 < y.p1; };
-        bool sorted = true;
-        for (std::size_t k = 1; sorted && k < keys.size(); ++k)
-          sorted = less(keys[k - 1], keys[k]);
-        if (!sorted) std::sort(keys.begin(), keys.end(), less);
-        MPoly p(ns);
-        p.terms.reserve(keys.size());
-        std::uint64_t back0 = 0, back1 = 0;
-        for (const Key &k : keys) {
-          const Cx c = coeff[k.idx];
-          if (c.re == 0 && c.im == 0) continue;
-          if (!p.terms.empty() && back0 == k.p0 && back1 == k.p1) {
-            Cx &acc = p.terms.back().second;
-            acc = acc + c;
-            if (acc.re == 0 && acc.im == 0) {
-              p.terms.pop_back();
-              if (!p.terms.empty()) {
-                back0 = p.terms.back().first.e.packed[0];
-                back1 = p.terms.back().first.e.packed[1];
-              }
-            }
-          } else {
-            p.terms.emplace_back();
-            p.terms.back().first.e.packed = {k.p0, k.p1};
-            p.terms.back().second = c;
-            back0 = k.p0;
-            back1 = k.p1;
-          }
-        }
-        return p;
-      }
+      if (auto r = MPoly::mulKeyedAtomFree(a, b)) return std::move(*r);
+    }
+    // Operands carrying atoms: the same keyed product, with the atom multiset ranked (see mulKeyed).
+    // Its setup only pays off on larger products; small ones stay on the scratch path.
+    if (na * nb >= kMulKeyedMin && na * nb <= kMulMaxScratch) {
+      if (auto r = MPoly::mulKeyed(a, b)) return std::move(*r);
     }
 
     if (na * nb <= kMulMaxScratch) { // exact byte-for-byte path — the common case
@@ -851,8 +977,107 @@ namespace numtracer::numeric
     return true;
   }
 
+  /// Keyed form of @ref reduceUnitsRebuild for inline exponents. The rewrite never touches a term's
+  /// atoms, so a work item is its packed exponents plus the index of the source term whose atoms it
+  /// carries, and a Mono is built only per output term. Pushes, pops, the output emission order, the
+  /// sort comparator and the like-term sums are exactly those of the generic rebuild, so the result is
+  /// bit-identical. Returns false (and leaves `r` unspecified) when an exponent would leave the inline
+  /// range; the caller then runs the generic rebuild.
+  inline bool reduceUnitsRebuildKeyed(const MPoly &p, const std::vector<std::vector<int>> &groups, MPoly &r)
+  {
+    for (const auto &g : groups)
+      for (int k : g)
+        if (k >= MonoExp::kInlineSyms) return false;
+    for (const auto &kv : p.terms)
+      if (kv.first.e.overflow) return false;
+    auto field = [](const std::array<std::uint64_t, 2> &w, int k) {
+      return static_cast<int>((w[MonoExp::wordOf(k)] >> MonoExp::shiftOf(k)) & MonoExp::kMaxExp);
+    };
+    auto unit = [](int k) { return std::uint64_t(1) << MonoExp::shiftOf(k); };
+    struct Item {
+      std::array<std::uint64_t, 2> e;
+      std::uint32_t src;
+      Cx c;
+    };
+    struct Key {
+      std::uint64_t p0, p1;
+      std::uint32_t idx;
+    };
+    std::vector<Item> work;
+    work.reserve(p.terms.size());
+    for (std::size_t t = 0; t < p.terms.size(); ++t)
+      work.push_back({p.terms[t].first.e.packed, static_cast<std::uint32_t>(t), p.terms[t].second});
+    std::vector<Key> keys;
+    std::vector<std::uint32_t> outSrc;
+    std::vector<Cx> outC;
+    while (!work.empty()) {
+      NT_STAT_ADD(ru_work, 1);
+      const Item it = work.back();
+      work.pop_back();
+      int groupIdx = -1;
+      for (int gIdx = 0; gIdx < (int)groups.size(); ++gIdx)
+        if (!groups[gIdx].empty() && field(it.e, groups[gIdx].back()) >= 2) {
+          groupIdx = gIdx;
+          break;
+        }
+      if (groupIdx < 0) {
+        keys.push_back({it.e[0], it.e[1], static_cast<std::uint32_t>(keys.size())});
+        outSrc.push_back(it.src);
+        outC.push_back(it.c);
+        continue;
+      }
+      const std::vector<int> &group = groups[groupIdx];
+      const int last = group.back();
+      std::array<std::uint64_t, 2> base = it.e;
+      base[MonoExp::wordOf(last)] -= 2 * unit(last);       // U_last^2 -> 1 - Σ_{μ<last} Uμ^2
+      work.push_back({base, it.src, it.c});                // the "+1" branch
+      for (std::size_t i = 0; i + 1 < group.size(); ++i) { // the "-Uμ^2" branches
+        if (field(base, group[i]) + 2 > MonoExp::kMaxExp) return false;
+        std::array<std::uint64_t, 2> shifted = base;
+        shifted[MonoExp::wordOf(group[i])] += 2 * unit(group[i]);
+        work.push_back({shifted, it.src, Cx{-it.c.re, -it.c.im}});
+      }
+    }
+    auto atomsOf = [&](const Key &k) -> const MonoAtoms & { return p.terms[outSrc[k.idx]].first.atoms; };
+    auto less = [&](const Key &x, const Key &y) {
+      if (x.p0 != y.p0) return x.p0 < y.p0;
+      if (x.p1 != y.p1) return x.p1 < y.p1;
+      return atomsOf(x) < atomsOf(y);
+    };
+    bool sorted = true;
+    for (std::size_t k = 1; sorted && k < keys.size(); ++k)
+      sorted = less(keys[k - 1], keys[k]);
+    if (!sorted) std::sort(keys.begin(), keys.end(), less);
+    NT_STAT_ADD(fs_calls, 1);
+    NT_STAT_ADD(fs_terms_in, keys.size());
+    r = MPolyFactory::zero(p.nsym);
+    r.terms.reserve(keys.size());
+    for (const Key &k : keys) {
+      const Cx c = outC[k.idx];
+      if (c.re == 0 && c.im == 0) continue;
+      if (!r.terms.empty()) {
+        const Mono &back = r.terms.back().first;
+        if (back.e.packed[0] == k.p0 && back.e.packed[1] == k.p1 && back.atoms == atomsOf(k)) {
+          Cx &acc = r.terms.back().second;
+          acc = acc + c;
+          if (acc.re == 0 && acc.im == 0) r.terms.pop_back();
+          continue;
+        }
+      }
+      r.terms.emplace_back();
+      r.terms.back().first.e.packed = {k.p0, k.p1};
+      r.terms.back().first.atoms = atomsOf(k);
+      r.terms.back().second = c;
+    }
+    return true;
+  }
+
   inline MPoly reduceUnitsRebuild(const MPoly &p, const std::vector<std::vector<int>> &groups)
   {
+    {
+      MPoly r;
+      if (reduceUnitsRebuildKeyed(p, groups, r)) return r;
+    }
     MPolyScratch out;
     std::vector<std::tuple<MonoExp, MonoAtoms, Cx>> work;
     for (const auto &[m, c] : p.terms)
