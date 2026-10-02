@@ -15,15 +15,15 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
       CACHE PATH "NumTracer install prefix" FORCE)
 endif()
 
-# Deliberately NO fast-math flags. `-fno-math-errno` measured ~8% faster on the A4 kernel
-# (752 vs 814 ns) and is itself NaN-safe (only skips errno on libm calls), but `-ffast-math`
-# / `-ffinite-math-only` assume no NaN/Inf and silently mask them — unacceptable for fRG
-# kernels where a NaN signals a real problem. Keep the build NaN-honest; the win is small and
-# also speeds the FORM reference, so it does not close the NumTracer-vs-FORM gap anyway.
+# Deliberately NO fast-math flags: `-ffast-math` / `-ffinite-math-only` assume no NaN/Inf and
+# silently mask them — unacceptable for fRG kernels, where a NaN signals a real problem.
+# (`-fno-math-errno` alone is NaN-safe, but its win is small.)
+# -O3 except in Debug builds, so CMAKE_BUILD_TYPE=Debug really is unoptimised.
 # CXX-only: once the GPU tests enable_language(CUDA), these must not leak into nvcc
 # (-march=native is not an nvcc flag; CUDA targets get their own flags below).
 # Directory-scoped, so nothing of it is exported to consumers of the installed package.
-add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-O3;-march=native;-Wall;-Wextra>")
+add_compile_options("$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<NOT:$<CONFIG:Debug>>>:-O3>"
+                    "$<$<COMPILE_LANGUAGE:CXX>:-march=native;-Wall;-Wextra>")
 
 # Opt-in sanitizers for validation builds (off by default; never affects the shipped
 # package). Accepts a semicolon list of sanitizer names, e.g.
@@ -203,50 +203,86 @@ if(NUMTRACER_BUILD_TESTS)
   # the installed package, or nvcc; -Wall -Wextra otherwise stays in force.
   add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter;-Wno-unused-variable>")
 
+  enable_testing()
+
+  # nt_add_exe(<target> <source>... [EXCLUDE_FROM_ALL] [HEADER_ONLY] [INCLUDES <dir>...])
+  #   An executable linked against the compiled engine (NumTracer::NumTracer), or against the
+  #   header-only mode with HEADER_ONLY. INCLUDES are PRIVATE include directories.
+  # nt_add_test(<target> <source>... NAME <test> [HEADER_ONLY] [INCLUDES <dir>...])
+  #   nt_add_exe plus the one ctest that runs it without arguments, so a test binary cannot be
+  #   built but never registered. Binaries backing several tests use nt_add_exe + add_test.
+  function(nt_add_exe target)
+    cmake_parse_arguments(PARSE_ARGV 1 A "EXCLUDE_FROM_ALL;HEADER_ONLY" "" "INCLUDES")
+    set(_efa "")
+    if(A_EXCLUDE_FROM_ALL)
+      set(_efa EXCLUDE_FROM_ALL)
+    endif()
+    add_executable(${target} ${_efa} ${A_UNPARSED_ARGUMENTS})
+    if(A_INCLUDES)
+      target_include_directories(${target} PRIVATE ${A_INCLUDES})
+    endif()
+    if(A_HEADER_ONLY)
+      target_link_libraries(${target} PRIVATE NumTracer::NumTracer_headeronly)
+    else()
+      target_link_libraries(${target} PRIVATE NumTracer::NumTracer)
+    endif()
+  endfunction()
+
+  function(nt_add_test target)
+    cmake_parse_arguments(PARSE_ARGV 1 A "HEADER_ONLY" "NAME" "INCLUDES")
+    if(NOT A_NAME)
+      message(FATAL_ERROR "nt_add_test(${target}): NAME is required")
+    endif()
+    set(_ho "")
+    if(A_HEADER_ONLY)
+      set(_ho HEADER_ONLY)
+    endif()
+    nt_add_exe(${target} ${A_UNPARSED_ARGUMENTS} ${_ho} INCLUDES ${A_INCLUDES})
+    add_test(NAME ${A_NAME} COMMAND ${target})
+  endfunction()
+
   # On-the-fly color-contraction.
   # Both read sun_net_detail (the SU(N) data builder), which only exists where the engine bodies are
   # compiled, so they build header-only.
-  add_executable(sun_contract tests/sun_contract.cpp)
-  target_link_libraries(sun_contract PRIVATE NumTracer::NumTracer_headeronly)
-  add_executable(test_sun_tables tests/test_sun_tables.cpp)
-  target_link_libraries(test_sun_tables PRIVATE NumTracer::NumTracer_headeronly)
+  # f^{acd} f^{bcd} = C_A delta^{ab} = N delta^{ab}: SU(3) from the typed table, SU(5) from the
+  # runtime construction.
+  nt_add_exe(sun_contract tests/sun_contract.cpp HEADER_ONLY)
+  add_test(NAME color_su3 COMMAND sun_contract 3)
+  set_tests_properties(color_su3 PROPERTIES PASS_REGULAR_EXPRESSION "^3\n")
+  add_test(NAME color_su5 COMMAND sun_contract 5)
+  set_tests_properties(color_su5 PROPERTIES PASS_REGULAR_EXPRESSION "^5\n")
+  nt_add_test(test_sun_tables tests/test_sun_tables.cpp NAME sun_tables HEADER_ONLY)
 
   # Numeric (matrix-product) contraction backend (numeric/*): MPoly-entry gamma trace via 4x4
   # matrix products + projector index-sum, vs chiral_gamma_trace and direct numeric contraction;
   # validates the monomial-vs-non-monomial projector-atom cancellation. The Part-B correctness gate.
-  add_executable(test_numeric_contract tests/test_numeric_contract.cpp)
-  target_link_libraries(test_numeric_contract PRIVATE NumTracer::NumTracer)
+  nt_add_test(test_numeric_contract tests/test_numeric_contract.cpp NAME numeric_contract)
 
   # Projector identities for the numeric backend: transverse P_T and longitudinal P_L factors
   # (nprojT / nprojL) checked against the 4x4 oracle and the algebraic identities (P_T+P_L=δ,
   # idempotency, P_T·P_L=0, traces 3/1, transversality/longitudinality).
-  add_executable(test_projector_identity tests/test_projector_identity.cpp)
-  target_link_libraries(test_projector_identity PRIVATE NumTracer::NumTracer)
+  nt_add_test(test_projector_identity tests/test_projector_identity.cpp NAME projector_identity)
 
   # Projector-algebra fusion (ndetail::fuse_projectors): same-momentum projectors sharing a dummy
   # index collapse pre-expansion — idempotency P·P→P / tr P, orthogonality L⟂{T,E,M}, E⟂M → 0;
   # structural folds (all symmetric slot variants, chains, traces, no-op negatives) + value-preserving.
-  add_executable(test_projector_fusion tests/test_projector_fusion.cpp)
-  target_link_libraries(test_projector_fusion PRIVATE NumTracer::NumTracer)
+  nt_add_test(test_projector_fusion tests/test_projector_fusion.cpp NAME projector_fusion)
 
   # Dressing-collection layer (numeric/dpoly.hpp + numeric_value_dressed): DPoly arithmetic, the
   # dressing-free reduction (DPoly == MPoly path, same emitted program), and a dressed quark line
   # collected-vs-distributed. The symbolic-dressing-collection correctness gate.
-  add_executable(test_dpoly tests/test_dpoly.cpp)
-  target_link_libraries(test_dpoly PRIVATE NumTracer::NumTracer)
+  nt_add_test(test_dpoly tests/test_dpoly.cpp NAME dpoly)
 
   # The build-time numeric colour/flavour net (network/sun_net.hpp): fundamental T^a, two groups,
   # vs analytic group factors.
-  add_executable(test_col_numeric tests/test_col_numeric.cpp)
-  target_link_libraries(test_col_numeric PRIVATE NumTracer::NumTracer)
+  nt_add_test(test_col_numeric tests/test_col_numeric.cpp NAME col_numeric)
 
   # THE SUB-TERM DEDUP GATE — the only flow with real sub-term density (~7.5k contractions over ~820
   # distinct traces, 9x redundancy, longest per-net fold ~140). Every other committed flow has exactly
   # ONE sub-term per net, so the dedup's merge / trace cache / tree fold are no-ops there. Grades the
   # dedup-ON kernel against a dedup-OFF (NT_GEN_NO_DEDUP) control generated from the same derivation.
-  add_executable(compare_zaaqbq1_small tests/refshim/compare_zaaqbq1_small.cpp)
-  target_include_directories(compare_zaaqbq1_small PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_zaaqbq1_small PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_zaaqbq1_small tests/refshim/compare_zaaqbq1_small.cpp NAME flow_zaaqbq1_small
+              INCLUDES tests/gen tests/refshim)
 
   # THE GENERAL-FRAME (polyFrameSpec) GATE — the only flow off the unit-loop fast path: externals
   # parametrised by (S0,S1,SPhi) shape coordinates (the with_mesons lambda1L3D class). Minted radical
@@ -254,35 +290,45 @@ if(NUMTRACER_BUILD_TESTS)
   # frame/sign levers touch, covered nowhere else. The two kernels live in per-flow SUBDIRECTORIES of
   # tests/gen because the imaginary-part probe writes one numtrace_verdict.hh per directory (fopen
   # "w") and tests/gen's own verdict file belongs to zaqbq7_147.
-  add_executable(compare_lambda3d_small tests/refshim/compare_lambda3d_small.cpp)
-  target_include_directories(compare_lambda3d_small PRIVATE
-    tests/gen/lambda3d tests/gen/lambda3d_ref tests/refshim)
-  target_link_libraries(compare_lambda3d_small PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_lambda3d_small tests/refshim/compare_lambda3d_small.cpp NAME flow_lambda3d_small
+              INCLUDES tests/gen/lambda3d tests/gen/lambda3d_ref tests/refshim)
 
   # Silent-corruption guards on paths no committed flow exercises: network::add refusing a complex
   # vector-sum coefficient (real-only Elem::vlc), and the empty colour net folding to the identity.
-  add_executable(test_guards tests/test_guards.cpp)
-  target_link_libraries(test_guards PRIVATE NumTracer::NumTracer)
+  nt_add_test(test_guards tests/test_guards.cpp NAME guards)
 
   # The generator's sub-term dedup (numeric/trace_fold.hpp): the balanced tree fold vs the left fold
   # it replaces, and every trace-cache regime. This is the ONLY test that sees the fold: the dedup
   # needs many sub-terms per net, and every flow in tests/gen has exactly one — so the flow tests and
   # even the codegen test are blind to it. Includes a work bound (a botched carry still returns the
   # right VALUE while quietly degenerating back into the left fold, which no value check can see).
-  add_executable(test_trace_fold tests/test_trace_fold.cpp)
-  target_link_libraries(test_trace_fold PRIVATE NumTracer::NumTracer)
-  add_executable(test_poly_cancel tests/test_poly_cancel.cpp)
-  target_link_libraries(test_poly_cancel PRIVATE NumTracer::NumTracer)
+  nt_add_test(test_trace_fold tests/test_trace_fold.cpp NAME trace_fold)
+  nt_add_test(test_poly_cancel tests/test_poly_cancel.cpp NAME poly_cancel)
 
-  add_executable(test_lowering_norm tests/test_lowering_norm.cpp)
-  target_link_libraries(test_lowering_norm PRIVATE NumTracer::NumTracer)
+  nt_add_test(test_lowering_norm tests/test_lowering_norm.cpp NAME lowering_norm)
 
   # The device __noinline__ size gate. It was dead in production twice over, each time silently (a
   # dead gate emits a valid, merely all-inline kernel), so it needs a test that asserts it FIRES.
-  # The gate caches its environment once per process on purpose, so the modes cannot share one — see
-  # the per-mode add_test/ENVIRONMENT block below.
-  add_executable(test_noinline_gate tests/test_noinline_gate.cpp)
-  target_link_libraries(test_noinline_gate PRIVATE NumTracer::NumTracer)
+  # One process per mode: eff_decor reads NT_GEN_DEVICE / NT_GEN_NOINLINE_MIN /
+  # NT_GEN_NOINLINE_TRACES once and caches them, because emission has to be consistent across every
+  # function in a generator run. ENVIRONMENT is set explicitly on every case (including the empty
+  # values on `host`) so an inherited variable in the developer's shell cannot flip a verdict.
+  nt_add_exe(test_noinline_gate tests/test_noinline_gate.cpp)
+  add_test(NAME noinline_gate_host COMMAND test_noinline_gate host)
+  set_tests_properties(noinline_gate_host PROPERTIES
+    ENVIRONMENT "NT_GEN_DEVICE=;NT_GEN_NOINLINE_MIN=;NT_GEN_NOINLINE_TRACES=")
+  add_test(NAME noinline_gate_fires COMMAND test_noinline_gate fires)
+  set_tests_properties(noinline_gate_fires PROPERTIES
+    ENVIRONMENT "NT_GEN_DEVICE=1;NT_GEN_NOINLINE_MIN=;NT_GEN_NOINLINE_TRACES=")
+  add_test(NAME noinline_gate_min0 COMMAND test_noinline_gate min0)
+  set_tests_properties(noinline_gate_min0 PROPERTIES
+    ENVIRONMENT "NT_GEN_DEVICE=1;NT_GEN_NOINLINE_MIN=0;NT_GEN_NOINLINE_TRACES=")
+  add_test(NAME noinline_gate_off COMMAND test_noinline_gate off)
+  set_tests_properties(noinline_gate_off PROPERTIES
+    ENVIRONMENT "NT_GEN_DEVICE=1;NT_GEN_NOINLINE_MIN=off;NT_GEN_NOINLINE_TRACES=")
+  add_test(NAME noinline_gate_forced COMMAND test_noinline_gate forced)
+  set_tests_properties(noinline_gate_forced PROPERTIES
+    ENVIRONMENT "NT_GEN_DEVICE=;NT_GEN_NOINLINE_MIN=;NT_GEN_NOINLINE_TRACES=1")
 
   # The rank-1 electric projector against the dense one, through the real contraction. The identity
   # is exact on paper; this asserts the ENGINE agrees, which is a different claim (different
@@ -291,92 +337,75 @@ if(NUMTRACER_BUILD_TESTS)
   # NUMTRACER_DEFINE_BODIES (they are engine internals, not exported entry points), and this test
   # has to reach both forms in ONE process. The header-only mode exists for exactly this and needs
   # no widening of the library's export surface.
-  add_executable(test_rank1_proje tests/test_rank1_proje.cpp)
-  target_link_libraries(test_rank1_proje PRIVATE NumTracer::NumTracer_headeronly)
+  nt_add_test(test_rank1_proje tests/test_rank1_proje.cpp NAME rank1_proje HEADER_ONLY)
 
   # Phase-2 example 2: pion <- quark loop -> pion (Yukawa) — fundamental flavour x Dirac x colour.
-  add_executable(compare_pion_quark tests/refshim/compare_pion_quark.cpp)
-  target_include_directories(compare_pion_quark PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_pion_quark PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_pion_quark tests/refshim/compare_pion_quark.cpp NAME flow_pion_quark
+              INCLUDES tests/gen tests/refshim)
 
   # Phase-2 example 3: gluon <- quark loop -> gluon — fundamental colour via the numeric path.
-  add_executable(compare_glu_quark tests/refshim/compare_glu_quark.cpp)
-  target_include_directories(compare_glu_quark PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_glu_quark PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_glu_quark tests/refshim/compare_glu_quark.cpp NAME flow_glu_quark
+              INCLUDES tests/gen tests/refshim)
 
-  add_executable(compare_zaqbq1 tests/refshim/compare_zaqbq1.cpp)
-  target_include_directories(compare_zaqbq1 PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_zaqbq1 PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_zaqbq1 tests/refshim/compare_zaqbq1.cpp NAME flow_zaqbq1
+              INCLUDES tests/gen tests/refshim)
 
   # Assembled quark-gluon vertex flow, structures {1,4,7}, vs the FormTracer oracles, graded
   # ANGLE-INTEGRATED (a loop-routing difference is odd and cancels in the integral, so only the
   # integrated value is physical). Supersedes the never-wired pointwise compare_aqbq147.cpp.
-  add_executable(compare_aqbq147_int tests/refshim/compare_aqbq147_int.cpp)
-  target_include_directories(compare_aqbq147_int PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_aqbq147_int PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_aqbq147_int tests/refshim/compare_aqbq147_int.cpp NAME flow_aqbq147_int
+              INCLUDES tests/gen tests/refshim)
 
   # Symbolic dressing collection: collected Zq (DressingCollection -> True) vs the distributed Zq.
-  add_executable(compare_zq_collect tests/refshim/compare_zq_collect.cpp)
-  target_include_directories(compare_zq_collect PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_zq_collect PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_zq_collect tests/refshim/compare_zq_collect.cpp NAME flow_zq_collect
+              INCLUDES tests/gen tests/refshim)
 
   # NUMERIC (matrix-product) backend validation: ZA gluon self-energy vs the FORM oracle; ZA3 quark
   # triangle vs the FORM oracle (the headline — generates in seconds at <0.4 GB where the inv path OOMs).
-  add_executable(compare_za_num tests/refshim/compare_za_num.cpp)
-  target_include_directories(compare_za_num PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_za_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_za_num tests/refshim/compare_za_num.cpp NAME flow_za_num
+              INCLUDES tests/gen tests/refshim)
 
-  add_executable(compare_za3_num tests/refshim/compare_za3_num.cpp)
-  target_include_directories(compare_za3_num PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_za3_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_za3_num tests/refshim/compare_za3_num.cpp NAME flow_za3_num
+              INCLUDES tests/gen tests/refshim)
 
   # pure-YM ghost-gluon vertex: numeric vs the FORM oracle. Guards the disconnected-Lorentz-component
   # (product-not-sum) codegen bug — the only flow with such a diagram.
-  add_executable(compare_zacbc_num tests/refshim/compare_zacbc_num.cpp)
-  target_include_directories(compare_zacbc_num PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_zacbc_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_zacbc_num tests/refshim/compare_zacbc_num.cpp NAME flow_zacbc_num
+              INCLUDES tests/gen tests/refshim)
 
   # ZA3 with the FULL quark-gluon vertex {1,4,7} tensor basis (the dense struct-7 case). Gate for the
   # struct-7 codegen fix: with ZAqbq4=ZAqbq7=0 the 1/4/7 numeric kernel must reduce EXACTLY to the
   # FORM-validated struct-1 numeric kernel (ZA3_num_kernel), and differ from it with the real 4/7
   # dressings. (A full oracle is impractical at this size; the struct-1 kernel is the trusted reference.)
-  add_executable(compare_za3_147_num tests/refshim/compare_za3_147_num.cpp)
-  target_include_directories(compare_za3_147_num PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_za3_147_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_za3_147_num tests/refshim/compare_za3_147_num.cpp NAME flow_za3_147_num
+              INCLUDES tests/gen tests/refshim)
 
   # ZA3 1/4/7 numeric vs the copied FormTracer oracle (independent physical check of structures 4/7).
-  add_executable(compare_za3_147_form tests/refshim/compare_za3_147_form.cpp)
-  target_include_directories(compare_za3_147_form PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_za3_147_form PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_za3_147_form tests/refshim/compare_za3_147_form.cpp NAME flow_za3_147_form
+              INCLUDES tests/gen tests/refshim)
 
   # etaPiL pion anomalous dimension: numeric kernel vs the copied FormTracer oracle (independent
   # tensor-trace engines on the same pion two-point wave-function loop).
-  add_executable(compare_etapil_form tests/refshim/compare_etapil_form.cpp)
-  target_include_directories(compare_etapil_form PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_etapil_form PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_etapil_form tests/refshim/compare_etapil_form.cpp NAME flow_etapil_form
+              INCLUDES tests/gen tests/refshim)
 
   # ns/eval timing of the 1/4/7 numeric kernel vs the FORM oracle (build on demand: not a pass/fail
   # test). `cmake --build build --target bench_147 && ./build/bench_147` reproduces the README numbers.
-  add_executable(bench_147 EXCLUDE_FROM_ALL tests/refshim/bench_147.cpp)
-  target_include_directories(bench_147 PRIVATE tests/gen tests/refshim)
-  target_link_libraries(bench_147 PRIVATE NumTracer::NumTracer)
+  nt_add_exe(bench_147 tests/refshim/bench_147.cpp EXCLUDE_FROM_ALL INCLUDES tests/gen tests/refshim)
 
   # The other benchmark, wired the same way. EXCLUDE_FROM_ALL keeps it off the default build;
   # naming it here keeps it compiling (a source that is never built rots silently).
-  add_executable(bench_aqbq147 EXCLUDE_FROM_ALL tests/refshim/bench_aqbq147.cpp)
-  target_include_directories(bench_aqbq147 PRIVATE tests/gen tests/refshim)
-  target_link_libraries(bench_aqbq147 PRIVATE NumTracer::NumTracer)
+  nt_add_exe(bench_aqbq147 tests/refshim/bench_aqbq147.cpp EXCLUDE_FROM_ALL
+             INCLUDES tests/gen tests/refshim)
 
-  add_executable(compare_za4_num tests/refshim/compare_za4_num.cpp)
-  target_include_directories(compare_za4_num PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_za4_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_za4_num tests/refshim/compare_za4_num.cpp NAME flow_za4_num
+              INCLUDES tests/gen tests/refshim)
 
   # Pure-GAUGE ZA4: the topologies compare_za4_num.cpp does NOT cover (it is the QCD quark box).
   # Grades the ZA3^4 box, ZA3^2.ZA4 triangle, ZA4^2 bubble and ghost box SEPARATELY by polynomial
   # subtraction — a full-strength compare is dominated by the box and hides the others.
-  add_executable(compare_ym_za4_num tests/refshim/compare_ym_za4_num.cpp)
-  target_include_directories(compare_ym_za4_num PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_ym_za4_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_ym_za4_num tests/refshim/compare_ym_za4_num.cpp NAME flow_ym_za4_num
+              INCLUDES tests/gen tests/refshim)
 
   # ZA4 (four-gluon box, quark loop) with the FULL {1,4,7} vertex — the heaviest 1/4/7 target, made
   # tractable by the σ^{μν} commutator fold (~14 min generation vs the multi-hour unfolded contraction).
@@ -388,53 +417,44 @@ if(NUMTRACER_BUILD_TESTS)
   # FORM-validated ZA4_num_kernel (measured max rel err 8.3e-12), and differ with the real 4/7 dressings.
   option(NUMTRACER_BUILD_ZA4_147 "Build the ZA4 1/4/7 struct-reduction test (heavy ~5.3MB committed kernel)" OFF)
   if(NUMTRACER_BUILD_ZA4_147 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/gen/ZA4_147_num_kernel.hh")
-    add_executable(compare_za4_147_num tests/refshim/compare_za4_147_num.cpp)
-    target_include_directories(compare_za4_147_num PRIVATE tests/gen tests/refshim)
-    target_link_libraries(compare_za4_147_num PRIVATE NumTracer::NumTracer)
-    add_test(NAME flow_za4_147_num COMMAND compare_za4_147_num)
+    nt_add_test(compare_za4_147_num tests/refshim/compare_za4_147_num.cpp NAME flow_za4_147_num
+                INCLUDES tests/gen tests/refshim)
   endif()
 
-  add_executable(compare_zq_num tests/refshim/compare_zq_num.cpp)
-  target_include_directories(compare_zq_num PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_zq_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_zq_num tests/refshim/compare_zq_num.cpp NAME flow_zq_num
+              INCLUDES tests/gen tests/refshim)
 
   # Per-flavour dressings: dressing the u-quark and d-quark DIFFERENTLY (broken flavour symmetry).
   # Two explicit flavour loops, each with its own runtime dressing (Gu/Gd, GuDot/GdDot) and NO
   # SU(Nf) flavour group; numeric kernel vs the FORM oracle + the per-flavour independence/breaking
   # checks (kernels generated by tests/gen/gen_flavour_split.wls).
-  add_executable(compare_flavour_split tests/refshim/compare_flavour_split.cpp)
-  target_include_directories(compare_flavour_split PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_flavour_split PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_flavour_split tests/refshim/compare_flavour_split.cpp NAME flow_flavour_split
+              INCLUDES tests/gen tests/refshim)
 
   # Per-component (group-diagonal) dressings: dress u/d differently WITHIN the SU(2) flavour group
   # (no per-flavour diagram split). Validated by exact equivalence to flow_flavour_split (the
   # separate-diagram kernel), so no external oracle is needed (kernels by gen/gen_flavour_ingroup.wls).
-  add_executable(compare_flavour_ingroup tests/refshim/compare_flavour_ingroup.cpp)
-  target_include_directories(compare_flavour_ingroup PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_flavour_ingroup PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_flavour_ingroup tests/refshim/compare_flavour_ingroup.cpp
+              NAME flow_flavour_ingroup INCLUDES tests/gen tests/refshim)
 
   # A FUNDAMENTAL flavour index with NO flavour generators anywhere (a kaon-like doublet). The only
   # flow whose flavour deltas form a WEB the blind contraction cannot close, so the only one that
   # exercises promoteFlavResidue handing the residue to the SU(N) engine. Validated by exact
   # equivalence between the plain deltaFundFlav spelling and the Sqrt[2 Nf] TFlav[0,..] spelling of
   # the same object, so no external oracle is needed (kernels by gen/gen_kaon_tadpole.wls).
-  add_executable(compare_kaon_tadpole tests/refshim/compare_kaon_tadpole.cpp)
-  target_include_directories(compare_kaon_tadpole PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_kaon_tadpole PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_kaon_tadpole tests/refshim/compare_kaon_tadpole.cpp NAME flow_kaon_tadpole
+              INCLUDES tests/gen tests/refshim)
 
   # Per-component ADJOINT dressing (gluon condensation): an SU(3)-adjoint line dressed component-by-
   # component (Z_A^a, 8 components) folded through the group. Validated by the collapse property
   # (all components equal == the colour-blind kernel) + per-component breaking — no external oracle
   # needed (kernels by gen/gen_gluon_condensate.wls).
-  add_executable(compare_gluon_condensate tests/refshim/compare_gluon_condensate.cpp)
-  target_include_directories(compare_gluon_condensate PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_gluon_condensate PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_gluon_condensate tests/refshim/compare_gluon_condensate.cpp
+              NAME flow_gluon_condensate INCLUDES tests/gen tests/refshim)
 
   # Longitudinal-projector codegen gate: numeric backend vs a direct analytic oracle for a hand-built
   # net mixing ntLongProj + ntTransProj (kernel generated by tests/gen/gen_proj_numeric.wls).
-  add_executable(compare_proj_num tests/compare_proj_num.cpp)
-  target_include_directories(compare_proj_num PRIVATE tests/gen)
-  target_link_libraries(compare_proj_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_proj_num tests/compare_proj_num.cpp NAME proj_num INCLUDES tests/gen)
 
   # Multi-term (Plus) Dirac projector codegen gate: numeric backend vs a direct analytic oracle for a
   # hand-built net whose projector is an EAGER Plus of MIXED gamma parity (branches with 0 and 1 γ),
@@ -442,17 +462,14 @@ if(NUMTRACER_BUILD_TESTS)
   # odd-trace filter in DSL.m: judging parity on the DIAGRAM-GLOBAL γ count discarded the whole
   # diagram (global count 3 → odd) along with its non-vanishing even branch, silently emitting an
   # identically-zero kernel. The verdict must be per-branch — drop only when EVERY branch is odd.
-  add_executable(compare_multiterm_proj_num tests/compare_multiterm_proj_num.cpp)
-  target_include_directories(compare_multiterm_proj_num PRIVATE tests/gen)
-  target_link_libraries(compare_multiterm_proj_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_multiterm_proj_num tests/compare_multiterm_proj_num.cpp NAME multiterm_proj_num
+              INCLUDES tests/gen)
 
   # Four-quark Fierz orthonormality on a REAL basis (FierzCompleteNf2Nc3NJL), kernel from
   # tests/gen/gen_fierz_ortho_numeric.wls. The only gate with TWO independent spinor lines, and the
   # only one exercising the SU(N) Levi-Civita contraction (colour AND flavour) on physics input --
   # including an epsilon pair straddling an eager Plus in the diquark vertex.
-  add_executable(compare_fierz_ortho tests/compare_fierz_ortho.cpp)
-  target_include_directories(compare_fierz_ortho PRIVATE tests/gen)
-  target_link_libraries(compare_fierz_ortho PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_fierz_ortho tests/compare_fierz_ortho.cpp NAME fierz_ortho INCLUDES tests/gen)
 
   # Fixed-Lorentz-component gate (gamma^0 & co, the finite-T 3+1 split the four-quark Fierz bases are
   # written in), kernels from tests/gen/gen_fixedcomp_numeric.wls. A fixed component is an index
@@ -460,25 +477,19 @@ if(NUMTRACER_BUILD_TESTS)
   # contraction label and checkLabels aborted with privclash. NumTrace now rewrites it into a
   # contraction with the constant unit basis vector e_i (an ordinary slash), so this gate also pins
   # 0-based component indexing and equivalence with the explicit-unit-vector formulation.
-  add_executable(compare_fixedcomp_num tests/compare_fixedcomp_num.cpp)
-  target_include_directories(compare_fixedcomp_num PRIVATE tests/gen)
-  target_link_libraries(compare_fixedcomp_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_fixedcomp_num tests/compare_fixedcomp_num.cpp NAME fixedcomp_num INCLUDES tests/gen)
 
   # Projector-orthonormality gate: <P_i,V_j> = delta_ij over a whole tensor basis, contracted against
   # a distinct-prime weight matrix so one scalar covers all n^2 pairs (kernel generated by
   # tests/gen/gen_ortho_numeric.wls). The real-physics counterpart of the hand-built gates: the
   # multi-term-projector bug made <P_7,T_7> trace to an identically-zero kernel, which shows up here
   # as a deficit of exactly that pair's weight.
-  add_executable(compare_ortho_num tests/compare_ortho_num.cpp)
-  target_include_directories(compare_ortho_num PRIVATE tests/gen)
-  target_link_libraries(compare_ortho_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_ortho_num tests/compare_ortho_num.cpp NAME ortho_num INCLUDES tests/gen)
 
   # Finite-temperature codegen gate: numeric backend vs a direct analytic oracle for a hand-built
   # finite-T net exercising ntElectricProj/ntMagneticProj/ntTransProj + ntSPS + ntVec[q,0] over
   # propFrameFT (kernel generated by tests/gen/gen_ftproj_numeric.wls).
-  add_executable(compare_ftproj_num tests/compare_ftproj_num.cpp)
-  target_include_directories(compare_ftproj_num PRIVATE tests/gen)
-  target_link_libraries(compare_ftproj_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_ftproj_num tests/compare_ftproj_num.cpp NAME ftproj_num INCLUDES tests/gen)
 
   # Finite-T ELECTRIC/MAGNETIC VERTEX SPLIT gate (kernels from tests/gen/gen_emvertex_numeric.wls).
   # Where ftproj_num puts one electric and one magnetic projector on the SAME momentum, this puts
@@ -489,9 +500,7 @@ if(NUMTRACER_BUILD_TESTS)
   # graded against. The independence is in the second identity: its two sides are lowered through
   # different leaves (transverse, 1/q^2 atoms, against electric+magnetic, 1/|q_vec|^2) and must
   # still agree exactly.
-  add_executable(compare_emvertex_num tests/compare_emvertex_num.cpp)
-  target_include_directories(compare_emvertex_num PRIVATE tests/gen)
-  target_link_libraries(compare_emvertex_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_emvertex_num tests/compare_emvertex_num.cpp NAME emvertex_num INCLUDES tests/gen)
 
   # Finite-T SPATIAL VECTOR gate (kernels from tests/gen/gen_spatialvec_numeric.wls): FormTracer's
   # `vecs[q,mu]` acronym and the spatial pslash `vecs[q,mu] gamma[mu,d1,d2]`, which NumTracer routes
@@ -500,18 +509,15 @@ if(NUMTRACER_BUILD_TESTS)
   # ntSPS, this covers the spatial VECTOR: barred and unbarred legs interleaved in one Dirac trace, a
   # composite spatial momentum (the linearity push), and a zero identity tying the ntSPS scalar path
   # to the ntSpatialVec engine path — the two must agree.
-  add_executable(compare_spatialvec_num tests/compare_spatialvec_num.cpp)
-  target_include_directories(compare_spatialvec_num PRIVATE tests/gen)
-  target_link_libraries(compare_spatialvec_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_spatialvec_num tests/compare_spatialvec_num.cpp NAME spatialvec_num
+              INCLUDES tests/gen)
 
   # Disconnected Dirac x Lorentz codegen gate: numeric backend vs a direct analytic oracle for a
   # hand-built net whose diagrams factorize into a closed Dirac trace, a constant colour trace, and an
   # index-disjoint pure-Lorentz scalar that MULTIPLY (kernel generated by tests/gen/gen_discdirac_numeric.wls).
   # The regression guard for MakeNTKernel::disconnectmix (the hSigL sigma-quark vertex): the numeric
   # backend factors the disconnected Lorentz scalar as its own trace and multiplies it in.
-  add_executable(compare_discdirac_num tests/compare_discdirac_num.cpp)
-  target_include_directories(compare_discdirac_num PRIVATE tests/gen)
-  target_link_libraries(compare_discdirac_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_discdirac_num tests/compare_discdirac_num.cpp NAME discdirac_num INCLUDES tests/gen)
 
   # COMPLEX x MULTI-TRACE codegen gate (kernel generated by tests/gen/gen_cplxdisc_numeric.wls).
   # Every multi-trace flow above is REAL, so MakeNTKernel emits one body for it and neither real
@@ -521,16 +527,14 @@ if(NUMTRACER_BUILD_TESTS)
   # TWO sources on purpose: the three bodies live behind `#if <FLOW>_VERDICT` in one header, so the
   # oracle TU compiles it a second time with the verdict forced to 0 to instantiate the untouched
   # complex body. See the comment at the top of compare_cplxdisc_num.cpp.
-  add_executable(compare_cplxdisc_num tests/compare_cplxdisc_num.cpp tests/compare_cplxdisc_num_oracle.cpp)
-  target_include_directories(compare_cplxdisc_num PRIVATE tests/gen)
-  target_link_libraries(compare_cplxdisc_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_cplxdisc_num tests/compare_cplxdisc_num.cpp tests/compare_cplxdisc_num_oracle.cpp
+              NAME cplxdisc_num INCLUDES tests/gen)
 
   # SINGLE-PRECISION codegen gate: the cplxdisc flow emitted with "ComputeType" -> "float", graded
   # against the double complex body. -Wdouble-promotion -Werror on the float TU turns any double left
   # in the emitted kernel into a build failure.
-  add_executable(compare_cplxdisc_float tests/compare_cplxdisc_float.cpp tests/compare_cplxdisc_num_oracle.cpp)
-  target_include_directories(compare_cplxdisc_float PRIVATE tests/gen)
-  target_link_libraries(compare_cplxdisc_float PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_cplxdisc_float tests/compare_cplxdisc_float.cpp tests/compare_cplxdisc_num_oracle.cpp
+              NAME cplxdisc_float INCLUDES tests/gen)
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     set_source_files_properties(tests/compare_cplxdisc_float.cpp
       PROPERTIES COMPILE_OPTIONS "-Wdouble-promotion;-Werror=double-promotion")
@@ -546,11 +550,10 @@ if(NUMTRACER_BUILD_TESTS)
   # it again with the verdict forced to 0 (untouched complex body = the correct-by-construction
   # oracle), and a third TU compiles the "RealOutput" -> True twin, which drops that complex body
   # altogether. This flow probes verdict 0, so it is also the only gate on what RealOutput does there.
-  add_executable(compare_cplxrt_num tests/compare_cplxrt_num.cpp tests/compare_cplxrt_num_oracle.cpp
-                                    tests/compare_cplxrt_num_realoutput.cpp
-                                    tests/compare_cplxrt_num_endproj.cpp)
-  target_include_directories(compare_cplxrt_num PRIVATE tests/gen)
-  target_link_libraries(compare_cplxrt_num PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_cplxrt_num tests/compare_cplxrt_num.cpp tests/compare_cplxrt_num_oracle.cpp
+                                 tests/compare_cplxrt_num_realoutput.cpp
+                                 tests/compare_cplxrt_num_endproj.cpp
+              NAME cplxrt_num INCLUDES tests/gen)
   # The RealOutput kernel deliberately carries a #warning for the verdict-0 truncation, and that TU
   # exists precisely to compile it. Silence it there only, so an intentional warning does not read as
   # a defect — and so -Werror builds are still possible. The two compilers spell it differently and
@@ -569,90 +572,15 @@ if(NUMTRACER_BUILD_TESTS)
   # orderDiracFacs undirected-walk fix: the old directed walk collapsed this δ-closed loop to a single
   # γ5 → tr(γ5)=0. Numeric (gamma-trace theorem) vs a direct analytic oracle for the closed-form trace
   # (l1·p1)·G(l1²)·G(p²), which is non-vanishing (kernel generated by tests/gen/gen_sigl_dirac.wls).
-  add_executable(compare_sigl_dirac tests/refshim/compare_sigl_dirac.cpp)
   # tests/refshim for nt_regulators.hpp (the kernel calls RF unqualified), not for the shim.
-  target_include_directories(compare_sigl_dirac PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_sigl_dirac PRIVATE NumTracer::NumTracer)
+  nt_add_test(compare_sigl_dirac tests/refshim/compare_sigl_dirac.cpp NAME flow_sigl_dirac
+              INCLUDES tests/gen tests/refshim)
 
   # Finite-temperature quark self-energy (hand-coded, dependency-free): the numeric engine contracts
   # the closed Dirac trace tr[(γ·p) γ^μ (γ·q) γ^ν] against the finite-T gluon line
   # ZAE·P_E(l) + ZAM·P_M(l) in the heat-bath frame (p0 = πT), checked against the closed-form trace
   # identity oracle.
-  add_executable(test_finiteT_quark tests/test_finiteT_quark.cpp)
-  target_link_libraries(test_finiteT_quark PRIVATE NumTracer::NumTracer)
-
-  enable_testing()
-  add_test(NAME numeric_contract COMMAND test_numeric_contract)
-  add_test(NAME dpoly COMMAND test_dpoly)
-  add_test(NAME flow_zq_collect COMMAND compare_zq_collect)
-  add_test(NAME projector_identity COMMAND test_projector_identity)
-  add_test(NAME projector_fusion COMMAND test_projector_fusion)
-  add_test(NAME proj_num COMMAND compare_proj_num)
-  add_test(NAME multiterm_proj_num COMMAND compare_multiterm_proj_num)
-  add_test(NAME fierz_ortho COMMAND compare_fierz_ortho)
-  add_test(NAME ortho_num COMMAND compare_ortho_num)
-  add_test(NAME fixedcomp_num COMMAND compare_fixedcomp_num)
-  add_test(NAME ftproj_num COMMAND compare_ftproj_num)
-  add_test(NAME emvertex_num COMMAND compare_emvertex_num)
-  add_test(NAME spatialvec_num COMMAND compare_spatialvec_num)
-  add_test(NAME discdirac_num COMMAND compare_discdirac_num)
-  add_test(NAME cplxdisc_num COMMAND compare_cplxdisc_num)
-  add_test(NAME cplxdisc_float COMMAND compare_cplxdisc_float)
-  add_test(NAME cplxrt_num COMMAND compare_cplxrt_num)
-  add_test(NAME flow_sigl_dirac COMMAND compare_sigl_dirac)
-  add_test(NAME finiteT_quark COMMAND test_finiteT_quark)
-  add_test(NAME col_numeric COMMAND test_col_numeric)
-  add_test(NAME guards COMMAND test_guards)
-  add_test(NAME trace_fold COMMAND test_trace_fold)
-  add_test(NAME poly_cancel COMMAND test_poly_cancel)
-  add_test(NAME lowering_norm COMMAND test_lowering_norm)
-
-  # One process per mode: eff_decor reads NT_GEN_DEVICE / NT_GEN_NOINLINE_MIN /
-  # NT_GEN_NOINLINE_TRACES once and caches them, because emission has to be consistent across every
-  # function in a generator run. ENVIRONMENT is set explicitly on every case (including the empty
-  # values on `host`) so an inherited variable in the developer's shell cannot flip a verdict.
-  add_test(NAME rank1_proje COMMAND test_rank1_proje)
-  add_test(NAME noinline_gate_host COMMAND test_noinline_gate host)
-  set_tests_properties(noinline_gate_host PROPERTIES
-    ENVIRONMENT "NT_GEN_DEVICE=;NT_GEN_NOINLINE_MIN=;NT_GEN_NOINLINE_TRACES=")
-  add_test(NAME noinline_gate_fires COMMAND test_noinline_gate fires)
-  set_tests_properties(noinline_gate_fires PROPERTIES
-    ENVIRONMENT "NT_GEN_DEVICE=1;NT_GEN_NOINLINE_MIN=;NT_GEN_NOINLINE_TRACES=")
-  add_test(NAME noinline_gate_min0 COMMAND test_noinline_gate min0)
-  set_tests_properties(noinline_gate_min0 PROPERTIES
-    ENVIRONMENT "NT_GEN_DEVICE=1;NT_GEN_NOINLINE_MIN=0;NT_GEN_NOINLINE_TRACES=")
-  add_test(NAME noinline_gate_off COMMAND test_noinline_gate off)
-  set_tests_properties(noinline_gate_off PROPERTIES
-    ENVIRONMENT "NT_GEN_DEVICE=1;NT_GEN_NOINLINE_MIN=off;NT_GEN_NOINLINE_TRACES=")
-  add_test(NAME noinline_gate_forced COMMAND test_noinline_gate forced)
-  set_tests_properties(noinline_gate_forced PROPERTIES
-    ENVIRONMENT "NT_GEN_DEVICE=;NT_GEN_NOINLINE_MIN=;NT_GEN_NOINLINE_TRACES=1")
-  add_test(NAME flow_zaaqbq1_small COMMAND compare_zaaqbq1_small)
-  add_test(NAME flow_lambda3d_small COMMAND compare_lambda3d_small)
-  add_test(NAME flow_zaqbq1 COMMAND compare_zaqbq1)
-  add_test(NAME flow_aqbq147_int COMMAND compare_aqbq147_int)
-  add_test(NAME flow_pion_quark COMMAND compare_pion_quark)
-  add_test(NAME flow_glu_quark COMMAND compare_glu_quark)
-  add_test(NAME flow_za_num COMMAND compare_za_num)
-  add_test(NAME flow_za3_num COMMAND compare_za3_num)
-  add_test(NAME flow_zacbc_num COMMAND compare_zacbc_num)
-  add_test(NAME flow_za3_147_num COMMAND compare_za3_147_num)
-  add_test(NAME flow_za3_147_form COMMAND compare_za3_147_form)
-  add_test(NAME flow_etapil_form COMMAND compare_etapil_form)
-  add_test(NAME flow_za4_num COMMAND compare_za4_num)
-  add_test(NAME flow_ym_za4_num COMMAND compare_ym_za4_num)
-  add_test(NAME flow_zq_num COMMAND compare_zq_num)
-  add_test(NAME flow_flavour_split COMMAND compare_flavour_split)
-  add_test(NAME flow_flavour_ingroup COMMAND compare_flavour_ingroup)
-  add_test(NAME flow_kaon_tadpole COMMAND compare_kaon_tadpole)
-  add_test(NAME flow_gluon_condensate COMMAND compare_gluon_condensate)
-  # f^{acd} f^{bcd} = C_A delta^{ab} = N delta^{ab}: SU(3) from the typed table, SU(5) from the
-  # runtime construction.
-  add_test(NAME color_su3 COMMAND sun_contract 3)
-  set_tests_properties(color_su3 PROPERTIES PASS_REGULAR_EXPRESSION "^3\n")
-  add_test(NAME color_su5 COMMAND sun_contract 5)
-  set_tests_properties(color_su5 PROPERTIES PASS_REGULAR_EXPRESSION "^5\n")
-  add_test(NAME sun_tables COMMAND test_sun_tables)
+  nt_add_test(test_finiteT_quark tests/test_finiteT_quark.cpp NAME finiteT_quark)
 
   # ---- Wolfram UNIT tests (fast, not opt-in) ---------------------------------------------------
   # Pure symbolic checks over mathematica/ that need no generation, no C++ and no compile, so they
@@ -762,7 +690,6 @@ if(NUMTRACER_BUILD_TESTS)
   option(NUMTRACER_TEST_CODEGEN
          "Add a ctest that regenerates the kernels via Wolfram and re-runs the flow tests (slow)" OFF)
   if(NUMTRACER_TEST_CODEGEN)
-    find_program(NT_WOLFRAM_EXE NAMES wolfram wolframscript math)
     if(NOT NT_WOLFRAM_EXE)
       message(WARNING "NUMTRACER_TEST_CODEGEN=ON but no Wolfram kernel found; skipping the codegen test")
     else()
