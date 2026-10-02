@@ -81,6 +81,10 @@ target_link_libraries(NumTracer PUBLIC Threads::Threads)
 target_include_directories(NumTracer PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
+# No FMA contraction in the engine: with it, -march=native decides which products fuse, so the
+# coefficients the generator emits depended on the build machine. Measured cost-neutral on the
+# generator run. PRIVATE: consumers compile their kernels with their own flags.
+target_compile_options(NumTracer PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>)
 
 # Header-only fallback: same headers, but every engine function is `inline` and self-contained, so no
 # `.a` link is needed. For pure-header or cross-toolchain use. A given binary must pick ONE mode across
