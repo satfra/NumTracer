@@ -26,4 +26,4 @@ using namespace numtracer::network;
 using namespace numtracer::numeric;
 const NetVal& lc3(){ static const NetVal v = contract(tproj<37, 0, 8, 7, 26>(), tproj<37, 38, 8, 7, 26>(), tproj<42, 38, 8, 7, 26>(), tproj<41, 42, 8, 7, 26>(), tproj<41, 3, 8, 7, 26>(), tproj<39, 1, 8, 7, 26>(), tproj<40, 39, 8, 7, 26>(), tproj<40, 2, 8, 7, 26>()); return v; }
 const NetVal& lc1(){ static const NetVal v = contract(tproj<37, 0, 8, 7, 26>(), tproj<37, 38, 8, 7, 26>(), tproj<42, 38, 8, 7, 26>(), tproj<41, 42, 8, 7, 26>(), tproj<41, 3, 8, 7, 26>(), tproj<39, 1, 8, 7, 26>(), tproj<39, 40, 8, 7, 26>(), tproj<40, 2, 8, 7, 26>()); return v; }
-std::vector<DSlotOpt> optp0(){ return {DSlotOpt{Cx{1,0}, {}, {dslash({{1.,8}})}, {}}, DSlotOpt{Cx{1,0}, {}, {dslash({{1.,16}})}, {}}, DSlotOpt{Cx{1,0}, {}, {dslash({{1.,12}})}, {}}, DSlotOpt{Cx{1,0}, {}, {}, {}}}; }
+std::vector<DSlotOpt> optp0(){ return {DSlotOpt{Cx{1,0}, {}, {}, {}}, DSlotOpt{Cx{1,0}, {}, {dslash({{1.,8}})}, {}}, DSlotOpt{Cx{1,0}, {}, {dslash({{1.,12}})}, {}}, DSlotOpt{Cx{1,0}, {}, {dslash({{1.,16}})}, {}}}; }

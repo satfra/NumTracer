@@ -25,15 +25,10 @@ static inline auto probe_full(const double& l1, const double& cos1, const double
 {
   double fenv[(DiFfRG::zq_collect::nenv) > 0 ? (DiFfRG::zq_collect::nenv) : 1];
   const double dr_0 = ntStub(30415., 1. * l1);
-  const double dr_1 = sqrt(powr<-1>(powr<2>(l1)));
-  const double dr_2 = ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1));
-  const double dr_3 = ntStub(85453., 1. * k);
-  const double dr_4 = ntStub(85453., 1. * l1);
-  const double dr_5 = ntStub(30415., 1. * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
-  const double dr_6 = sqrt(powr<-1>(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
-  const double dr_7 = ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
-  const double dr_8 = ntStub(85453., 1. * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
-  DiFfRG::zq_collect::fill(fenv, l1, cos1, p, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8);
+  const double dr_1 = -sqrt(powr<-1>(powr<2>(l1))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1)) * ntStub(85453., 1. * k) - ntStub(85453., 1. * l1);
+  const double dr_2 = ntStub(30415., 1. * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
+  const double dr_3 = -sqrt(powr<-1>(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p))) * ntStub(85453., 1. * k) - ntStub(85453., 1. * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
+  DiFfRG::zq_collect::fill(fenv, l1, cos1, p, dr_0, dr_1, dr_2, dr_3);
   const auto _interp1 = ntStub(12206., 0.816496580927726 * sqrt(powr<2>(l1) - cos1 * l1 * p + powr<2>(p)));
   const auto _interp2 = ntStub(30415., 1. * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
   const auto _interp3 = ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
@@ -66,15 +61,10 @@ static inline auto probe_proj(const double& l1, const double& cos1, const double
 {
   double fenv[(DiFfRG::zq_collect::nenv) > 0 ? (DiFfRG::zq_collect::nenv) : 1];
   const double dr_0 = ntStub(30415., 1. * l1);
-  const double dr_1 = sqrt(powr<-1>(powr<2>(l1)));
-  const double dr_2 = ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1));
-  const double dr_3 = ntStub(85453., 1. * k);
-  const double dr_4 = ntStub(85453., 1. * l1);
-  const double dr_5 = ntStub(30415., 1. * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
-  const double dr_6 = sqrt(powr<-1>(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
-  const double dr_7 = ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
-  const double dr_8 = ntStub(85453., 1. * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
-  DiFfRG::zq_collect::fill(fenv, l1, cos1, p, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8);
+  const double dr_1 = -sqrt(powr<-1>(powr<2>(l1))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1)) * ntStub(85453., 1. * k) - ntStub(85453., 1. * l1);
+  const double dr_2 = ntStub(30415., 1. * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
+  const double dr_3 = -sqrt(powr<-1>(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p))) * ntStub(85453., 1. * k) - ntStub(85453., 1. * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
+  DiFfRG::zq_collect::fill(fenv, l1, cos1, p, dr_0, dr_1, dr_2, dr_3);
   const auto _interp1 = ntRe(DiFfRG::zq_collect::tr0(fenv));
   const auto _interp2 = ntStub(12206., 0.816496580927726 * sqrt(powr<2>(l1) - cos1 * l1 * p + powr<2>(p)));
   const auto _interp3 = ntStub(27191., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1));
@@ -96,15 +86,10 @@ static inline auto probe_repart(const double& l1, const double& cos1, const doub
 {
   double fenv[(DiFfRG::zq_collect::nenv) > 0 ? (DiFfRG::zq_collect::nenv) : 1];
   const double dr_0 = ntStub(30415., 1. * l1);
-  const double dr_1 = sqrt(powr<-1>(powr<2>(l1)));
-  const double dr_2 = ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1));
-  const double dr_3 = ntStub(85453., 1. * k);
-  const double dr_4 = ntStub(85453., 1. * l1);
-  const double dr_5 = ntStub(30415., 1. * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
-  const double dr_6 = sqrt(powr<-1>(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
-  const double dr_7 = ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
-  const double dr_8 = ntStub(85453., 1. * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
-  DiFfRG::zq_collect::fill(fenv, l1, cos1, p, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8);
+  const double dr_1 = -sqrt(powr<-1>(powr<2>(l1))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1)) * ntStub(85453., 1. * k) - ntStub(85453., 1. * l1);
+  const double dr_2 = ntStub(30415., 1. * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
+  const double dr_3 = -sqrt(powr<-1>(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p))) * ntStub(85453., 1. * k) - ntStub(85453., 1. * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
+  DiFfRG::zq_collect::fill(fenv, l1, cos1, p, dr_0, dr_1, dr_2, dr_3);
   const auto _interp1 = ntIm(DiFfRG::zq_collect::tr1(fenv));
   const auto _interp2 = ntStub(12206., 0.816496580927726 * sqrt(powr<2>(l1) - cos1 * l1 * p + powr<2>(p)));
   const auto _interp3 = ntStub(30415., 1. * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
