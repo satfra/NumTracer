@@ -140,6 +140,10 @@ namespace numtracer::numeric
     struct Factor {
       std::vector<int> ids;
       std::vector<MPoly> entries; ///< the dense tensor, flattened: size 4^ids.size()
+      /// When set, the tensor is borrowed from here and `entries` is unused. The Dirac loop tensors
+      /// enter every Lorentz term's contraction unchanged, so they are borrowed rather than copied.
+      const std::vector<MPoly> *borrowed = nullptr;
+      const std::vector<MPoly> &data() const { return borrowed ? *borrowed : entries; }
     };
 
   } // namespace ndetail
@@ -765,7 +769,7 @@ namespace numtracer::numeric
             int idx = 0;
             for (int p : slotPos[fIdx])
               idx = idx * 4 + idxVal[p];
-            const MPoly &e = group[fIdx].entries[idx];
+            const MPoly &e = group[fIdx].data()[idx];
             if (e.empty()) {
               zero = true;
               break;
@@ -924,16 +928,16 @@ namespace numtracer::numeric
       MPoly prod = MPolyFactory::zero(nsym);
       bool seeded = false;
       for (const Factor &F : facs) {
-        if (F.entries.empty()) {
+        if (F.data().empty()) {
           prod = MPolyFactory::zero(nsym);
           seeded = true;
           break;
         }
         if (!seeded) {
-          prod = MPolyFactory::scaled(nsym, F.entries[0], Cx{1, 0});
+          prod = MPolyFactory::scaled(nsym, F.data()[0], Cx{1, 0});
           seeded = true;
         } else
-          prod = prod * F.entries[0];
+          prod = prod * F.data()[0];
       }
       if (!seeded) prod = MPolyFactory::constant(nsym, Cx{1, 0}); // empty product = 1, as before
       return prod;
@@ -1174,8 +1178,9 @@ namespace numtracer::numeric
       Cx co = nt.coeff;
       ndetail::fuse_projectors(elems, co);
       if (co.re == 0 && co.im == 0) continue;
-      std::vector<ndetail::Factor> facs = loops;
+      std::vector<ndetail::Factor> facs;
       facs.reserve(loops.size() + elems.size());
+      for (const ndetail::Factor &L : loops) facs.push_back({L.ids, {}, &L.data()});
       for (const NElem &el : elems)
         ndetail::push_elem_factors(facs, nsym, el, comp, atomDen);
       // contract_factors consumes its `facs` argument by value — move so the per-term
@@ -1310,8 +1315,8 @@ namespace numtracer::numeric
           elems.push_back(elem_to_nelem(el));
         ndetail::fuse_projectors(elems, co);
         if (co.re == 0 && co.im == 0) continue;
-        facs = loops;
         facs.reserve(loops.size() + elems.size());
+        for (const ndetail::Factor &L : loops) facs.push_back({L.ids, {}, &L.data()});
         for (const NElem &el : elems)
           ndetail::push_elem_factors(facs, nsym, el, comp, aden);
       }
