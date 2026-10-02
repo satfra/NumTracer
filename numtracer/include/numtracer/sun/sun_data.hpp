@@ -74,7 +74,8 @@ template <> inline constexpr bool kHasSUNData<2> = true; ///< SU(2) data is tabu
 
 /// @brief Compile-time SU(3) data: the 8 generators and the nonzero @f$f^{abc}@f$.
 template <> struct SUNData<3> {
-  /// @brief The 8 fundamental generators @f$T^a = \lambda^a/2@f$ (Gell-Mann).
+  /// @brief The 8 fundamental generators @f$T^a = \lambda^a/2@f$, in generalized Gell-Mann order:
+  ///        the off-diagonal generators first (λ1, λ2, λ4, λ5, λ6, λ7), the diagonal λ3, λ8 last.
   static constexpr std::array<Mat<3>, 8> generators = {{
     Mat<3>{{{std::complex<double>{0,0},std::complex<double>{0.5,0},std::complex<double>{0,0},std::complex<double>{0.5,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0}}}},
     Mat<3>{{{std::complex<double>{0,0},std::complex<double>{0,-0.5},std::complex<double>{0,0},std::complex<double>{0,0.5},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0}}}},

@@ -19,7 +19,7 @@ int main() {
   // knows cos^2 + sin^2 = 1, so l^2 = l^2 cos^2 + l^2 sin^2 simplifies to the single monomial l^2.
   nt::Frame F;
   auto P = F.symbol("p"), L = F.symbol("l");
-  auto [C, S] = F.angle("cos");
+  auto [C, S] = F.angle("theta");
   nt::Momentum p = F.momentum(P, 0, 0, 0);
   nt::Momentum l = F.momentum(L * C, L * S, 0, 0);
   auto [mu, nu] = F.indices<2>();
@@ -35,7 +35,7 @@ int main() {
   nt::Poly poly = F.contract(nt::vec(mu, p) * nt::projT(mu, nu, l) * nt::vec(nu, p));
   // @snip end: net
 
-  // Evaluate at one point: values of the independent symbols p, l, cos, in declaration order.
+  // Evaluate at one point: values of the independent symbols p, l, cos_theta, in declaration order.
   const double pv = 1.3, lv = 0.86, c = 0.58;
   const double val = F.eval(poly, F.at(pv, lv, c)).re;
 

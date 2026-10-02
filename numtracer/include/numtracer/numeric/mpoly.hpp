@@ -268,7 +268,7 @@ namespace numtracer::inline numeric
   // ONLY sanctioned way to mint one is a @ref Frame (which holds a fixed `nsym`). @ref PolyFactory
   // is a tiny internal attorney that re-exposes the same factories to the trusted cross-header engine
   // code (contraction / trace-fold), which already threads a single `nsym` and must not route through a
-  // user-facing env. Only names are needed here; the definitions live below / in `numeric/frame.hpp`.
+  // user-facing Frame. Only names are needed here; the definitions live below / in `numeric/frame.hpp`.
   class Frame;
   struct PolyFactory;
 
@@ -286,7 +286,7 @@ namespace numtracer::inline numeric
     /// sizeof(Mat4) 0.5 KB -> 8.7 KB and peak RSS +20% on the memory-bound dense flows.
     std::vector<std::pair<Mono, Cx>> terms; ///< sorted by Mono, like terms combined, no zeros
 
-    // Sanctioned construction paths (see the note above @ref Poly). The env and the internal attorney
+    // Sanctioned construction paths (see the note above @ref Poly). The Frame and the internal attorney
     // reach the nsym-taking ctor/factories; the in-header arithmetic operators construct result
     // polynomials directly (they already have a definite `nsym` from their operands).
     friend class Frame;
@@ -308,7 +308,7 @@ namespace numtracer::inline numeric
   private:
     // Bare-`nsym` construction — reachable only through @ref Frame / @ref PolyFactory (friends).
     // Making these private turns "every Poly in one trace shares an nsym" into a compile-time
-    // guarantee: outside the sanctioned env you cannot mint a non-empty Poly
+    // guarantee: outside a Frame you cannot mint a non-empty Poly
     // with a hand-picked nsym. The empty default ctor above stays public (an nsym==0 zero used by the
     // operator short-circuits and by std::array/std::vector default members).
     explicit Poly(int ns) : nsym(ns) {}
@@ -1367,6 +1367,15 @@ namespace numtracer::inline numeric
     return Poly::from_scratch(p.nsym, std::move(out));
   }
 
+  // Polynomials with numbers.
+  inline Poly operator*(double c, const Poly &p) { return PolyFactory::scaled(p.nsym, p, Cx{c, 0}); }
+  inline Poly operator*(const Poly &p, double c) { return c * p; }
+  inline Poly operator+(const Poly &p, double c) { return p + PolyFactory::constant(p.nsym, Cx{c, 0}); }
+  inline Poly operator+(double c, const Poly &p) { return p + c; }
+  inline Poly operator-(const Poly &p, double c) { return p + (-c); }
+  inline Poly operator-(double c, const Poly &p) { return PolyFactory::constant(p.nsym, Cx{c, 0}) - p; }
+  inline Poly operator-(const Poly &p) { return PolyFactory::zero(p.nsym) - p; }
+
   namespace ndetail
   {
     /// @brief Raw numeric evaluation: `x[i]` = user symbol i; `atomVal[aid]` = value of `1/D_aid`
@@ -1374,7 +1383,7 @@ namespace numtracer::inline numeric
     ///        computes the atom values itself.
     inline Cx eval(const Poly &p, const std::vector<double> &x, const std::vector<double> &atomVal)
     {
-      if (x.size() != static_cast<std::size_t>(p.nsym))
+      if (!p.terms.empty() && x.size() != static_cast<std::size_t>(p.nsym))
         NT_THROW(std::invalid_argument, ("eval: " + std::to_string(x.size()) + " symbol values for a polynomial in " +
                                          std::to_string(p.nsym) + " symbols")
                                             .c_str());

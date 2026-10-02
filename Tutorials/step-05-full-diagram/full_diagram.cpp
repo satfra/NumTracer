@@ -21,7 +21,7 @@ int main() {
   // One-angle frame: p along axis 0, l at angle theta to it, q = l - p.
   nt::Frame F;
   auto P = F.symbol("p"), L = F.symbol("l");
-  auto [C, S] = F.angle("cos");
+  auto [C, S] = F.angle("theta");
   nt::Momentum p = F.momentum(P, 0, 0, 0);
   nt::Momentum l = F.momentum(L * C, L * S, 0, 0);
   nt::Momentum q = l - p;
@@ -48,7 +48,7 @@ int main() {
   // f[] from p, l, cos ...
   nt::GlobalEnv g;
   nt::GenProg prog = nt::to_genprog(T, g);
-  F.emit_fill(std::cout, g);        // static inline void fill(double* f, double p, double l, double cos)
+  F.emit_fill(std::cout, g);        // static inline void fill(double* f, double p, double l, double cos_theta)
   nt::emit_cpp(std::cout, prog, "T"); // static inline double T(const double* f)
 
   // ... and RUN the same program in-process, on the f[] values at our point. This is the guarantee
@@ -61,7 +61,8 @@ int main() {
   std::printf("closed   T = %.12f   (4 p (-3 c l + p + 2 c^2 p))\n", closed);
   std::printf("lowered  T = %.12f   (the emitted program, interpreted)\n", lowered);
 
-  // The lowered program fuses multiply-adds, so it agrees to rounding, not bit for bit.
+  // The lowered program regroups the arithmetic (Horner, shared subexpressions), so it agrees to
+  // rounding, not bit for bit.
   const bool ok = std::fabs(numeric - closed) < 1e-10 && std::fabs(lowered - closed) < 1e-10;
   std::printf(ok ? "ALL TESTS PASSED\n" : "TESTS FAILED\n");
   return ok ? 0 : 1;

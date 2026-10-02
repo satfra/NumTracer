@@ -37,7 +37,7 @@ $$
 $$
 
 **No diagram split.** The Dirac/Lorentz trace multiplying it is computed once, exactly as before.
-The only thing that changed is what the colour half folds *to*.
+The only thing that changed is what the SU($N$) half folds *to*.
 
 This is the SU($N$)-side analogue of [step-18](step-18.md)'s dressed Dirac numerators, and the two
 use the same idea: keep the sum eager, carry the dressings as opaque atoms, and fold to a
@@ -64,11 +64,14 @@ dead arithmetic in the emitted kernel.
 
 ```{admonition} Components are 0-based here
 :class: important
-The physics numbers fundamental components $1..N$ and adjoint components $1..N^2-1$. The C++ index
-is one less. So the SU(3) Cartan directions $\lambda_3$ and $\lambda_8$ are `comp2dr[2]` and
-`comp2dr[7]`. The Mathematica DSL heads (`ntSUNDiagFund`, `ntSUNDiagAdj`) take **1-based** component
-indices in their `spec` rules-list, which is the more natural spelling for physics — do not carry
-one convention into the other.
+The physics numbers fundamental components $1..N$ and adjoint components $1..N^2-1$; the C++ index
+is one less. The Mathematica DSL heads (`ntSUNDiagFund`, `ntSUNDiagAdj`) take **1-based** component
+indices in their `spec` rules-list — do not carry one convention into the other.
+
+The adjoint components are in NumTracer's *generator* order, which is not the textbook Gell-Mann
+order: the generalized Gell-Mann construction lists the off-diagonal generators first and the $N-1$
+diagonal ones **last**. For SU(3) the Cartan directions $\lambda_3$ and $\lambda_8$ are therefore
+1-based components 7 and 8 (`comp2dr[6]` and `comp2dr[7]` in C++).
 ```
 
 ## The commented program
@@ -140,7 +143,7 @@ ntSUNDiagAdj [N, a, b, spec]
 ntSUNDiagFund[2, i, j, {1 -> Zu[scale], 2 -> Zd[scale]}]
 
 (* a gluon condensed along the SU(3) Cartan; the other six colours drop out with no dead terms *)
-ntSUNDiagAdj[3, a, b, {3 -> A03[scale], 8 -> A08[scale]}]
+ntSUNDiagAdj[3, a, b, {7 -> A03[scale], 8 -> A08[scale]}]   (* λ3, λ8 = components 7, 8 *)
 ```
 
 Three details:

@@ -31,9 +31,9 @@ products, opaque runtime factors — ride along and are emitted as ordinary arit
   $\{\gamma^\mu,\gamma^\nu\} = 2\,\delta^{\mu\nu}I$. $\gamma_5=\mathrm{diag}(1,1,-1,-1)$ is
   block-diagonal (free to include), and a trace of an odd number of gammas vanishes structurally.
   The exact matrices are in [Sector data](../internals/sectors.md#dirac-gamma-matrices).
-- **Groups are SU($N$) only.** Colour and flavour are both handled by one $N$-parameterised family
-  of SU($N$) heads; $N$ is a **compile-time integer** (`SetNc` / `SetNf` in the DSL; a template
-  parameter in C++), not a runtime argument. Other Lie groups are not built in.
+- **Groups are SU($N$) only**, for any $N \ge 1$ — colour, flavour, or anything else. In C++ the
+  rank is the argument of the group object, `nt::SUN su(N)`; in the DSL it is the first argument of
+  every `ntSUN*` head. Other Lie groups are not built in.
 - **A finished network is a real scalar.** A network with no free indices folds to a scalar
   polynomial in the frame's scalar symbols. A trace over real vectors is real, so the generated
   kernel carries only the **real part**; the imaginary half is dropped when it vanishes (the

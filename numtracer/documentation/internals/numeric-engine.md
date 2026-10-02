@@ -60,11 +60,11 @@ namespaces:
 
 * **A sorted multiset of atom ids** (`Mono::atoms`). An **atom id** is an integer that *names a
   projector's denominator `k²`* — it is neither a symbol index nor the value `1/k²`. Each
-  transverse/longitudinal/electric/magnetic projector in the network carries an id (`Elem::inv`,
-  and `Elem::invS` for the spatial `1/|k⃗|²`); `collect_atom_denoms` interns the actual
+  transverse/longitudinal/electric/magnetic projector in the network carries an id (`LorentzFactor::atom`,
+  and `LorentzFactor::atomS` for the spatial `1/|k⃗|²`); `collect_atom_denoms` interns the actual
   denominator polynomial once into a separate table, `atomDen[aid] = k² = Σ_μ comp[μ]²` (itself
-  an `Poly` in the symbols). A term multiplied by `1/D₃·1/D₃·1/D₇` carries `atoms = {3,3,7}`
-  (sorted, with multiplicity ⇒ `1/D₃²` is `{3,3}`). `env.atom(aid)` builds a bare `1/D`
+  a `Poly` in the symbols). A term multiplied by `1/D₃·1/D₃·1/D₇` carries `atoms = {3,3,7}`
+  (sorted, with multiplicity ⇒ `1/D₃²` is `{3,3}`). `frame.atom(aid)` builds a bare `1/D`
   as a monomial with empty exponents and `atoms = {aid}`.
 
 Two monomials are "the same" (and so combine) iff their exponent vectors *and* their id multisets
@@ -124,7 +124,7 @@ them would tax the hot undressed path and blur the "this factor can cancel" inva
 ## Step 1 — the Dirac trace as matrix products
 
 A closed Dirac chain is traced by **multiplying 4×4 matrices**, not by enumerating index
-pairings. `mpoly.hpp` builds each gamma `gammaC(mu)` and each slashed propagator
+pairings. `numeric/spinor_mat.hpp` builds each gamma `gammaC(mu)` and each slashed propagator
 `slashC(components)` as a 4×4 matrix whose *entries are `Poly`s* (numeric gamma data, symbolic
 momenta), multiplies the chain with `matmul`, and reads off `mtrace`. Because the gamma matrices
 are Hermitian and chiral (block-antidiagonal in the Weyl basis), the products stay sparse and

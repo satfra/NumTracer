@@ -29,7 +29,7 @@ This is worth stating carefully because it is the single biggest lever on kernel
 contracts *over the frame's components*. Choosing a frame with two zero components means those
 entire index-sum branches vanish before any polynomial is built — the saving is not a
 simplification afterwards, it is work never done. [step-07](step-07.md) is entirely about frames
-and the five builders the front-end provides; here we hand-write one.
+and the frame builders the front-end provides; here we hand-write one.
 
 ### The inverse atom
 
@@ -77,8 +77,8 @@ one-angle frame.
 :end-before: "@snip end: frame"
 ```
 
-Three symbols: the magnitudes `P`, `L` and the angle cosine `C`. `F.angle("cos")` returns the
-cosine *and* the sine as symbols, but only the cosine is an input: the frame derives
+Three symbols: the magnitudes `P`, `L` and the angle cosine `C`. `F.angle("theta")` declares the
+symbols `cos_theta` and `sin_theta` and returns both, but only the cosine is an input: the frame derives
 $\sin\theta = \sqrt{1-\cos^2\theta}$ at evaluation time, and it uses $\cos^2+\sin^2 = 1$ during
 contraction. That is what makes $l^2 = l^2\cos^2\theta + l^2\sin^2\theta$ collapse to the single
 monomial $l^2$ — and a denominator that is a single monomial can be cancelled exactly.

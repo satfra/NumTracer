@@ -107,7 +107,7 @@ automatically) the denominators $1/k^2$ of every projector:
 ```cpp
 nt::Frame F;
 auto P = F.symbol("p"), L = F.symbol("l");
-auto [C, S] = F.angle("cos");             // sin θ is derived from cos θ
+auto [C, S] = F.angle("theta");             // sin θ is derived from cos θ
 nt::Momentum p = F.momentum(P, 0, 0, 0);
 nt::Momentum l = F.momentum(L * C, L * S, 0, 0);
 ```

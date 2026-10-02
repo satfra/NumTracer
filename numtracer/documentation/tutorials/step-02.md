@@ -115,10 +115,10 @@ cmake --build build --target colour_factors && ./build/colour_factors
 :language: text
 ```
 
-All three are *exact* — not "agrees to $10^{-12}$", but exactly the integers, because the fold sums
-rationals stored as `Cx` and nothing here introduces a rounding error. That is a useful property to
-know about: when a colour factor comes back as `1.3333333333333335` you have a bug in the network,
-not a precision problem.
+All three agree with the closed forms to rounding — the SU(3) tables contain $\sqrt3$, so the
+fold is exact up to the last bit, not in rational arithmetic. Small residues near zero are snapped
+to zero. A colour factor that is off by more than rounding means a bug in the network, not a
+precision problem.
 
 Note also what the second line is doing. $C_F$ is *defined* by $T^aT^a = C_F\,\delta$, so extracting
 it from the trace requires dividing by $\mathrm{tr}\,\delta = N$. The engine gave us the trace; the

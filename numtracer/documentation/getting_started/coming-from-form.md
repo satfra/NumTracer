@@ -85,7 +85,10 @@ that you choose a frame. For a loop integrand the natural frame is cheap and exa
 
 **Four dimensions, Euclidean.** Index sums run over 0–3 and the metric is $\delta_{\mu\nu}$, so
 $\gamma^\mu\gamma_\mu = 4$ and $\gamma^\mu\slashed a\gamma_\mu = -2\slashed a$. There is no
-`tracen` and no dimensional regularisation. See [Scope & conventions](scope-and-conventions.md).
+`tracen` and no dimensional regularisation. The gammas are Hermitian, in the chiral basis, and
+$\gamma_5 = \mathrm{diag}(1,1,-1,-1)$ is the Euclidean (real) one — not FORM's Minkowski
+$\gamma_5$, whose traces carry a factor $i$; compare $\gamma_5$ traces with care. See
+[Scope & conventions](scope-and-conventions.md).
 
 **No pattern matching.** There are no `id` statements and no user-defined functions acting on
 expressions; the network you write is the whole input, and the algebra is fixed. Things FORM users

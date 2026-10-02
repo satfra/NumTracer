@@ -9,9 +9,11 @@
 
 #include "numtracer/codegen/gen.hpp" // GenProg, kRealProgram
 #include "numtracer/codegen/real_cse.hpp"
+#include "numtracer/core/config.hpp" // NT_THROW
 #include "numtracer/core/cx.hpp"
 
 #include <cstddef>
+#include <stdexcept>
 #include <vector>
 
 namespace numtracer::inline network
@@ -31,7 +33,8 @@ namespace numtracer::inline network
       case RVAR: v[i] = f[in.a]; break;
       case RADD: v[i] = val(in.a) + val(in.b); break;
       case RMUL: v[i] = val(in.a) * val(in.b); break;
-      default: v[i] = -val(in.a); break;
+      case RNEG: v[i] = -val(in.a); break;
+      default: NT_THROW(std::invalid_argument, "interpret: unknown opcode");
       }
     }
     return val(root);

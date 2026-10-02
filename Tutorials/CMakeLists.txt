@@ -33,12 +33,26 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-find_package(NumTracer QUIET HINTS $ENV{HOME}/.local/share/NumTracer)
+# An install older than this checkout lacks the API the tutorials use (numeric/frame.hpp). Look at
+# its headers BEFORE importing it: once its targets are imported, the in-tree fallback cannot be added.
+set(_nt_try_installed TRUE)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../numtracer/CMakeLists.txt)
+  find_path(_nt_installed_inc numtracer/numtracer.hpp HINTS $ENV{HOME}/.local/share/NumTracer/include
+            NO_DEFAULT_PATH)
+  if(_nt_installed_inc AND NOT EXISTS ${_nt_installed_inc}/numtracer/numeric/frame.hpp)
+    message(WARNING "The installed NumTracer (${_nt_installed_inc}) predates this checkout; using the "
+                    "in-tree library. Re-install: cmake --install numtracer/build")
+    set(_nt_try_installed FALSE)
+  endif()
+endif()
+if(_nt_try_installed)
+  find_package(NumTracer QUIET HINTS $ENV{HOME}/.local/share/NumTracer)
+endif()
 if(NumTracer_FOUND)
   message(STATUS "Using installed NumTracer: ${NumTracer_DIR}")
   set(NT_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../numtracer/CMakeLists.txt)
-  message(STATUS "NumTracer not installed — falling back to the in-tree library")
+  message(STATUS "Using the in-tree NumTracer library")
   set(NUMTRACER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(NUMTRACER_INSTALL_MATHEMATICA OFF CACHE BOOL "" FORCE)
   add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../numtracer numtracer EXCLUDE_FROM_ALL)
@@ -169,7 +183,7 @@ nt_tutorial(trace_tokens step-03-dirac-traces/trace_tokens.cpp)
 # step-04 — Lorentz networks reduce to scalar products
 nt_tutorial(lorentz_networks step-04-lorentz-networks/lorentz_networks.cpp)
 
-# step-05 — hand-code a full diagram, validated two ways, then lower it to a kernel
+# step-05 — hand-code a full diagram, validated three ways (closed form, contraction, lowered program)
 nt_tutorial(full_diagram step-05-full-diagram/full_diagram.cpp)
 
 # ===========================================================================

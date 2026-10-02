@@ -132,7 +132,10 @@ struct FundIndex {
 /// The value of such a net is the product of the per-group values (@ref sun_value).
 class SUN {
 public:
-  explicit SUN(int rank) : g_(rank), uid_(next_uid()) {}
+  explicit SUN(int rank) : g_(rank), uid_(next_uid())
+  {
+    if (rank < 1) NT_THROW(std::invalid_argument, "SUN: the rank N must be at least 1");
+  }
   SUN(const SUN &) = delete; // a copy would hand out the same labels twice
   SUN &operator=(const SUN &) = delete;
   int rank() const { return g_; }
@@ -153,6 +156,7 @@ public:
   /// A fundamental `δ_{ij}` carrying a per-component dressing (component → dressing id, `-1` = drop).
   SUNFac diag(FundIndex i, FundIndex j, std::vector<int> comp2dr) const
   {
+    check_components(comp2dr.size(), static_cast<std::size_t>(g_));
     SUNFac r = make(SUNFacKind::DiagFund, own(i), own(j), -1);
     r.comp2dr = std::move(comp2dr);
     return r;
@@ -160,6 +164,7 @@ public:
   /// An adjoint `δ^{ab}` carrying a per-component dressing (component → dressing id, `-1` = drop).
   SUNFac diag(AdjIndex a, AdjIndex b, std::vector<int> comp2dr) const
   {
+    check_components(comp2dr.size(), static_cast<std::size_t>(g_ * g_ - 1));
     SUNFac r = make(SUNFacKind::DiagAdj, own(a), own(b), -1);
     r.comp2dr = std::move(comp2dr);
     return r;
@@ -197,6 +202,13 @@ private:
     return x.id;
   }
   SUNFac make(SUNFacKind k, int a, int b, int c) const { return {k, g_, a, b, c, {}, uid_}; }
+  void check_components(std::size_t got, std::size_t want) const
+  {
+    if (got != want)
+      NT_THROW(std::invalid_argument, ("SUN::diag: comp2dr has " + std::to_string(got) + " entries, the representation has " +
+                                       std::to_string(want) + " components")
+                                          .c_str());
+  }
 };
 
 /// @brief `x * y`: the product of SU(N) factors / networks (concatenation).
@@ -255,7 +267,7 @@ inline std::complex<double> dtrace(const DynMat &x) {
 /// @brief Disjoint-set (union-find) over index labels, with path-halving on `find`.
 ///
 /// A δ (or a diagonal-dressing δ) identifies its two indices; `find` returns a label's class
-/// representative, so every Lorentz/colour label sharing a class is one contracted index. Adjoint and
+/// representative, so every SU(N) label sharing a class is one contracted index. Adjoint and
 /// fundamental labels are disjoint integers, so they never merge across sectors. Shared by both
 /// @ref contract_group and @ref contract_group_dressed (identical index-identification step).
 struct UnionFind {
@@ -873,17 +885,21 @@ NUMTRACER_FUNC SUNPoly sun_value_dressed(const SUNNet &net);
 
 /// @brief The value of @p net, which must consist of this group's factors only.
 inline Cx SUN::value(const SUNNet &net) const {
-  for (const SUNFac &f : net)
+  for (const SUNFac &f : net) {
     if (f.group != uid_)
       NT_THROW(std::invalid_argument, "SUN::value: the network contains a factor of another SU(N) group; "
                                       "use sun_value(net) for a network mixing groups");
+    if (f.kind == SUNFacKind::DiagFund || f.kind == SUNFacKind::DiagAdj)
+      NT_THROW(std::invalid_argument, "SUN::value: a diag(...) factor folds to a polynomial in its dressings; "
+                                      "use sun_value_dressed(net)");
+  }
   return sun_value(net);
 }
 
 #if NUMTRACER_DEFINE_BODIES
 namespace sun_net_detail {
-/// The factors of @p net split by group (rank, then issuing @ref SUN), ascending — so a net with one
-/// group per rank multiplies its per-group values in rank order, as it always has.
+/// The factors of @p net split by group (rank, then issuing @ref SUN), ascending: the per-group
+/// values are multiplied in a fixed order, so the folded number is reproducible.
 inline std::vector<std::pair<int, std::vector<const SUNFac *>>> split_groups(const SUNNet &net) {
   std::map<std::pair<int, int>, std::vector<const SUNFac *>> byGroup;
   for (const SUNFac &f : net) byGroup[{f.g, f.group}].push_back(&f);

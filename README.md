@@ -20,7 +20,7 @@ namespace nt = numtracer;
 
 nt::Frame F;
 auto P = F.symbol("p"), L = F.symbol("l");
-auto [C, S] = F.angle("cos");                        // sin is derived from cos
+auto [C, S] = F.angle("theta");                        // sin is derived from cos
 nt::Momentum p = F.momentum(P, 0, 0, 0);
 nt::Momentum l = F.momentum(L * C, L * S, 0, 0);
 auto [mu, nu] = F.indices<2>();
@@ -54,7 +54,7 @@ A generated kernel includes only two small NumTracer headers (`codegen/runtime.h
 ## Build & test
 
 The CMake project root is `numtracer/`, **not** the repository root. It builds a small static
-library (header-only on opt-in, `-DNUMTRACER_HEADER_ONLY=ON`).
+library; a header-only variant is the CMake target `NumTracer::NumTracer_headeronly`.
 
 ```bash
 cmake -S numtracer -B build -DCMAKE_BUILD_TYPE=Release

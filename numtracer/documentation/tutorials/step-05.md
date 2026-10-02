@@ -153,8 +153,9 @@ the factorisation. Nothing is computed at run time that could be computed at bui
 The contraction, the closed form, and the *executed* lowered program agree. The third check is the
 guarantee that lowering is *value-preserving*: a Horner or CSE bug would show up there and nowhere
 else, since the first two paths never touch `to_genprog`. The comparison uses a tolerance rather
-than bitwise equality because the emitted program fuses multiply-adds (`fma`), which round
-differently from the separate operations of the polynomial evaluation.
+than bitwise equality because the lowered program regroups the arithmetic (Horner factoring,
+shared subexpressions), which rounds differently from evaluating the polynomial term by term; the
+compiled kernel adds a further rounding difference by fusing multiply-adds (`fma`).
 
 ## Possibilities for extensions
 

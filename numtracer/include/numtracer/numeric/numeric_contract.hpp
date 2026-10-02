@@ -1096,7 +1096,7 @@ namespace numtracer::inline numeric
   namespace ndetail
   {
     /// @brief Contract a diagram (Dirac chain ⊗ Lorentz network) to its scalar trace polynomial. The
-    ///        engine behind @ref Frame::contract; see there.
+    ///        engine behind @ref Frame::trace; see there.
     /// @param nsym     number of user symbols (Poly variable count)
     /// @param dirac    the closed Dirac chain (may be empty for a pure-Lorentz diagram)
     /// @param lor      the Lorentz network (an empty one is the scalar 1)
@@ -1553,11 +1553,10 @@ namespace numtracer::inline numeric
 
   /// @brief Build the projector inverse-atom denominators by scanning the Lorentz nets for every
   ///        projector kind. Each carries its momentum `k` (a frame momentum `vid`, or a linear
-  ///        combination `vlc`); a transverse /
-  ///        longitudinal / electric projector fills its full atom `atomDen[inv] = k² = Σ_μ comp[μ]²`,
-  ///        and an electric / magnetic projector fills its spatial atom
-  ///        `atomDen[invS] = |k⃗|² = Σ_{μ=1..3} comp[μ]²` (component 0 = temporal). The result is sized
-  ///        to hold every `inv`/`invS` id seen (others are unused all-zero polynomials).
+  ///        combination `vlc`); a transverse / longitudinal / electric projector fills its full atom
+  ///        `atomDen[atom] = k² = Σ_μ k_μ²`, and an electric / magnetic projector fills its spatial
+  ///        atom `atomDen[atomS] = |k⃗|² = Σ_{μ=1..3} k_μ²` (component 0 = temporal). The result is
+  ///        sized to hold every id seen (others are unused all-zero polynomials).
   NUMTRACER_FUNC std::vector<Poly> ndetail::collect_atom_denoms(int nsym, const std::vector<LorentzNet> &lors,
                                                                 const std::vector<std::array<Poly, 4>> &comp)
   {

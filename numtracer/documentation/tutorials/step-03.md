@@ -24,7 +24,7 @@ components of $p$.
 
 The textbook way to evaluate such a trace is Wick's theorem: sum over all pairings of the gamma
 indices, with a sign per crossing. For $2n$ gammas that is $(2n-1)!!$ terms — 3 for four gammas,
-10395 for fourteen, and a four-point vertex flow reaches well past that. Worse, the intermediate is
+10395 for twelve, and a four-point vertex flow reaches well past that. Worse, the intermediate is
 a sum of scalar-product monomials that must then be collected.
 
 NumTracer does not use Wick's theorem. It **multiplies the matrices**. The gammas are typed out as

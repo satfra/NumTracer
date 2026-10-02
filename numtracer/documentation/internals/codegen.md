@@ -2,7 +2,7 @@
 
 The Wolfram layer (`mathematica/`) drives NumTracer from a symbolic front end: it takes a traced
 tensor network, **contracts it numerically at build time**, and emits a flat C++ kernel. It is
-the automation of the whole path — analyse the network, fix the frame, fold colour, trace the
+the automation of the whole path — analyse the network, fix the frame, fold the SU($N$) factors, trace the
 Dirac chain, reduce the Lorentz network, lower to straight-line arithmetic — with the
 scalar (dressing) half delegated to FunKit's mature COEN emitter.
 
@@ -26,15 +26,16 @@ four components.
 `MakeNTKernel[ntk, genFile, kernelFile, tracesFile, …]` serialises that into a kernel. It emits a
 small C++ **generator** to `genFile`, then *compiles and runs* it (`RunProcess`) to produce the
 committed straight-line traces header `tracesFile` (a set of `trN(const double* f)` functions) and
-the kernel `kernelFile`, which fills the few frame symbols and calls `trN(f)`. The colour and
-dressing halves are emitted by FunKit COEN.
+the kernel `kernelFile`, which fills the few frame symbols and calls `trN(f)`. The SU($N$) factors
+are folded to numbers inside the generator (`sun_value`); the scalar coefficients and dressings are
+emitted by FunKit COEN.
 
 ## What the generator does
 
 `MakeNTKernel "Numeric"` builds, per diagram, a Dirac chain and a pure-Lorentz network from the
 DSL heads, then calls the [numeric contraction engine](numeric-engine.md): the Dirac trace folds
 by 4×4 chiral matrix products, the Lorentz network reduces by bounded index elimination, and the
-colour factor folds to a number. Each diagram becomes one small polynomial (`Poly`) in the
+SU($N$) factor folds to a number. Each diagram becomes one small polynomial (`Poly`) in the
 frame's scalar symbols, which is lowered (CSE + Horner) into the shared `f[]` symbol layout and
 printed.
 
@@ -67,7 +68,7 @@ flavour SU($N_f$) coexist in one network. The group-diagonal heads `ntSUNDiagFun
 `ntSUNDiagAdj` take a `spec` rules list `{c -> name, …, Default -> defName}` (1-based component
 indices → distinctly-named scalar dressings; unnamed components collapse to `Default` or drop)
 and fold (via `sun_value_dressed`) to $\sum_a c_a Z_a(s)$ over those named runtime scalar
-dressings — dressing selected colour/flavour components differently *without* splitting into one
+dressings — dressing selected SU($N$) components differently *without* splitting into one
 diagram per component; the Dirac trace is still computed once. See the
 [step-17](../tutorials/step-17.md).
 
@@ -94,7 +95,7 @@ spinor indices — is another sum that must not be distributed: with $D$ such fa
 explode into $2^D$ diagrams. The `"DressingCollection"` option (on `NumTrace` and `FromFunKit`,
 default `True`) keeps it eager as a single collected trace (an `ntDressedNum` token carrying the
 dressing coefficients symbolically), so the Dirac trace is computed once and the dressing leaves
-appear as runtime atoms. This is what lets a flow dress individual flavours or colour/flavour
+appear as runtime atoms. This is what lets a flow dress individual SU($N$)
 components differently in one trace. Flows with no dressed-numerator sum regenerate
 byte-identical with the option on or off.
 

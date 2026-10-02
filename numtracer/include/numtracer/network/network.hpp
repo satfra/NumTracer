@@ -100,9 +100,9 @@ namespace numtracer::inline network
     // designated initializers only: a positional `LorentzFactor{…}` would silently mis-bind on a reorder.
     int a = 0, b = 0; ///< Lorentz index ids (Metric, Epsilon, and every projector)
     int vid = -1;     ///< a projector's momentum when it is the single frame momentum `vid` (`vlc` empty)
-    int atom = -1;    ///< id of the projector's `1/k²` (ProjT / ProjL / ProjE); -1 = let the Frame assign it
+    int atom = -1;    ///< id of the projector's `1/k²` (ProjT / ProjL / ProjE); -1 = the Frame assigns it
     int c = 0, d = 0; ///< ε's 3rd/4th Lorentz index ids (Epsilon only)
-    int atomS = -1;   ///< id of the spatial `1/|k⃗|²` (ProjE / ProjM); -1 = let the Frame assign it
+    int atomS = -1;   ///< id of the spatial `1/|k⃗|²` (ProjE / ProjM); -1 = the Frame assigns it
     Vlc vlc{};        ///< a vector's momentum, or a projector's when it is a linear combination
 
     /// Whether this is one of the four projector kinds.
@@ -117,8 +117,11 @@ namespace numtracer::inline network
     Cx coeff{1, 0};
     std::vector<LorentzFactor> e;
   };
-  /// @brief A Lorentz network: a sum of product terms. An empty network is the scalar 1 when handed
-  ///        to a contraction.
+  /// @brief A Lorentz network: a sum of product terms.
+  ///
+  /// Mind the empty network: a contraction (`Frame::trace(chain, {})`) reads it as "no Lorentz
+  /// structure", i.e. the scalar 1, while as a SUM of terms it is 0 — `mul(x, {})` is empty, and
+  /// @ref dirac_value returns `{}` for a vanishing trace. Write a structural zero as `0.0 * net`.
   using LorentzNet = std::vector<LorentzTerm>;
 
   /// @brief A single-factor network (one product term, coefficient 1).
@@ -127,12 +130,12 @@ namespace numtracer::inline network
   namespace mdetail
   {
     /// A projector factor on momentum @p k: a single frame momentum rides `vid`, anything else `vlc`.
-    inline LorentzFactor projector(LorentzFactor::Kind kind, LorentzIndex mu, LorentzIndex nu, const Momentum &k,
-                                   int atom, int atomS)
+    /// Its atom ids are left unassigned (-1): the @ref Frame assigns them.
+    inline LorentzFactor projector(LorentzFactor::Kind kind, LorentzIndex mu, LorentzIndex nu, const Momentum &k)
     {
       if (k.lc.empty())
         NT_THROW(std::invalid_argument, "projector on a zero momentum: its 1/k^2 is undefined");
-      LorentzFactor f{.kind = kind, .a = mu.id, .b = nu.id, .atom = atom, .atomS = atomS};
+      LorentzFactor f{.kind = kind, .a = mu.id, .b = nu.id};
       if (k.lc.size() == 1 && k.lc[0].first == 1.0)
         f.vid = k.lc[0].second;
       else
@@ -151,27 +154,27 @@ namespace numtracer::inline network
   {
     return leaf({.kind = LorentzFactor::Vector, .a = mu.id, .b = -1, .vlc = k.lc});
   }
-  /// @brief The transverse projector `P_T(k)_{μν} = δ_{μν} − k_μ k_ν/k²`.
-  /// @param atom id of its `1/k²`; leave it at -1 and the @ref Frame assigns one.
-  inline LorentzNet projT(LorentzIndex mu, LorentzIndex nu, const Momentum &k, int atom = -1)
+  /// @brief The transverse projector `P_T(k)_{μν} = δ_{μν} − k_μ k_ν/k²`. Its `1/k²` is tracked by
+  ///        the @ref Frame that contracts it.
+  inline LorentzNet projT(LorentzIndex mu, LorentzIndex nu, const Momentum &k)
   {
-    return leaf(mdetail::projector(LorentzFactor::ProjT, mu, nu, k, atom, -1));
+    return leaf(mdetail::projector(LorentzFactor::ProjT, mu, nu, k));
   }
   /// @brief The longitudinal projector `P_L(k)_{μν} = k_μ k_ν/k²`.
-  inline LorentzNet projL(LorentzIndex mu, LorentzIndex nu, const Momentum &k, int atom = -1)
+  inline LorentzNet projL(LorentzIndex mu, LorentzIndex nu, const Momentum &k)
   {
-    return leaf(mdetail::projector(LorentzFactor::ProjL, mu, nu, k, atom, -1));
+    return leaf(mdetail::projector(LorentzFactor::ProjL, mu, nu, k));
   }
   /// @brief The finite-T **electric** projector `P_E = P_T − P_M` (heat-bath direction = component 0).
-  inline LorentzNet projE(LorentzIndex mu, LorentzIndex nu, const Momentum &k, int atom = -1, int atomS = -1)
+  inline LorentzNet projE(LorentzIndex mu, LorentzIndex nu, const Momentum &k)
   {
-    return leaf(mdetail::projector(LorentzFactor::ProjE, mu, nu, k, atom, atomS));
+    return leaf(mdetail::projector(LorentzFactor::ProjE, mu, nu, k));
   }
   /// @brief The finite-T **magnetic** projector `P_M_{ij} = δ_{ij} − k_i k_j/|k⃗|²` on the spatial
   ///        components (row and column 0 vanish).
-  inline LorentzNet projM(LorentzIndex mu, LorentzIndex nu, const Momentum &k, int atomS = -1)
+  inline LorentzNet projM(LorentzIndex mu, LorentzIndex nu, const Momentum &k)
   {
-    return leaf(mdetail::projector(LorentzFactor::ProjM, mu, nu, k, -1, atomS));
+    return leaf(mdetail::projector(LorentzFactor::ProjM, mu, nu, k));
   }
   /// @brief The Levi-Civita tensor `ε_{μνρσ}`, `ε_{0123} = +1`.
   inline LorentzNet epsilon(LorentzIndex mu, LorentzIndex nu, LorentzIndex rho, LorentzIndex sigma)

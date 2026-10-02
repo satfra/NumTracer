@@ -82,11 +82,12 @@ int main() {
   // ---- B. Adjoint: a gluon condensate on the Cartan directions (SU(3) colour) ---------------
   //
   // The adjoint has N^2-1 = 8 components. su3.diag(a, b, comp2dr) dresses them individually. A
-  // condensate lives in the CARTAN directions -- lambda_3, lambda_8 for SU(3), i.e. components 3
-  // and 8 (0-based indices 2 and 7). We dress those two and DROP the other six.
+  // condensate lives in the CARTAN (diagonal) directions -- lambda_3 and lambda_8 for SU(3). NumTracer
+  // orders the generators generalized-Gell-Mann style, off-diagonal ones first and the N-1 diagonal
+  // ones LAST, so these are 0-based components 6 and 7. We dress those two and DROP the other six.
   // @snip begin: adj
   std::vector<int> cartan(8, -1); // start with everything dropped
-  cartan[2] = 0;                  // lambda_3 -> dressing-id 0  (Z_3)
+  cartan[6] = 0;                  // lambda_3 -> dressing-id 0  (Z_3)
   cartan[7] = 1;                  // lambda_8 -> dressing-id 1  (Z_8)
   const nt::SUNPoly cond = nt::sun_value_dressed(su3.diag(a, b, cartan) * su3.delta(b, a));
   const Cx cond_blind = eval_poly(cond, ones); // Z_3 + Z_8 at 1 -> 2
@@ -99,14 +100,14 @@ int main() {
   const Cx full_blind = eval_poly(full, ones); // 8
 
   // DROP == zero-dressing: the Cartan-only poly equals the full poly with the other six dressings
-  // set to zero. Here: full evaluated with D(id)=1 only for the Cartan ids {2,7}, else 0 -> 2.
-  auto cartan_mask = [](int id) { return (id == 2 || id == 7) ? 1.0 : 0.0; };
+  // set to zero. Here: full evaluated with D(id)=1 only for the Cartan ids {6,7}, else 0 -> 2.
+  auto cartan_mask = [](int id) { return (id == 6 || id == 7) ? 1.0 : 0.0; };
   const Cx full_masked = eval_poly(full, cartan_mask); // 2, matching cond_blind
   // @snip end: adj
 
   std::printf("B. adjoint gluon condensate on the Cartan (SU(3) colour)\n");
   std::printf("   full loop, all Z=1  = %g   (-> N^2-1 = 8)\n", full_blind.re);
-  std::printf("   Cartan {3,8}, Z=1   = %g   (only lambda_3, lambda_8 survive -> 2)\n", cond_blind.re);
+  std::printf("   Cartan l3, l8, Z=1  = %g   (only lambda_3, lambda_8 survive -> 2)\n", cond_blind.re);
   std::printf("   full with rest=0    = %g   (drop == zero-dressing -> matches Cartan)\n", full_masked.re);
   ok = ok && nt::approx(full_blind, Cx{8, 0}) && nt::approx(cond_blind, Cx{2, 0}) &&
        nt::approx(full_masked, cond_blind);

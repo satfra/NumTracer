@@ -143,14 +143,13 @@ two away.
 
 **The agreement is exactly zero**, not $10^{-12}$. Collected and distributed are not two algorithms
 that happen to agree numerically; they are the same arithmetic in a different order, and the `DPoly`
-coefficients are literally the `MPoly`s the distributed path would have produced.
+coefficients are literally the polynomials the distributed path would have produced.
 
-```{admonition} Sizing the `eval` arrays
+```{admonition} Sizing the dressing values
 :class: warning
-`eval(dp, x, atomVal, drVal)` indexes `drVal` **by dressing id**, so it must be sized to
-`max-id + 1` — not to "the number of dressings I used". Nothing tells a `DPoly` how many dressings
-exist in the world. The program uses ids {0, 1, 2} and therefore a 3-element array; a 2-element one
-would read out of bounds.
+`F.eval(dp, pt, drVal)` indexes `drVal` **by dressing id**, so it must be sized to `max-id + 1` —
+not to "the number of dressings I used". The program uses ids {0, 1, 2} and therefore a 3-element
+array; a 2-element one is refused with a message naming the missing id.
 ```
 
 ## Vertex collection: the same trick, one level up
@@ -190,9 +189,10 @@ so the antisymmetric pair is never split. Disable with `NT_NO_SIGMA_FOLD` if you
    own dressing id. Distributed that is $3\times2 = 6$ traces; check how many `DPoly` monomials
    result and whether the reference loop still agrees.
 
-2. **Make the trace non-vanishing.** Replace one `gamma` with a `slash` so that the mixed
-   mass–slash terms survive. The monomial count should rise to 4, matching the distributed count —
-   confirming that the reduction to 2 above was physics, not a dropped term.
+2. **Why only two monomials?** Count the gammas of each structure choice: the two mixed
+   mass–slash choices carry an odd number and vanish identically, which is physics, not a dropped
+   term. Insert one fixed `nt::slash(p)` into the chain and predict which two monomials survive
+   now; then check.
 
 3. **Share an id across three terms.** Give all options the same dressing id and confirm the
    `DPoly` collapses to a single monomial whose coefficient is the sum of the individual traces.

@@ -66,7 +66,8 @@ ctest --test-dir NumTracer/build
 ```
 
 This runs the unit tests through CTest. The tests are built whenever `NUMTRACER_BUILD_TESTS` is on,
-which is the default when NumTracer is the top-level project; installing does not run them.
+which is the default when NumTracer is the top-level project, and `cmake --install` runs them first
+unless you pass `-DNUMTRACER_TEST_ON_INSTALL=OFF`.
 To run a subset by name:
 
 ```bash
@@ -79,6 +80,8 @@ ctest --test-dir NumTracer/build -R numeric --output-on-failure
 |---|---|---|
 | `NUMTRACER_BUILD_TESTS` | on top-level | the unit tests, flow-validation harnesses, and benchmarks |
 | `NUMTRACER_INSTALL_MATHEMATICA` | `ON` | install the Wolfram front-end on Wolfram's application path |
+| `NUMTRACER_TEST_ON_INSTALL` | `ON` | run the test suite as part of `cmake --install` |
+| `NUMTRACER_TEST_CODEGEN` | `OFF` | register the Wolfram regeneration gate (`ctest -L codegen`, run with `NT_RUN_CODEGEN=1`) |
 | `NUMTRACER_SANITIZE` | `OFF` | opt-in sanitizer list for the C++ build (e.g. `-DNUMTRACER_SANITIZE="ADDRESS;UNDEFINED"`) |
 | `NUMTRACER_GPU_TESTS` | `OFF` | CUDA loop-integral integration tests (needs CUDA + GSL) |
 | `NUMTRACER_KOKKOS_TESTS` | `OFF` | Kokkos twins of the GPU integration tests |

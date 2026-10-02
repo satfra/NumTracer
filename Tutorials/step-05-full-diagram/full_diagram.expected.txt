@@ -1,7 +1,7 @@
-static inline void fill(double *f, double p, double l, double cos) {
+static inline void fill(double *f, double p, double l, double cos_theta) {
   f[0] = p;
   f[1] = l;
-  f[2] = cos;
+  f[2] = cos_theta;
 }
 static inline double T([[maybe_unused]] const double *f) {
   const double s0 = f[2];

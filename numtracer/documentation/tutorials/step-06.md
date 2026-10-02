@@ -234,5 +234,5 @@ how [step-15](step-15.md) emits against DiFfRG.
 :language: cpp
 ```
 
-Next, [step-07](step-07.md): frames in earnest — the five builders, multi-angle kinematics, and the
+Next, [step-07](step-07.md): frames in earnest — the frame builders, multi-angle kinematics, and the
 one that is silently degenerate at the symmetric point.

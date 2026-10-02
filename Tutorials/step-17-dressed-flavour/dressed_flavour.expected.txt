@@ -4,6 +4,6 @@ A. fundamental u/d doublet (SU(2) flavour)
    drop d (only u)     = 2   (-> D_u = 2)
 B. adjoint gluon condensate on the Cartan (SU(3) colour)
    full loop, all Z=1  = 8   (-> N^2-1 = 8)
-   Cartan {3,8}, Z=1   = 2   (only lambda_3, lambda_8 survive -> 2)
+   Cartan l3, l8, Z=1  = 2   (only lambda_3, lambda_8 survive -> 2)
    full with rest=0    = 2   (drop == zero-dressing -> matches Cartan)
 ALL TESTS PASSED

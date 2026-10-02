@@ -30,11 +30,12 @@ Frame
   [internals Terminology](../internals/index.md#terminology).
 
 Scalar symbol
-: A scalar product (`l·p`, `l²`, …) kept as a named runtime quantity. The generated kernel computes
-  each once per call; the lowered arithmetic is a polynomial in them.
+: A runtime scalar of the frame — a momentum magnitude, an angle cosine, … (`F.symbol` in C++). The
+  momenta's components are written in them, so a contraction is a polynomial in them; the generated
+  kernel computes each once per call from its arguments.
 
 Atom
-: A surviving inverse propagator $1/k^2$ carried alongside a polynomial's monomials and evaluated at
+: A projector's denominator $1/k^2$ carried alongside a polynomial's monomials and evaluated at
   evaluation time. Named because it is an indivisible reciprocal the contraction tracks rather than
   expands. The frame registers one per projector momentum and knows its denominator.
 

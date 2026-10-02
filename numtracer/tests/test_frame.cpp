@@ -71,7 +71,7 @@ int main()
     // p.P_T(l).p = p^2 (1 - cos^2) in a one-angle frame; the projector's 1/l^2 is assigned automatically.
     nt::Frame F;
     auto P = F.symbol("p"), L = F.symbol("l");
-    auto [Cs, Sn] = F.angle("cos");
+    auto [Cs, Sn] = F.angle("theta");
     auto p = F.momentum(P, 0, 0, 0);
     auto l = F.momentum(L * Cs, L * Sn, 0, 0);
     auto [mu, nu] = F.indices<2>();
@@ -142,6 +142,26 @@ int main()
     auto Q = G.symbol("q");
     const nt::Poly other = Q;
     check(!throws([&] { (void)F.eval(other, G.at(1.0)); }).empty(), "point of another frame -> throws");
+  }
+
+  {
+    nt::Frame F, G;
+    auto X = G.symbol("x");
+    auto Y = F.symbol("y");
+    (void)Y;
+    check(!throws([&] { (void)F.momentum(X, 0, 0, 0); }).empty(), "momentum from another frame's symbol -> throws");
+    nt::Frame H;
+    check(!throws([&] { (void)H.symbol("not a name"); }).empty(), "symbol name that is not a C++ identifier -> throws");
+    check(throws([&] { (void)H.eval(nt::Poly{}, H.at()); }).empty(), "a default (zero) Poly evaluates to 0");
+  }
+  {
+    nt::SUN su3(3);
+    auto [a, b] = su3.adjoint<2>();
+    check(!throws([&] { (void)su3.diag(a, b, {0, 1}); }).empty(), "diag with the wrong component count -> throws");
+    check(throws([&] { (void)su3.value(su3.diag(a, b, std::vector<int>(8, 0)) * su3.delta(b, a)); })
+                  .find("sun_value_dressed") != std::string::npos,
+          "SUN::value on a diag factor -> points to sun_value_dressed");
+    check(!throws([] { nt::SUN bad(0); }).empty(), "SU(0) -> throws");
   }
 
   std::printf(fails ? "FAILED (%d)\n" : "ALL TESTS PASSED\n", fails);

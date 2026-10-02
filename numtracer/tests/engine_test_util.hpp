@@ -28,22 +28,22 @@ namespace ntest
   // ── single Lorentz factors on integer labels (a LorentzTerm's element list) ──────────────────────
   inline LorentzFactor fmet(int a, int b) { return metric(LorentzIndex{a}, LorentzIndex{b}).front().e.front(); }
   inline LorentzFactor fvec(int a, Vlc k) { return vec(LorentzIndex{a}, Momentum{std::move(k)}).front().e.front(); }
-  inline LorentzFactor fprojT(int a, int b, Vlc k, int atom)
+  /// A projector factor with explicit atom ids (the user builders leave them to the Frame).
+  inline LorentzFactor fproj(LorentzFactor::Kind kind, int a, int b, Vlc k, int atom, int atomS)
   {
-    return projT(LorentzIndex{a}, LorentzIndex{b}, Momentum{std::move(k)}, atom).front().e.front();
+    LorentzFactor f = projT(LorentzIndex{a}, LorentzIndex{b}, Momentum{std::move(k)}).front().e.front();
+    f.kind = kind;
+    f.atom = atom;
+    f.atomS = atomS;
+    return f;
   }
-  inline LorentzFactor fprojL(int a, int b, Vlc k, int atom)
-  {
-    return projL(LorentzIndex{a}, LorentzIndex{b}, Momentum{std::move(k)}, atom).front().e.front();
-  }
+  inline LorentzFactor fprojT(int a, int b, Vlc k, int atom) { return fproj(LorentzFactor::ProjT, a, b, std::move(k), atom, -1); }
+  inline LorentzFactor fprojL(int a, int b, Vlc k, int atom) { return fproj(LorentzFactor::ProjL, a, b, std::move(k), atom, -1); }
   inline LorentzFactor fprojE(int a, int b, Vlc k, int atom, int atomS)
   {
-    return projE(LorentzIndex{a}, LorentzIndex{b}, Momentum{std::move(k)}, atom, atomS).front().e.front();
+    return fproj(LorentzFactor::ProjE, a, b, std::move(k), atom, atomS);
   }
-  inline LorentzFactor fprojM(int a, int b, Vlc k, int atomS)
-  {
-    return projM(LorentzIndex{a}, LorentzIndex{b}, Momentum{std::move(k)}, atomS).front().e.front();
-  }
+  inline LorentzFactor fprojM(int a, int b, Vlc k, int atomS) { return fproj(LorentzFactor::ProjM, a, b, std::move(k), -1, atomS); }
   inline LorentzFactor feps(int a, int b, int c, int d)
   {
     return epsilon(LorentzIndex{a}, LorentzIndex{b}, LorentzIndex{c}, LorentzIndex{d}).front().e.front();
@@ -86,10 +86,7 @@ namespace ntest
   {
     return {SUNFacKind::DiagAdj, g, a, b, -1, std::move(c2d)};
   }
-} // namespace ntest
 
-namespace ntest
-{
   // ── whole-net builders on integer labels and a single momentum id, as generated code writes them ──
   inline LorentzNet imet(int a, int b) { return leaf({.kind = LorentzFactor::Metric, .a = a, .b = b}); }
   inline LorentzNet ivec(int a, int vid) { return leaf({.kind = LorentzFactor::Vector, .a = a, .b = -1, .vlc = {{1.0, vid}}}); }

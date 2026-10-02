@@ -37,7 +37,7 @@ struct LMono {
 
 Two things happen in the flattening:
 
-* **Real-part extraction.** A trace of Dirac/colour/Lorentz tensors over real momenta is real,
+* **Real-part extraction.** A trace of Dirac/SU($N$)/Lorentz tensors over real momenta is real,
   so the kernel only needs `Re`. Each `LMono.c` is set to `c.re`; the imaginary half is dropped.
   `to_genprog` scans the coefficients first and only if some `c.im` genuinely survives does it
   also lower an imaginary root — so the pure-real case (the overwhelming majority) never pays for
