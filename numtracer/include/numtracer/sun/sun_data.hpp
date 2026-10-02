@@ -1,6 +1,5 @@
 /// @file sun_data.hpp
-/// @brief Compile-time SU(2)/SU(3) colour tables plus the @ref numtracer::sun::SUNBuilder
-///        sector class (runtime oracle for the generators + structure constants).
+/// @brief Compile-time SU(2)/SU(3) colour tables (generators and structure constants).
 ///
 /// The generators @f$T^a@f$ and structure constants @f$f^{abc}@f$ depend only on
 /// `N`, so for the physically relevant cases they are not built at runtime: they
@@ -9,10 +8,10 @@
 /// compile-time constants, and the @f$f^{abc}@f$ are plain reals — no `constexpr`
 /// complex arithmetic or `sqrt` is needed.
 ///
-/// These values were generated once from the runtime @ref numtracer::sun::SUNBuilder
-/// at full (`%.17g`) precision; `tests/test_core.cpp` cross-checks them against
-/// that builder (the oracle), so they can never silently drift. The runtime
-/// builder is retained for `N >= 4` and as that oracle.
+/// These values were generated once from the generalized-Gell-Mann construction at full
+/// (`%.17g`) precision; `tests/test_sun_tables.cpp` cross-checks them against that construction
+/// (`build_oracle` in `network/sun_net.hpp`, which also serves `N >= 4`), so they cannot silently
+/// drift.
 ///
 /// Conventions: SU(2) uses @f$T^a = \sigma^a/2@f$ (so @f$f^{abc} =
 /// \epsilon^{abc}@f$); SU(3) uses the Gell-Mann @f$\lambda^a/2@f$, with the
@@ -33,13 +32,13 @@
 
 namespace numtracer::sun {
 
-/// @brief Internal helpers shared by the SU(N) oracle and its typed-out tables.
+/// @brief Internal helpers shared by the SU(N) builder and its typed-out tables.
 namespace sun_detail {
 
 /// @brief One nonzero adjoint structure constant @f$f^{abc} = v@f$.
 ///
-/// Used by both the runtime @ref numtracer::sun::SUNBuilder store and the typed-out
-/// `constexpr` tables below.
+/// Used by both the runtime builder (`network/sun_net.hpp`) and the typed-out `constexpr` tables
+/// below.
 struct FEntry {
   int a;    ///< First adjoint index.
   int b;    ///< Second adjoint index.
@@ -103,84 +102,5 @@ template <> struct SUNData<3> {
   }};
 };
 template <> inline constexpr bool kHasSUNData<3> = true; ///< SU(3) data is tabulated.
-
-/// @brief The SU(N) sector: a runtime numeric oracle for the colour algebra.
-///
-/// The constructor builds the fundamental generators (generalized Gell-Mann) and the
-/// structure constants @f$f^{abc} = -2 i\,\mathrm{tr}([T^a,T^b]T^c)@f$. This is the
-/// source of truth the typed-out @ref SUNData tables are validated against, and the
-/// substrate the numeric colour contraction (`network/sun_net.hpp`) mirrors.
-/// @tparam N The colour group rank.
-template <int N> class SUNBuilder {
-public:
-  /// @brief The adjoint dimension @f$N^2-1@f$ (number of generators).
-  static constexpr int kAdjDim = N * N - 1;
-
-  /// @brief Construct the oracle, building the generators and structure constants.
-  SUNBuilder() {
-    build_generators();
-    build_structure_constants();
-  }
-  /// @brief The adjoint dimension.
-  /// @return @f$N^2-1@f$.
-  static constexpr int adj_dim() { return kAdjDim; }
-  /// @brief Access a fundamental generator built by the oracle.
-  /// @param a The adjoint (generator) index.
-  /// @return The matrix @f$T^a@f$.
-  const Mat<N> &gen(int a) const { return gens_[a]; }                 // fundamental generator T^a
-  /// @brief The nonzero structure constants built by the oracle.
-  /// @return The list of @ref numtracer::sun_detail::FEntry records.
-  const std::vector<sun_detail::FEntry> &f_nonzeros() const { return f_nz_; }
-
-private:
-  std::array<Mat<N>, kAdjDim> gens_{}; ///< The oracle-built fundamental generators.
-  std::vector<sun_detail::FEntry> f_nz_; ///< The oracle-built nonzero structure constants.
-
-  /// @brief Build the fundamental generators (generalized Gell-Mann) into @ref gens_.
-  /// @throws std::logic_error if the generator count does not match @ref kAdjDim.
-  void build_generators() {
-    const std::complex<double> I{0, 1};
-    int idx = 0;
-    for (int k = 0; k < N; ++k)
-      for (int l = k + 1; l < N; ++l) {
-        Mat<N> m;
-        m(k, l) = std::complex<double>{0.5, 0};
-        m(l, k) = std::complex<double>{0.5, 0};
-        gens_[idx++] = m;
-        Mat<N> n;
-        n(k, l) = -I * 0.5;
-        n(l, k) = I * 0.5;
-        gens_[idx++] = n;
-      }
-    for (int l = 1; l <= N - 1; ++l) {
-      Mat<N> m;
-      const double norm = std::sqrt(1.0 / (2.0 * l * (l + 1)));
-      for (int j = 0; j < l; ++j) m(j, j) = std::complex<double>{norm, 0};
-      m(l, l) = std::complex<double>{-norm * l, 0};
-      gens_[idx++] = m;
-    }
-    if (idx != kAdjDim) NT_THROW(std::logic_error, "SUNBuilder: wrong generator count");
-  }
-  /// @brief Build the nonzero structure constants @f$f^{abc} = -2 i\,\mathrm{tr}([T^a,T^b]T^c)@f$.
-  ///
-  /// Stores every entry whose magnitude exceeds a `1e-12` round-off tolerance into @ref f_nz_.
-  void build_structure_constants() {
-    // entries below this magnitude are floating-point round-off in the commutator trace, not genuine
-    // nonzero structure constants, so they are dropped.
-    constexpr double kStructConstTol = 1e-12;
-    for (int a = 0; a < kAdjDim; ++a)
-      for (int b = 0; b < kAdjDim; ++b) {
-        const Mat<N> ab = matmul(gens_[a], gens_[b]);
-        const Mat<N> ba = matmul(gens_[b], gens_[a]);
-        Mat<N> comm;
-        for (std::size_t i = 0; i < comm.data.size(); ++i) comm.data[i] = ab.data[i] - ba.data[i];
-        for (int c = 0; c < kAdjDim; ++c) {
-          const std::complex<double> tr = trace(matmul(comm, gens_[c]));
-          const double val = (std::complex<double>{0, -2} * tr).real();
-          if (std::fabs(val) > kStructConstTol) f_nz_.push_back({a, b, c, val});
-        }
-      }
-  }
-};
 
 } // namespace numtracer::sun

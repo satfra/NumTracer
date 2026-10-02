@@ -5,22 +5,38 @@
 // (Wolfram's symbolic color algebra is too slow). Here it computes the ghost-loop
 // color factor f^{a c d} f^{b c d} for SU(N) and prints it.
 //
-// N is a runtime argument but dispatched to a compile-time SUNBuilder<N> (stack memory),
-// for the physically relevant small values.
+// N is a runtime argument: the SU(N) data comes from the same runtime source the engine uses
+// (sun_data_for: the typed tables for N = 2, 3, the generalized-Gell-Mann construction otherwise).
 //
 // Usage:  sun_contract <N>           # prints the diagonal value (= C_A = N)
 //         sun_contract <N> --full    # prints the full a,b matrix (diagnostic)
-#include "numtracer/sun/sun_data.hpp"
+#include "numtracer/network/sun_net.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
-// Print / scan f^{acd} f^{bcd} given a callable ff(a,b). The color source is
-// chosen by run<N>(): the compile-time tables for typed-out N, else runtime SU(N).
-template <int N, class FF> int report(bool full, FF ff) {
-  constexpr int A = numtracer::sun::SUNBuilder<N>::adj_dim();
+int main(int argc, char **argv) {
+  const int N = (argc > 1) ? std::atoi(argv[1]) : 3;
+  const bool full = (argc > 2) && std::strcmp(argv[2], "--full") == 0;
+  if (N < 2) {
+    std::fprintf(stderr, "N must be >= 2\n");
+    return 1;
+  }
+  const auto &f = numtracer::network::sun_net_detail::sun_data_for(N).f_nz;
+  const int A = N * N - 1;
+  // f^{acd} f^{bcd} contracted over (c,d) — an inline numeric contraction (the library folds
+  // colour numerically via sun_value_cx).
+  auto ff = [&](int a, int b) {
+    double s = 0;
+    for (const auto &e1 : f)
+      if (e1.a == a)
+        for (const auto &e2 : f)
+          if (e2.a == b && e1.b == e2.b && e1.c == e2.c) s += e1.v * e2.v;
+    return s;
+  };
   if (full) {
     std::printf("# f^{acd} f^{bcd} for SU(%d), adjoint dim %d\n", N, A);
     for (int a = 0; a < A; ++a) {
@@ -30,7 +46,6 @@ template <int N, class FF> int report(bool full, FF ff) {
     }
     return 0;
   }
-
   double maxoff = 0, mindiag = 1e300, maxdiag = -1e300;
   for (int a = 0; a < A; ++a)
     for (int b = 0; b < A; ++b) {
@@ -48,40 +63,4 @@ template <int N, class FF> int report(bool full, FF ff) {
   }
   std::printf("%.15g\n", maxdiag); // the single exact number Wolfram reads back
   return 0;
-}
-
-template <int N> int run(bool full) {
-  numtracer::sun::SUNBuilder<N> g; // runtime SU(N) oracle: builds the structure constants
-  const auto &f = g.f_nonzeros();
-  // f^{acd} f^{bcd} contracted over (c,d) — an inline numeric contraction (this is
-  // the on-the-fly numeric seam; the library folds colour numerically via sun_value_cx).
-  auto ff = [&](int a, int b) {
-    double s = 0;
-    for (const auto &e1 : f)
-      if (e1.a == a)
-        for (const auto &e2 : f)
-          if (e2.a == b && e1.b == e2.b && e1.c == e2.c) s += e1.v * e2.v;
-    return s;
-  };
-  return report<N>(full, ff);
-}
-
-int main(int argc, char **argv) {
-  const int N = (argc > 1) ? std::atoi(argv[1]) : 3;
-  const bool full = (argc > 2) && std::strcmp(argv[2], "--full") == 0;
-  switch (N) {
-  case 2:
-    return run<2>(full);
-  case 3:
-    return run<3>(full);
-  case 4:
-    return run<4>(full);
-  case 5:
-    return run<5>(full);
-  case 6:
-    return run<6>(full);
-  default:
-    std::fprintf(stderr, "N=%d not compiled in (add a case); supported: 2..6\n", N);
-    return 1;
-  }
 }

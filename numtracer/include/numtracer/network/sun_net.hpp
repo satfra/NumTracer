@@ -18,8 +18,8 @@
 /// the SU(N) data (generators + nonzero `f^{abc}`) is built once per `N` and cached (@ref
 /// sun_net_detail::sun_data_for). For the tabulated ranks `N ∈ {2,3}` the data is copied verbatim
 /// from the validated typed-out @ref numtracer::sun::SUNData tables, so the folded values are byte-identical
-/// to the typed path; for any other `N` it is built from the generalized-Gell-Mann construction (the
-/// same one the @ref numtracer::sun::SUNBuilder oracle uses).
+/// to the typed path; for any other `N` it is built from the generalized-Gell-Mann construction
+/// (@ref sun_net_detail::build_oracle, also the oracle the tables are tested against).
 ///
 /// A network may carry **two independent groups at once** (e.g. colour SU(3) ⊗ flavour SU(2)).
 /// Each @ref SUNFac is tagged with its group's rank `g`; the two groups have disjoint label spaces,
@@ -222,8 +222,8 @@ template <int N> SUNDyn seed_from_table() {
 
 /// @brief Build SU(N) data for an arbitrary rank from the generalized-Gell-Mann construction.
 ///
-/// Mirrors @ref numtracer::sun::SUNBuilder::build_generators / build_structure_constants exactly, with
-/// `f^{abc} = -2 i\,\mathrm{tr}([T^a,T^b]T^c)`, using the dynamic matrix.
+/// `f^{abc} = -2 i\,\mathrm{tr}([T^a,T^b]T^c)`, using the dynamic matrix. This is the construction
+/// the typed-out SU(2)/SU(3) tables were generated from (`tests/test_sun_tables.cpp` checks them).
 inline SUNDyn build_oracle(int N) {
   if (N < 1) NT_THROW(std::runtime_error, "sun_net: build_oracle requires group rank N >= 1");
   SUNDyn d;

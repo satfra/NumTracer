@@ -45,10 +45,10 @@ the structure constants $f^{abc}$ defined by $[T^a, T^b] = i f^{abc} T^c$. Colou
 contractions of these, e.g. $f^{acd} f^{bcd} = N\,\delta^{ab}$ and
 $\mathrm{tr}(T^a T^b) = \tfrac12 \delta^{ab}$.
 
-`sun/sun_data.hpp` types out the SU(2)/SU(3) tables and provides the runtime
-**oracle** `SUNBuilder<N>`: its constructor builds the generators (generalized Gell-Mann construction)
-and the structure constants $f^{abc} = -2i\,\mathrm{tr}([T^a,T^b]T^c)$ for any `N`, which is the
-source of truth the typed-out tables are checked against. A colour network with no free indices
+`sun/sun_data.hpp` types out the SU(2)/SU(3) tables. Any other `N` is built at run time by
+`build_oracle` in `network/sun_net.hpp` (generalized Gell-Mann construction, structure constants
+$f^{abc} = -2i\,\mathrm{tr}([T^a,T^b]T^c)$), which is also what `tests/test_sun_tables.cpp` checks
+the typed-out tables against. A colour network with no free indices
 folds to a single number — the [numeric engine](numeric-engine.md) does this at build time over
 these tables (`network/sun_net.hpp`), so the kernel never carries a colour tensor. A network that
 dresses each colour/flavour component differently (a group-diagonal $\delta$) folds instead with
@@ -56,4 +56,4 @@ dresses each colour/flavour component differently (a group-diagonal $\delta$) fo
 `sun_value_cx` is left untouched, so colour-blind flows are unchanged.
 
 `core/cmat.hpp` defines `Mat<N>`, `matmul`, and `trace` — a plain dense complex matrix type used
-by the oracle and the tests.
+by the tables and the tests.

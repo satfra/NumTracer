@@ -204,8 +204,12 @@ if(NUMTRACER_BUILD_TESTS)
   add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter;-Wno-unused-variable>")
 
   # On-the-fly color-contraction.
+  # Both read sun_net_detail (the SU(N) data builder), which only exists where the engine bodies are
+  # compiled, so they build header-only.
   add_executable(sun_contract tests/sun_contract.cpp)
-  target_link_libraries(sun_contract PRIVATE NumTracer::NumTracer)
+  target_link_libraries(sun_contract PRIVATE NumTracer::NumTracer_headeronly)
+  add_executable(test_sun_tables tests/test_sun_tables.cpp)
+  target_link_libraries(test_sun_tables PRIVATE NumTracer::NumTracer_headeronly)
 
   # Numeric (matrix-product) contraction backend (numeric/*): MPoly-entry gamma trace via 4x4
   # matrix products + projector index-sum, vs chiral_gamma_trace and direct numeric contraction;
@@ -642,7 +646,13 @@ if(NUMTRACER_BUILD_TESTS)
   add_test(NAME flow_flavour_ingroup COMMAND compare_flavour_ingroup)
   add_test(NAME flow_kaon_tadpole COMMAND compare_kaon_tadpole)
   add_test(NAME flow_gluon_condensate COMMAND compare_gluon_condensate)
+  # f^{acd} f^{bcd} = C_A delta^{ab} = N delta^{ab}: SU(3) from the typed table, SU(5) from the
+  # runtime construction.
   add_test(NAME color_su3 COMMAND sun_contract 3)
+  set_tests_properties(color_su3 PROPERTIES PASS_REGULAR_EXPRESSION "^3\n")
+  add_test(NAME color_su5 COMMAND sun_contract 5)
+  set_tests_properties(color_su5 PROPERTIES PASS_REGULAR_EXPRESSION "^5\n")
+  add_test(NAME sun_tables COMMAND test_sun_tables)
 
   # ---- Wolfram UNIT tests (fast, not opt-in) ---------------------------------------------------
   # Pure symbolic checks over mathematica/ that need no generation, no C++ and no compile, so they
