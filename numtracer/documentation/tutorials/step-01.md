@@ -12,17 +12,15 @@ operation. So the first program does exactly it, with no physics in sight.
 
 ### The one rule
 
-A **network** is a product of tensor factors, each carrying integer *index labels*. Two index slots
-are summed over exactly when they carry **the same label** — the Einstein convention, made literal.
-A label that appears once stays free; a network with no free labels left is a scalar.
+A **network** is a product of tensor factors, each carrying *index labels*. Two index slots are
+summed over exactly when they carry **the same label** — the Einstein convention, made literal. A
+label that appears once stays free; a network with no free labels left is a scalar.
 
 That rule is the entire mental model, and it is worth being precise about what it does *not* say.
 It says nothing about "upper" and "lower" indices — NumTracer is Euclidean, so raising and lowering
-is the identity and there is no distinction to track. It says nothing about the *extent* of an
-index: a Lorentz label runs over 4 values, a fundamental SU(3) label over 3, a spinor label over 4,
-and the contraction machinery never needs to know which is which, because it only ever compares
-labels for equality. This is why a single network can mix all three sectors without them
-interfering (see [Scope & conventions](../getting_started/scope-and-conventions.md)).
+is the identity and there is no distinction to track. And labels of different kinds never meet: a
+Lorentz label, an adjoint SU($N$) label and a fundamental one are different C++ types, so the
+compiler keeps the sectors apart (see [Scope & conventions](../getting_started/scope-and-conventions.md)).
 
 ### The two networks
 
@@ -64,26 +62,7 @@ same vocabulary doing the thing you could not do by hand.
 The whole program is `Tutorials/step-01-hello-network/hello_network.cpp`. We take it in three
 pieces.
 
-### Labels and vectors
-
-Index labels are just integers, but writing raw numbers invites accidental collisions — two factors
-that were never meant to contract quietly sharing a label is a silent wrong answer, not a
-compile error. The idiom used throughout the tutorials is a single unscoped `enum`: every name gets
-a distinct auto-numbered value, so factors contract only where you deliberately reuse a name.
-
-```{literalinclude} ../../../Tutorials/step-01-hello-network/hello_network.cpp
-:language: cpp
-:lines: 24-33
-```
-
-Note that the *vector* ids (`a`, `b`, `k` as momenta) are a separate namespace from the *index*
-labels. A vector id indexes the component table below; an index label names a slot to be summed.
-Confusing the two is the most common beginner error.
-
-### The frame
-
-Before anything can be contracted, every vector needs components. The table that supplies them is
-called the **frame**:
+### The frame, the momenta and the labels
 
 ```{literalinclude} ../../../Tutorials/step-01-hello-network/hello_network.cpp
 :language: cpp
@@ -91,17 +70,16 @@ called the **frame**:
 :end-before: "@snip end: frame"
 ```
 
-`comp[vid][c]` is component `c` (0–3) of vector `vid`. The entries are `MPoly` — multivariate
-polynomials — not `double`, because in a real kernel the components are *symbolic*: functions of
-the loop magnitude and angles that the integrator supplies at runtime. Here they happen to be
-literal numbers, which is the degenerate case `nsym = 0`: an empty symbol space, every component a
-constant polynomial.
+A `Frame` holds everything the contraction needs to know besides the network itself: which momenta
+exist and what their four components are. Here the components are plain numbers. In a real kernel
+they are *symbolic* — functions of the loop magnitude and angles that the integrator supplies at
+runtime — and the frame declares those symbols too ([step-03](step-03.md) onwards).
+`F.momentum(...)` returns a `Momentum`, the handle you use in the network.
 
-`LorentzEnv env(nsym)` is the factory every polynomial is minted through. It exists to bind `nsym`
-**once**. Two polynomials can only be added or multiplied if they agree on how many symbols the
-world has, and mixing two different `nsym` values is undefined behaviour rather than a checked
-error — so the library makes the size unforgeable by hanging every constructor off an env that
-already knows it. [step-03](step-03.md) returns to this.
+`F.indices<2>()` hands out two fresh Lorentz index labels. Each call returns labels that differ
+from every label handed out before, so two factors contract only where you deliberately reuse one.
+A label is its own type, `LorentzIndex`: an integer or a momentum cannot be passed where an index is
+expected.
 
 ### Network one: a metric
 
@@ -111,14 +89,13 @@ already knows it. [step-03](step-03.md) returns to this.
 :end-before: "@snip end: dot"
 ```
 
-An `NNet` is a **sum of terms**; an `NTerm` is a coefficient times a product of factors. Here there
-is one term, coefficient 1, three factors. `nvec(mu, {{1.0, 0}})` is "vector id 0, coefficient 1, on
-index `mu`" — the `{{coeff, vid}}` list is a *linear combination*, which is what lets a propagator
-momentum $l - p$ be written `{{1.0, l}, {-1.0, p}}` without introducing a new vector.
+`nt::vec(mu, va)` is the vector $a_\mu$, `nt::metric(mu, nu)` is $\delta_{\mu\nu}$, and `*` is
+the tensor product. The shared labels are summed when `F.contract` collapses the network. The
+result is an `nt::Poly`, a polynomial in the frame's symbols — here a constant, since there are no
+symbols. `F.eval(poly, point)` evaluates it; `F.at(...)` builds the point from the symbol values,
+none in this case.
 
-`numeric_value` is the engine's one contraction entry point. Its first argument is the Dirac chain,
-empty here because this network is pure Lorentz. It returns an `MPoly`; `eval` then substitutes
-numbers — symbol values (none) and inverse-atom values (none).
+A network can also be a sum: `+` adds two networks, and a number times a network scales it.
 
 ### Network two: a projector
 
@@ -128,16 +105,12 @@ numbers — symbol values (none) and inverse-atom values (none).
 :end-before: "@snip end: proj"
 ```
 
-Two things are new. `nprojT(mu, nu, {{1.0, 2}}, 0)` takes a fourth argument, `0`: the **id of the
-inverse atom** that holds this projector's $1/k^2$. Atoms are numbered by the caller, and the
-engine needs to know what each one is the reciprocal *of* — hence `k2`, computed just above and
-handed to `numeric_value` as the atom-denominator table. Knowing the denominator is what lets the
-engine cancel a $k^2$ against a $1/k^2$ inside a monomial instead of carrying both.
-
-Second, `eval` now receives `{1.0 / k2v}`: one value per atom. Note the asymmetry — the *engine*
-is told the denominator ($k^2$), the *evaluator* is told the reciprocal ($1/k^2$). That is not an
-inconsistency: the engine needs $k^2$ to do algebra with, while the evaluator wants the reciprocal
-precomputed so the generated kernel never divides.
+`nt::projT(mu, nu, vk)` is $P(k)_{\mu\nu}$. Its $1/k^2$ cannot be multiplied out — $k^2$ is in
+general a runtime quantity — so it rides through the contraction as a separate factor, an **inverse
+atom**. The frame registers that atom the first time it meets the projector: it knows $k$'s
+components, so it knows the denominator $k^2$, and `F.eval` computes $1/k^2$ at the evaluation
+point. Knowing the denominator also lets the engine cancel a $k^2$ against a $1/k^2$ inside a
+monomial instead of carrying both. [step-04](step-04.md) looks at atoms more closely.
 
 ## Results
 
@@ -145,15 +118,13 @@ precomputed so the generated kernel never divides.
 cmake --build build --target hello_network && ./build/hello_network
 ```
 
-```text
-a . b        = 0.26   (expect 0.26)
-a . P(k) . a = 0.403649   (expect a^2 - (a.k)^2/k^2 = 0.403649)
-ALL TESTS PASSED
+```{literalinclude} ../../../Tutorials/step-01-hello-network/hello_network.expected.txt
+:language: text
 ```
 
 Both agree with the closed form to machine precision, which is the point: the engine was told
 nothing about what a metric or a projector *means*. It was told that $\delta_{\mu\nu}$ has entries
-$1$ on the diagonal and that $P$ has entries $\delta_{\mu\nu} - k_\mu k_\nu \cdot (\text{atom }0)$,
+$1$ on the diagonal and that $P$ has entries $\delta_{\mu\nu} - k_\mu k_\nu \cdot (1/k^2)$,
 and it summed the shared labels. The identity $a\cdot P(k)\cdot a = a^2 - (a\cdot k)^2/k^2$ is not
 knowledge the engine has — it is what falls out.
 
@@ -164,28 +135,33 @@ already computed a piece of real physics; [step-04](step-04.md) does it with the
 ## Possibilities for extensions
 
 1. **Check that the projector projects.** $P(k)$ should annihilate $k$: contract
-   `nvec(mu, {{1.0, 2}}) · nprojT(mu, nu, {{1.0,2}}, 0) · nvec(nu, {{1.0, 2}})` and confirm you get
-   0 to machine precision. Then check idempotence, $P\cdot P = P$, by tying two projectors through
-   a shared middle label and comparing to a single one.
+   `vec(mu, vk) * projT(mu, nu, vk) * vec(nu, vk)` and confirm you get 0 to machine precision. Then
+   check idempotence, $P\cdot P = P$, by tying two projectors through a third label
+   (`auto [rho] = F.indices<1>();`) and comparing to a single one.
 
-2. **A momentum that is a combination.** Replace the second `a` in network two with $a - b$,
-   i.e. `nvec(nu, {{1.0, 0}, {-1.0, 1}})`. Predict the closed form first, then check it. This is
-   the mechanism every propagator momentum uses.
+2. **A momentum that is a combination.** Replace the second `va` in network two by `va - vb`.
+   Predict the closed form first, then check it. Momenta add and scale like vectors; this is how
+   every propagator momentum $l - p$ is written.
 
-3. **Break it deliberately — reuse a label.** Change the metric to `nmet(mu, mu)`. You will not get
-   an error; you will get $\mathrm{tr}\,\delta = 4$ times something, because a label used twice
-   *within one factor* is a self-contraction and is perfectly legal. Now instead give the two
-   `nvec` factors the *same* label as each other and no metric at all, and reason about what you
-   get. The lesson is that the engine cannot tell an intended contraction from a typo — labels are
-   the whole contract, which is why the `enum` idiom is not decoration.
+3. **Reuse a label within one factor.** Change the metric to `metric(mu, mu)` and drop the two
+   vectors. You get $\mathrm{tr}\,\delta = 4$: a label used twice within one factor is a
+   self-contraction, perfectly legal. The engine cannot tell an intended contraction from a typo —
+   labels are the whole contract, which is why each label should come from `F.indices`.
 
-4. **Break it deliberately — forget the atom.** Pass `{}` instead of `{k2}` as the atom-denominator
-   table, or `{}` instead of `{1.0/k2v}` to `eval`. Read what happens carefully: one of these is a
-   loud failure and one is a quiet wrong number. Knowing which is which will save you an afternoon
-   later.
+4. **Break it deliberately — leave an index open.** Contract `vec(mu, va) * metric(mu, nu)` (drop
+   the second vector). Summing a free index over 0–3 would return a meaningless number, so the
+   engine refuses:
 
-5. **Add a longitudinal projector.** `nprojL` is $k_\mu k_\nu / k^2$. Verify $P^T + P^L = \delta$
-   by contracting all three against the same pair of vectors and comparing sums.
+   ```text
+   numtracer: Lorentz index id 1 is OPEN (occurs once) — the network does not close to a scalar. ...
+   ```
+
+   Now pass a wrong number of values to `F.at` (say `F.at(1.0)`): the frame has no symbols, and
+   says so.
+
+5. **Add a longitudinal projector.** `nt::projL(mu, nu, vk)` is $k_\mu k_\nu / k^2$. Verify
+   $P^T + P^L = \delta$ by contracting `projT(...) + projL(...)` against two vectors and comparing
+   with the metric.
 
 ## The plain program
 

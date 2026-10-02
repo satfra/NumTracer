@@ -47,16 +47,17 @@ polynomial instead of a scalar.
 
 | Function | Returns | Use |
 |---|---|---|
-| `sun_value_cx(net)` | one `Cx` | a fully contracted net with no diagonal factor ([step-02](step-02.md)) |
-| `sun_value_dressed(net)` | a `SUNPoly` | a net containing a `diagFund` / `diagAdj` factor |
+| `su.value(net)`, `nt::sun_value(net)` | one `Cx` | a fully contracted net with no diagonal factor ([step-02](step-02.md)) |
+| `nt::sun_value_dressed(net)` | a `SUNPoly` | a net containing a `su.diag(…)` factor |
 
 A `SUNPoly` is a list of `SUNTerm{coeff, dress}`: a coefficient times the product of the
 dressing-ids in that monomial. A net with **no** diagonal factor comes back as a single constant
-term equal to what `sun_value_cx` would have given — the two agree by construction.
+term equal to what `sun_value` would have given — the two agree by construction.
 
 ### The `comp2dr` map
 
-A diagonal factor is a delta tagged with a component-to-dressing map. `comp2dr[v]` is the
+A diagonal factor, `su.diag(i, j, comp2dr)` (fundamental) or `su.diag(a, b, comp2dr)` (adjoint), is
+a delta tagged with a component-to-dressing map. `comp2dr[v]` is the
 dressing-id for component `v`, **or `-1` to drop that component entirely**. Dropping is not the same
 as dressing with zero at runtime: a dropped component contributes no term at all, so there is no
 dead arithmetic in the emitted kernel.
@@ -83,9 +84,10 @@ rests on.
 :end-before: "@snip end: fund"
 ```
 
-`diagFund(i, j, {0, 1})` is the flavour delta with component 0 (the up quark) carrying dressing-id 0
-and component 1 (the down quark) carrying id 1; `deltaFund(j, i)` closes the loop. The fold gives
-the two-term `SUNPoly` $D_u + D_d$.
+`su2.diag(i, j, {0, 1})` is the flavour delta with component 0 (the up quark) carrying dressing-id 0
+and component 1 (the down quark) carrying id 1; `su2.delta(j, i)` closes the loop. The fold gives
+the two-term `SUNPoly` $D_u + D_d$. The labels `i, j` are `FundIndex` from `su2.fundamental<2>()`,
+so `diag` picks the fundamental version; the adjoint labels of section B pick the adjoint one.
 
 Then the two invariants:
 
@@ -113,16 +115,8 @@ semantically transparent, which is what licenses using it.
 cmake --build build --target dressed_flavour && ./build/dressed_flavour
 ```
 
-```text
-A. fundamental u/d doublet (SU(2) flavour)
-   D_u + D_d           = 7   (D_u=2, D_d=5 -> 7)
-   collapse D_u=D_d=1  = 2   (-> flavour-blind N_f = 2)
-   drop d (only u)     = 2   (-> D_u = 2)
-B. adjoint gluon condensate on the Cartan (SU(3) colour)
-   full loop, all Z=1  = 8   (-> N^2-1 = 8)
-   Cartan {3,8}, Z=1   = 2   (only lambda_3, lambda_8 survive -> 2)
-   full with rest=0    = 2   (drop == zero-dressing -> matches Cartan)
-ALL TESTS PASSED
+```{literalinclude} ../../../Tutorials/step-17-dressed-flavour/dressed_flavour.expected.txt
+:language: text
 ```
 
 Read line 3 of block A and line 2 of block B together: `2` and `8` are $N_f$ and $N_c^2-1$, the

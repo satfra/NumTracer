@@ -1,0 +1,3 @@
+a . b        = 0.26   (expect 0.26)
+a . P(k) . a = 0.403649   (expect a^2 - (a.k)^2/k^2 = 0.403649)
+ALL TESTS PASSED

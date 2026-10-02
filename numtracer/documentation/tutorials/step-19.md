@@ -151,7 +151,7 @@ all exercised by `numtracer/tests/gen/gen_fierz_ortho_numeric.wls` (tier C — i
 `FierzCompleteNf2Nc3NJL` basis from TensorBases):
 
 **Two independent spinor lines.** A four-quark diagram has two quark lines that are *not* joined
-into one trace. The `dloopsep` token marks the boundary: the contraction traces each loop
+into one trace. The `loop_sep` token marks the boundary: the contraction traces each loop
 separately and multiplies the resulting Lorentz tensors, contracting their shared gluon legs through
 the Lorentz net. It is emphatically **not** a Wick pairing across the loops — the spinor indices of
 one line never meet the other's.

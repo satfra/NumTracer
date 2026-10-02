@@ -18,11 +18,12 @@ A **frame** is the choice of concrete components that encodes this. For a one-lo
 diagram — one external momentum $p$, one loop momentum $l$ — the natural choice is
 
 $$
-p = (p, 0, 0, 0), \qquad l = (l_0, l_1, 0, 0),
+p = (p, 0, 0, 0), \qquad l = (l\cos\theta,\ l\sin\theta,\ 0, 0),
 $$
 
 i.e. put $p$ along an axis and let $l$ live in the plane it spans with that axis. Two components of
-$l$ are identically zero and can be dropped; the integrand is a function of exactly three scalars.
+$l$ are identically zero and can be dropped; the integrand is a function of exactly three scalars,
+$p$, $l$ and $\cos\theta$. ($\sin\theta$ is not a fourth one: it is $\sqrt{1-\cos^2\theta}$.)
 
 This is worth stating carefully because it is the single biggest lever on kernel size. The engine
 contracts *over the frame's components*. Choosing a frame with two zero components means those
@@ -38,9 +39,9 @@ $$
 P(l)_{\mu\nu} = \delta_{\mu\nu} - \frac{l_\mu l_\nu}{l^2}
 $$
 
-carries a denominator. In a symbolic frame $l^2 = l_0^2 + l_1^2$, a polynomial — and dividing one
-polynomial by another does not in general give a polynomial. So the engine cannot simply "do the
-division"; it must carry $1/l^2$ as an opaque quantity.
+carries a denominator. In a symbolic frame $l^2$ is a polynomial in the frame's symbols — and
+dividing one polynomial by another does not in general give a polynomial. So the engine cannot
+simply "do the division"; it must carry $1/l^2$ as an opaque quantity.
 
 It does this by giving each distinct denominator an **atom id**, and letting monomials carry
 powers of atoms alongside powers of symbols. A monomial is then
@@ -54,14 +55,13 @@ reciprocal of, which lets it cancel: when a monomial acquires both an $l^2$ from
 $\mathrm{atom}_0$, the two annihilate instead of both being carried. Without that cancellation the
 polynomials would grow without bound through a long chain of propagators.
 
-```{admonition} Why the caller numbers the atoms
+```{admonition} Who numbers the atoms
 :class: note
-Atom ids are supplied by you, not invented by the engine, and that is deliberate: two projectors on
-the *same* momentum must share an atom id so their denominators cancel against the same numerators.
-In generated kernels this bookkeeping is done by the front-end, which allocates one atom per
-distinct inverse propagator across the whole diagram. When hand-building, it is your job — and
-giving two projectors on the same momentum *different* ids is a correctness bug that no test will
-catch for you, only a size regression.
+The frame does. Each projector's momentum is known, so the first time the frame meets a projector on
+$l$ (or on $-l$, which has the same $l^2$) it registers one atom with denominator $l^2$, computed
+from $l$'s components; every later projector on the same momentum reuses it. That sharing is what
+lets the denominators cancel against the same numerators. Generated kernels do the same bookkeeping
+in the front-end, one atom per distinct inverse propagator across the whole diagram.
 ```
 
 ## The commented program
@@ -77,25 +77,18 @@ one-angle frame.
 :end-before: "@snip end: frame"
 ```
 
-Three symbols for three nonzero components. Everything else is `env.zero()` — and note that this is
-a *structural* zero, not the number 0.0: a zero `MPoly` has no monomials, so any product it enters
-is dropped immediately rather than being carried as a term with coefficient zero.
+Three symbols: the magnitudes `P`, `L` and the angle cosine `C`. `F.angle("cos")` returns the
+cosine *and* the sine as symbols, but only the cosine is an input: the frame derives
+$\sin\theta = \sqrt{1-\cos^2\theta}$ at evaluation time, and it uses $\cos^2+\sin^2 = 1$ during
+contraction. That is what makes $l^2 = l^2\cos^2\theta + l^2\sin^2\theta$ collapse to the single
+monomial $l^2$ — and a denominator that is a single monomial can be cancelled exactly.
+
+Components given as `0` are *structural* zeros: they produce polynomials with no monomials, so any
+product they enter is dropped immediately rather than carried as a term with coefficient zero.
 
 Compare this with [step-03](step-03.md), which used eight independent symbols for two momenta. Both
 are legitimate; they answer different questions. Eight symbols verify an identity *in general*;
 three symbols compute the thing a kernel actually needs. Real generation always uses the frame.
-
-### Declaring the atom
-
-```{literalinclude} ../../../Tutorials/step-04-lorentz-networks/lorentz_networks.cpp
-:language: cpp
-:start-after: "@snip begin: atom"
-:end-before: "@snip end: atom"
-```
-
-`atomDen[0]` is $l^2$ as a polynomial, built from the same `comp` table the network will use — so
-it cannot disagree with the frame. This is the reciprocal-of information from the introduction:
-atom 0 means $1/l^2$, and the engine now knows what to cancel it against.
 
 ### The network, and the contraction
 
@@ -105,13 +98,10 @@ atom 0 means $1/l^2$, and the engine now knows what to cancel it against.
 :end-before: "@snip end: net"
 ```
 
-`nprojT(mu, nu, {{1.0, 1}}, 0)` is the projector: legs `mu` and `nu`, built on momentum id 1
-(the loop momentum $l$), with denominator atom 0. Both labels appear twice across the three
-factors, so both are summed and the network closes.
-
-The Dirac argument is the empty `DiracNet{}` — this network is pure Lorentz. Every combination is
-allowed here: pure Lorentz (this step), pure Dirac ([step-03](step-03.md) part a), or both together
-([step-05](step-05.md)).
+`nt::projT(mu, nu, l)` is the projector on the loop momentum $l$, legs `mu` and `nu`. Both labels
+appear twice across the three factors, so both are summed and the network closes. `F.contract` is
+the pure-Lorentz form of `F.trace` ([step-03](step-03.md)); a whole diagram, Dirac and Lorentz
+together, is [step-05](step-05.md).
 
 ## Results
 
@@ -119,55 +109,55 @@ allowed here: pure Lorentz (this step), pure Dirac ([step-03](step-03.md) part a
 cmake --build build --target lorentz_networks && ./build/lorentz_networks
 ```
 
-```text
-contracted monomials = 2   (p.P.p = sp(p,p) - sp(p,l)^2 / l^2)
-p.P(l).p             = 1.11905   (= p^2 (1 - cos^2) = 1.11905)
-p.P(l).p / p^2       = 0.662162   (= 1 - cos^2 theta = 0.662162)
-ALL TESTS PASSED
+```{literalinclude} ../../../Tutorials/step-04-lorentz-networks/lorentz_networks.expected.txt
+:language: text
 ```
 
 **Two monomials.** That is the headline. The contraction ran over $\mu,\nu \in \{0,1,2,3\}$ —
 sixteen index combinations — and what came back is
 
 $$
-p_0^2 \;-\; p_0^2\,l_0^2 \cdot \mathrm{atom}_0 ,
+p^2 \;-\; p^2\cos^2\theta ,
 $$
 
-two terms. The frame did the work: because $p$ has only component 0, every term involving $p_1$,
-$p_2$, $p_3$ was structurally absent. This is the compactness that makes generated kernels small.
+two terms and no atom left. The frame did the work twice. Because $p$ has only component 0, every
+term involving the other components of $p$ was structurally absent. And the contraction produced
+$p^2 l^2\cos^2\theta \cdot (1/l^2)$, in which the $l^2$ cancelled against the atom because the frame
+knows that atom's denominator is exactly $l^2$. This compactness is what makes generated kernels
+small.
 
 **The physics.** $p\cdot P(l)\cdot p / p^2 = 1 - \cos^2\theta$, where $\theta$ is the angle between
 $p$ and $l$. This is the angular weight of a transverse gluon exchange — the factor that appears in
 the ghost and gluon loops of every Yang–Mills propagator flow. In a real kernel it is multiplied by
 dressings and a regulator and handed to a quadrature over $\cos\theta$.
 
-**The asymmetry in the atom, again.** `atomDen` got $l^2$; `eval` got `1.0/l2v`. The engine wants
-the denominator to reason about; the evaluator wants the reciprocal precomputed. A generated kernel
-computes each `1/l²` once per call and then never divides again — which is why the emitted
-arithmetic is division-free and GPU-friendly.
+**Where the division happens.** An atom that survives contraction is evaluated by `F.eval` as
+$1/l^2$ at the point — one division per atom. A generated kernel does the same: it computes each
+`1/l²` once per call and then never divides again, which is why the emitted arithmetic is
+division-free and GPU-friendly. Change the network to $p\cdot P(l)\cdot q$ with a second external
+momentum and you will see an atom survive.
 
 ## Possibilities for extensions
 
 1. **Watch the cancellation happen.** Contract $l\cdot P(l)\cdot l$, which is analytically zero.
-   Check that `poly.size() == 0` — the two monomials cancel *during* contraction because the
-   numerator $l^2$ met atom 0. Now deliberately give the projector a fresh atom id 1 with the same
-   denominator, and observe that you get two monomials that only cancel numerically at `eval` time.
-   That is the bug the "share atom ids" rule prevents.
+   Check that `poly.size() == 0` — the terms cancel *during* contraction, not numerically at
+   evaluation.
 
-2. **Two projectors.** Add a second `nprojT` on the same momentum sharing a middle label, i.e.
+2. **Two projectors.** Add a second `projT` on the same momentum sharing a middle label, i.e.
    $p\cdot P(l)P(l)\cdot p$. Idempotence says the answer is unchanged. Check both the value *and*
-   the monomial count — if the count doubled, your atom ids are wrong.
+   the monomial count, and `F.denominators().size()`: both projectors share one atom.
 
-3. **The longitudinal complement.** Compute $p\cdot P^L(l)\cdot p$ with `nprojL` and confirm it
+3. **The longitudinal complement.** Compute $p\cdot P^L(l)\cdot p$ with `nt::projL` and confirm it
    equals $p^2\cos^2\theta$, and that the two add to $p^2$.
 
 4. **Change the frame.** Put $p$ along axis 1 instead of axis 0 and re-run. The value must not
    change (it is a scalar), but look at the polynomial — the *monomials* may differ. Then try
-   giving $l$ three nonzero components and watch the monomial count grow. This is the frame lever
-   from the introduction, made visible.
+   declaring $l$'s two components as independent symbols instead of $l\cos\theta$, $l\sin\theta$:
+   the atom no longer cancels, and the polynomial grows. This is the frame lever from the
+   introduction, made visible.
 
-5. **Break it deliberately — a free index.** Drop the second `nvec`, leaving `nu` open. The network
-   no longer closes, and `numeric_value` throws:
+5. **Break it deliberately — a free index.** Drop the second `vec`, leaving `nu` open. The network
+   no longer closes, and `F.contract` throws:
 
    ```text
    numtracer: Lorentz index id 1 is OPEN (occurs once) — the network does not close to a scalar.

@@ -1,0 +1,4 @@
+tr(T^a T^a)      = 4   (expect 4)
+C_F = tr / N     = 1.33333   (expect 4/3 = 1.33333)
+f^{abc} f^{abc}  = 24   (expect 24)
+ALL TESTS PASSED

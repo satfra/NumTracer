@@ -12,7 +12,7 @@ map onto the engine's. Everything here is a hard convention baked into the typed
 |---|---|---|
 | **Lorentz** (spacetime) | metric $\delta_{\mu\nu}$, vectors $q_\mu$, transverse/longitudinal/electric/magnetic projectors, Levi-Civita $\varepsilon$ | **4** ($\mu = 0..3$) |
 | **Dirac** (spin-½) | gamma matrices $\gamma^\mu$, slashed vectors $\slashed q$, $\gamma_5$, commutators $\sigma^{\mu\nu}$ | **4** (spinor) |
-| **SU($N$)** (colour / flavour) | generators $T^a$, structure constants $f^{abc}$, fundamental/adjoint $\delta$ | $N$ (fund.) / $N^2-1$ (adj.) |
+| **SU($N$)** (any group: colour, flavour, …) | generators $T^a$, structure constants $f^{abc}$, fundamental/adjoint $\delta$ | $N$ (fund.) / $N^2-1$ (adj.) |
 
 A network may mix all three at once; the sectors never interfere because contraction is by
 **index label**, not by extent (see [Key concepts](concepts.md)). Scalar coefficients — dot

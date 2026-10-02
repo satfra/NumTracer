@@ -69,7 +69,8 @@ and wrong everywhere else.
 | `ntVec[q, 0]` | an **integer** second argument: the *scalar* component $q_0$ (e.g. $\pi T$) |
 | `propFrameFT[p0, p, l0, l1, cos1, …]` | a frame with independent temporal slots |
 
-In the C++ engine these are `nprojE` and `nprojM`, each carrying the relevant atom ids.
+In C++ these are `nt::projE(mu, nu, l)` and `nt::projM(mu, nu, l)`; the frame registers both
+denominators ($l^2$ and $|\vec l|^2$) itself.
 
 ### The spatial *vector* — and the spatial pslash
 
@@ -91,7 +92,7 @@ ntGamma[mu, d1, d2] ntVec[ntSpatialVec[pp], mu]
 ```
 
 This needs no new engine token: a $\gamma$ whose Lorentz index carries an `ntVec` **is** a slash, so
-it is emitted as an ordinary `dslash` against a different momentum. FormTracer's one-argument
+it is emitted as an ordinary `slash` against a different momentum. FormTracer's one-argument
 shorthand `gamma[..., vecs[p], ...]` is expanded to the two-argument form by `FromFunKit` before
 anything else looks at it.
 
@@ -124,8 +125,11 @@ tensor-versus-scalar distinction as [step-08](step-08.md), controlled by the arg
 :end-before: "@snip end: atoms"
 ```
 
-Note the two loops differ only in where they start: `c = 0` for $l^2$, `c = 1` for $|\vec l|^2$.
-That one character is the entire thermal split on the denominator side.
+There is nothing to write here for the denominators: a projector knows its momentum, the frame
+knows the momentum's components, and the projector's *kind* says which denominator it needs —
+$l^2 = \sum_{\mu=0}^3 l_\mu^2$ for $P^T$ and $P^E$, $|\vec l|^2 = \sum_{\mu=1}^3 l_\mu^2$ for $P^E$ and
+$P^M$. Component 0 is the heat-bath direction. After the first contraction,
+`F.denominators()` holds both.
 
 Note also that *all eight* components are independent symbols. In a vacuum frame you would exploit
 $O(4)$ to zero several of them ([step-04](step-04.md)); here the temporal ones are physical and must
@@ -156,10 +160,9 @@ the same mistake.
 :end-before: "@snip end: chain"
 ```
 
-The `DiracNet` is identical to [step-05](step-05.md)'s. The gluon line is now a **two-term** Lorentz
-network — one term per projector, each with its own dressing coefficient — which is exactly how
-$G_{\mu\nu}(l) = Z_A^E P^E + Z_A^M P^M$ is written. An `NNet` being a *sum* of terms is what makes
-this natural.
+The Dirac chain is identical to [step-05](step-05.md)'s. The gluon line is now a **two-term**
+Lorentz network — one term per projector, each with its own dressing coefficient — written exactly
+as $G_{\mu\nu}(l) = Z_A^E P^E + Z_A^M P^M$: `ZAE * projE(…) + ZAM * projM(…)`.
 
 ## Results
 
@@ -169,11 +172,13 @@ cmake --build build --target finite_temperature && ./build/finite_temperature
 
 ```text
 A. the thermal projector split, contracted through the engine
-   tr P_E = 1, tr P_M = 2, tr P_T = 3 : worst |error| over 5000 points = 8.882e-16
+   tr P_E = 1, tr P_M = 2, tr P_T = 3 : worst |error| over 5000 points = 0.000e+00
 B. finite-T quark self-energy (p_0 = πT, independent loop l_0)
-   engine vs closed-form trace identity : worst relative = 1.742e-11
+   engine vs closed-form trace identity : worst relative = 1.339e-12
 ALL TESTS PASSED
 ```
+
+(The error estimates are rounding-level; their last digits depend on the compiler.)
 
 The traces are constant to machine epsilon across 5000 random kinematic points with random $T$,
 random $\vec p$ and a random independent $l_0$. That is the projector algebra confirmed, not
@@ -186,7 +191,7 @@ N = 4\big[\,2\,(p\cdot G\cdot q) - (p\cdot q)\operatorname{tr}G\,\big],
 \qquad \operatorname{tr}G = Z_A^E + 2Z_A^M,
 $$
 
-to $10^{-11}$ relative — the loss relative to the trace check is ordinary cancellation in the
+to about $10^{-12}$ relative — the loss relative to the trace check is ordinary cancellation in the
 oracle's explicit $4\times4$ sums, not engine error.
 
 ```{admonition} Why the external momentum sits at πT
@@ -240,17 +245,18 @@ The generated finite-$T$ kernel is gated by the `ftproj_num` test
 
 ## Possibilities for extensions
 
-1. **Verify the split as a network identity.** Build $P^E + P^M - P^T$ as a three-term `NNet` and
+1. **Verify the split as a network identity.** Build $P^E + P^M - P^T$ as a three-term network and
    contract it against two arbitrary vectors. The result must be identically zero — check
    `poly.size() == 0`, not just that it evaluates small, exactly as in
    [step-04](step-04.md) extension 1.
 
-2. **Confuse the atoms on purpose.** Give `nprojM` atom 0 (the full $l^2$) instead of atom 1. Watch
-   `tr P_M` stop being 2. Then evaluate at $l_0 \to 0$ and watch it come back — the characteristic
-   finite-$T$ bug is invisible in the vacuum limit.
+2. **See why the two denominators matter.** Replace $P^M$ by $P^T - P^E$ written with the *full*
+   $l^2$ throughout (build the tensor yourself from `vec` and `metric` with a $1/l^2$ you supply as a
+   symbol). Watch `tr P_M` stop being 2 away from $l_0 = 0$ and come back at $l_0 \to 0$ — the
+   characteristic finite-$T$ bug is invisible in the vacuum limit.
 
 3. **Check magnetic transversality.** $P^M$ must annihilate the *spatial* part of $l$ and must have
-   vanishing temporal rows. Contract it with `nvec` on $l$ and confirm; then contract it with a
+   vanishing temporal rows. Contract it with `vec` on $l$ and confirm; then contract it with a
    purely temporal vector and confirm you get zero.
 
 4. **Dress them differently.** Set `ZAE` and `ZAM` to very different values and watch the

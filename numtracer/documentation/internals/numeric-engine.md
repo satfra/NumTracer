@@ -4,7 +4,7 @@
 > `network/{network,dirac,sun_net}.hpp` · Namespaces: `numtracer::numeric`, `numtracer::network`
 
 This is the heart of how NumTracer generates a kernel. Given one diagram — a closed Dirac chain, a
-pure-Lorentz network of projectors and metrics, and a colour network — it contracts everything
+pure-Lorentz network of projectors and metrics, and an SU($N$) network — it contracts everything
 **numerically over a fixed loop frame** and returns one small polynomial. It is run at build
 time by the [codegen](codegen.md) generator, not in the consumer's compiler.
 
@@ -17,22 +17,23 @@ Neither intermediate is ever formed. The result is already a small polynomial.
 
 ## The polynomial it works in
 
-`numeric/mpoly.hpp` defines `MPoly`, the arithmetic currency of the whole engine: a multivariate
+`numeric/mpoly.hpp` defines `Poly`, the arithmetic currency of the whole engine: a multivariate
 polynomial over the frame's scalar symbols that also tracks surviving inverse propagator
-denominators `1/k²`. Everything below produces and combines `MPoly`s through addition,
+denominators `1/k²`. Everything below produces and combines `Poly`s through addition,
 multiplication, monomial-level cancellation of `k²·(1/k²)` (`divThroughMonomialAtoms`), and
 collection of equal-momentum propagator groups (`reduce_units`).
 
-Every `MPoly` (and `DPoly`) is minted through a `numtracer::numeric::LorentzEnv` (`numeric/env.hpp`),
-a small factory that binds the symbol-space size `nsym` **once**: you write `nm::LorentzEnv env(nsym)`
-and then call `env.mono(...)`, `env.atom(...)`, `env.var(i)`, `env.zero()`, `env.numeric_value(...)`.
-Because the env carries `nsym`, the raw size-taking factories never appear in caller code, and two
-polynomials built from the same env are guaranteed to share a symbol space. The illustrative
-constructors below are shown as env methods for that reason.
+Every `Poly` (and `DPoly`) is minted through a `numtracer::Frame` (`numeric/frame.hpp`), which
+fixes the symbol list — and with it the symbol-space size `nsym` — **once**: you write
+`frame.mono(...)`, `frame.atom(...)`, `frame.var(i)`, `frame.zero()`, and contract with
+`frame.trace(...)`. Because the frame carries `nsym`, the raw size-taking factories never appear in
+caller code, and two polynomials built from the same frame are guaranteed to share a symbol space.
+The frame also owns the component table and the projector denominators, so a contraction call takes
+only the networks. The illustrative constructors below are shown as frame methods for that reason.
 
 ### Data model
 
-An `MPoly` is a sorted list of `(monomial, complex coefficient)` pairs (`MPoly::t`) — nothing
+An `Poly` is a sorted list of `(monomial, complex coefficient)` pairs (`Poly::terms`) — nothing
 more exotic. A **monomial** (`Mono`) has two independent parts that live in two different
 namespaces:
 
@@ -43,13 +44,13 @@ namespaces:
   symbol in one product term: with symbol order `[l1, cos1, …, p]`, the plain product
   `l1²·cos1¹·p³` is stored as `e = [2,1,0,0,3]`. Position = which symbol, value = its power. (This
   is *not* an exponent that is itself an expression — just a tuple of integer powers. The
-  generated component table writes these directly, e.g. `env.mono({1,1,0,0,0},…)` on a
-  `LorentzEnv env(5)` (five symbols) is `l1·cos1`.)
+  generated component table writes these directly, e.g. `frame.mono({1,1,0,0,0},…)` on a frame
+  with five symbols is `l1·cos1`.)
 
   It *behaves* as that vector — `e[k]` reads and writes a power — but it is **stored** as a packed
   128-bit key: 5 bits per symbol, 12 symbols per 64-bit word, up to 24 symbols. That takes the
   stored term `pair<Mono,Cx>` from 128 B to 72 B and turns the monomial comparison that dominates
-  `MPoly`'s sort into two integer compares instead of an `nsym`-long walk. The packing is
+  `Poly`'s sort into two integer compares instead of an `nsym`-long walk. The packing is
   **big-endian within each word** precisely so that comparing the two words *is* the old
   element-wise lexicographic order — symbol 0 dominates, then symbol 1, … — which is what keeps the
   emitted kernels byte-identical across the change. A symbol index past 24, a power above 31, or a
@@ -62,7 +63,7 @@ namespaces:
   transverse/longitudinal/electric/magnetic projector in the network carries an id (`Elem::inv`,
   and `Elem::invS` for the spatial `1/|k⃗|²`); `collect_atom_denoms` interns the actual
   denominator polynomial once into a separate table, `atomDen[aid] = k² = Σ_μ comp[μ]²` (itself
-  an `MPoly` in the symbols). A term multiplied by `1/D₃·1/D₃·1/D₇` carries `atoms = {3,3,7}`
+  an `Poly` in the symbols). A term multiplied by `1/D₃·1/D₃·1/D₇` carries `atoms = {3,3,7}`
   (sorted, with multiplicity ⇒ `1/D₃²` is `{3,3}`). `env.atom(aid)` builds a bare `1/D`
   as a monomial with empty exponents and `atoms = {aid}`.
 
@@ -88,33 +89,34 @@ passes decide whether the factor dies or lives.
 
 ### Two dressing layers reuse the same trick
 
-`MPoly` interns `1/k²` factors as ids and merges them on multiply. Two *dressing* layers reuse
+`Poly` interns `1/k²` factors as ids and merges them on multiply. Two *dressing* layers reuse
 that exact pattern — a sorted multiset of runtime-call ids carried on each term — for structures
 that must stay symbolic to the end of the trace rather than cancel:
 
 * **`DPoly`** (`numeric/dpoly.hpp`) — a **dressed Dirac numerator** like `Mq·δ + Z(p)·γ·p` is a
   *sum* of structures with runtime coefficients. Rather than distribute the diagram into `2^D`
   traces, the front-end keeps it eager and the engine collects one `DPoly`: a map from a
-  **dressing-atom multiset** (`DMono`) to the kinematic `MPoly` it multiplies. The coefficient
-  *is* an `MPoly`, so `DPoly` reuses `MPoly::operator*`/`+` verbatim and undressed flows are
+  **dressing-atom multiset** (`DMono`) to the kinematic `Poly` it multiplies. The coefficient
+  *is* an `Poly`, so `DPoly` reuses `Poly::operator*`/`+` verbatim and undressed flows are
   byte-identical (their `DPoly` is a single empty-dressing term). Walked through in the
   [step-18](../tutorials/step-18.md).
 
-  **Where the `DPoly` is assembled matters.** The generator's *trace table* is plain `MPoly` even
+  **Where the `DPoly` is assembled matters.** The generator's *trace table* is plain `Poly` even
   for dressed flows: at codegen time each structure×dressing combination is stripped to its bare
   structure, and the dressing is carried alongside as a per-sub-term scalar plus a `DMono`. So
   combinations that share a concrete Dirac structure and differ only in dressing collapse to **one**
   contraction — a 6.2× reduction in distinct traces on the dense quark–gluon flows, and what makes
   full-basis `ZAAqbq1` generate at all. The `DPoly` is then built in phase B, where
-  `fold_net_dressed` (`numeric/trace_fold.hpp`) routes each sub-term's scaled `MPoly` into its
+  `fold_net_dressed` (`numeric/trace_fold.hpp`) routes each sub-term's scaled `Poly` into its
   dressing channel. The alternative — collecting the `DPoly` during contraction
-  (`numeric_value_dressed_netval`) — is still the reference implementation and what
-  `tests/test_dpoly.cpp` grades against, but it re-contracts once per dressing channel.
-* **`SUNPoly`** (`network/sun_net.hpp`) — the colour/flavour analogue described in
-  [step 3](#step-3-the-colour-fold): a group-diagonal `δ` folds to `Σ_a c_a Z_a` over named
+  (`Frame::trace` with slots, engine entry `ndetail::contract_dressed`) — is still the reference
+  implementation and what `tests/test_dpoly.cpp` grades against, but it re-contracts once per
+  dressing channel.
+* **`SUNPoly`** (`network/sun_net.hpp`) — the SU($N$) analogue described in
+  [step 3](#sun-fold): a group-diagonal `δ` folds to `Σ_a c_a Z_a` over named
   dressing ids instead of one flavour-blind number.
 
-The decisive contrast with `MPoly`'s atoms: dressing ids **never cancel** — they are opaque
+The decisive contrast with `Poly`'s atoms: dressing ids **never cancel** — they are opaque
 runtime values that ride untouched to the lowering (a `dress` env leaf, evaluated once like an
 `inv` leaf). That is why they are a separate layer and not more entries in `Mono::atoms`: mixing
 them would tax the hot undressed path and blur the "this factor can cancel" invariant.
@@ -123,7 +125,7 @@ them would tax the hot undressed path and blur the "this factor can cancel" inva
 
 A closed Dirac chain is traced by **multiplying 4×4 matrices**, not by enumerating index
 pairings. `mpoly.hpp` builds each gamma `gammaC(mu)` and each slashed propagator
-`slashC(components)` as a 4×4 matrix whose *entries are `MPoly`s* (numeric gamma data, symbolic
+`slashC(components)` as a 4×4 matrix whose *entries are `Poly`s* (numeric gamma data, symbolic
 momenta), multiplies the chain with `matmul`, and reads off `mtrace`. Because the gamma matrices
 are Hermitian and chiral (block-antidiagonal in the Weyl basis), the products stay sparse and
 γ5 is free; a chain with an odd number of gammas traces to zero structurally.
@@ -136,12 +138,12 @@ carried through and contracted into the Lorentz network in the next step.
 
 The pure-Lorentz half of a diagram — metrics $\delta_{\mu\nu}$, vectors $a^\mu$, transverse
 projectors $P_{\mu\nu}(l)$, Levi-Civita $\varepsilon$ — is assembled with the
-`network::` builders (`met`, `vec`, `proj`, `contract`, `add`, `scale`) into a `NetVal`, and
+builders (`metric`, `vec`, `projT`, … and `*`, `+`, scalar multiples) into a `LorentzNet`, and
 joined with the Dirac tensor from step 1. `numeric/numeric_contract.hpp` contracts it by
 **bounded variable elimination** (`eliminate` / `contract_factors`): it sums one shared Lorentz
 index at a time over its four values, each element evaluated through the frame's component table,
 so the work is bounded by the network's treewidth rather than by $2^{np}$. The result is a single
-`MPoly` (`numeric_value` / `numeric_value_netval`), carrying the surviving `1/k²` atoms.
+`Poly` (`Frame::trace`, engine entry `ndetail::contract`), carrying the surviving `1/k²` atoms.
 
 Before elimination, same-momentum projectors that share a dummy index are **fused** by
 projector algebra (`fuse_projectors`): idempotency $P\cdot P\to P$ (with $\operatorname{tr}P^T=3$,
@@ -150,30 +152,31 @@ This collapses a chain of transverse/longitudinal/electric/magnetic projectors *
 expand in the component basis — e.g. the regulator-dot fold $P^T\!\cdot\partial_t R\cdot P^T$ —
 keeping the heaviest gluon traces small.
 
-## Step 3 — the colour fold
+(sun-fold)=
+## Step 3 — the SU($N$) fold
 
-A diagram's colour network — structure constants `f^{abc}`, adjoint and fundamental deltas,
+A diagram's SU($N$) network — structure constants `f^{abc}`, adjoint and fundamental deltas,
 generators `T^a` — is just a number once fully contracted. `network/sun_net.hpp`
-(`sun_value` / `sun_value_cx`) contracts it numerically at build time over the typed-out
-SU(N) tables, so the kernel never carries a colour tensor. Folding colour to a number also lets
+(`sun_value`) contracts it numerically at build time over the typed-out
+SU(N) tables, so the kernel never carries an SU($N$) tensor. Folding it to a number also lets
 the generator group diagrams that share a (factored) dressing coefficient, so identical
 monomials from different diagrams merge (cross-diagram collection).
 
 When a network carries a **group-diagonal dressing** (`ntSUNDiagFund` / `ntSUNDiagAdj`), the
-colour fold keeps it as a polynomial instead of a single number: `sun_value_dressed` folds it to
+SU($N$) fold keeps it as a polynomial instead of a single number: `sun_value_dressed` folds it to
 $\sum_a c_a Z_a(\text{scale})$ over the named runtime scalar dressings the `spec` selects (the
 $\delta$'s `comp2dr` map assigns each surviving component a dressing, and drops the rest). The Dirac
-trace is still contracted once; only the colour weight is left component-resolved. (`sun_value_cx`
-itself is unchanged, so colour-blind flows are byte-identical.)
+trace is still contracted once; only the SU($N$) weight is left component-resolved. (`sun_value`
+itself is unchanged, so flows without diagonal dressings are byte-identical.)
 
 ## Step 4 — out to the lowering
 
-Each diagram's `MPoly` is handed to `to_genprog` (`numeric_contract.hpp`), which lowers it into
+Each diagram's `Poly` is handed to `to_genprog` (`numeric_contract.hpp`), which lowers it into
 one shared fundamental-symbol environment (`network`'s `GlobalEnv`) via the
 [CSE + Horner lowering](cse-and-lowering.md), returning a `GenProg`. The emitted generator drives
 that over every diagram through the two parallel phases of `numeric/trace_fold.hpp`
 (`contract_traces` then `fold_groups_streaming`), and prints the `trN(const double* f)` functions
-plus the `fill` that computes the frame symbols once per call. `mpoly_to_cpp`
+plus the `fill` that computes the frame symbols once per call. `poly_to_cpp`
 (`numeric/numeric_driver.hpp`) renders a momentum component or a propagator denominator as a C++
 expression for the `fill` body.
 

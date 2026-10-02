@@ -6,10 +6,10 @@
 //
 //     p . P(l) . p / p^2  =  1 - cos^2(theta) .
 //
-// Note what this file does NOT do. It never mentions MPoly, DiracNet, LorentzEnv or
-// numeric_value — none of the machinery of steps 01-05. A generated kernel is self-contained
-// straight-line arithmetic whose only dependency is numtracer/codegen/runtime.hpp; the engine ran
-// at BUILD time and is not present at run time.
+// Note what this file does NOT do. It never mentions Frame, Poly, DiracChain or LorentzNet —
+// none of the machinery of steps 01-05. A generated kernel is self-contained straight-line
+// arithmetic that depends only on two small NumTracer headers (codegen/runtime.hpp and
+// sun/sun_data.hpp); the engine ran at BUILD time and is not present at run time.
 #include "first_kernel.hh" // the generated kernel class (pulls in first_kernels.hh + the runtime)
 
 #include <cmath>

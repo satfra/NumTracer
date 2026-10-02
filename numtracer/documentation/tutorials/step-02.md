@@ -6,9 +6,9 @@ Tags: `sun`, `colour` · **Tier A** (a C++20 compiler, nothing else)*
 ## Introduction
 
 [step-01](step-01.md) contracted Lorentz indices. This step does the same thing in a different
-sector — SU($N$) colour — and the point is precisely that *nothing changes*. Indices contract by
-label; the engine does not know or care that these labels run over 3 values instead of 4, or that
-one of them is an adjoint index and another a fundamental one.
+sector — SU($N$), here as QCD colour — and the point is that the rule does not change: indices
+contract by label. What is new is that SU($N$) has two kinds of index, adjoint (extent $N^2-1$) and
+fundamental (extent $N$), and the labels carry that kind in their type.
 
 What *is* new is how the contraction is carried out, and it is worth understanding because it is
 the reason the library exists.
@@ -52,30 +52,33 @@ fold exploits both.
 
 ```{admonition} Two folds, two return types
 :class: note
-`sun_value_cx(net)` returns a single `Cx` — use it when the network is fully contracted and the
-answer is a number, which is the case for every ordinary colour factor. There is a second entry
-point, `sun_value_dressed(net)`, which returns a *polynomial* over per-component dressings; that is
-[step-17](step-17.md), and you do not need it yet.
+`su3.value(net)` returns a single `Cx` — the case for every ordinary colour factor. A network mixing
+several groups (colour SU(3) ⊗ flavour SU(2)) is folded by the free function `nt::sun_value(net)`;
+the value factorises into the per-group values. A second entry point, `nt::sun_value_dressed(net)`,
+returns a *polynomial* over per-component dressings; that is [step-17](step-17.md), and you do not
+need it yet.
 ```
 
 ## The commented program
 
 `Tutorials/step-02-colour-factors/colour_factors.cpp`.
 
-### Labels, again
-
-The same `enum` idiom as step-01, but now with a twist worth pausing on:
+### The group and its labels
 
 ```{literalinclude} ../../../Tutorials/step-02-colour-factors/colour_factors.cpp
 :language: cpp
-:lines: 15-20
+:start-after: "@snip begin: labels"
+:end-before: "@snip end: labels"
 ```
 
-`a, b, c` are adjoint labels (extent $N^2-1 = 8$) and `A, B` are fundamental (extent $N = 3$).
-They live in **one** enum, so they are all distinct integers — and that is the entire protection
-against an adjoint index accidentally contracting with a fundamental one. The engine will not catch
-such a mistake for you: it compares labels, and if you hand it the same label on two slots of
-different extent, the behaviour is undefined rather than diagnosed. One enum per network, always.
+`nt::SUN su3(3)` is the group. It hands out labels of two types: `su3.adjoint<3>()` gives three
+`AdjIndex` (extent $N^2-1 = 8$), `su3.fundamental<2>()` two `FundIndex` (extent $N = 3$). Every
+factor builder takes the label types its slots need — `T(AdjIndex, FundIndex, FundIndex)` — so an
+adjoint label in a fundamental slot is a compile error, not a wrong number.
+
+Each `SUN` object is its own group. A QCD flow with two light flavours has an SU(3) colour group
+*and* an SU(2) isospin group in the same network; make one object for each. Their labels never
+contract with each other, and using one group's label in the other's factor throws.
 
 ### The Casimir
 
@@ -85,15 +88,10 @@ different extent, the behaviour is undefined rather than diagnosed. One enum per
 :end-before: "@snip end: cf"
 ```
 
-`SUNEnv sun3(3)` binds the group rank once, the same way `LorentzEnv` binds the symbol-space size.
-This matters more than it looks: a QCD flow with two light flavours has an SU(3) colour sector *and*
-an SU(2) isospin sector in the same network, and the rank is what selects which typed-out table a
-factor reads. Binding it per-env rather than passing it per-call means a factor can never be built
-against the wrong group.
-
-Read the index pattern: `sun3.T(a, A, B)` then `sun3.T(a, B, A)`. The adjoint label `a` is shared,
-so the gluon index is summed — that is the exchange. The fundamental labels go $A \to B$ then
-$B \to A$, closing the quark line into a loop. A closed loop with no free indices is a number.
+`*` multiplies factors into a network, `su3.value` folds it. Read the index pattern:
+`su3.T(a, i, j)` then `su3.T(a, j, i)`. The adjoint label `a` is shared, so the gluon index is
+summed — that is the exchange. The fundamental labels go $i \to j$ then $j \to i$, closing the
+quark line into a loop. A closed loop with no free indices is a number.
 
 ### A purely gluonic one
 
@@ -113,11 +111,8 @@ gluon self-energy, and of the gluon loop's leading piece.
 cmake --build build --target colour_factors && ./build/colour_factors
 ```
 
-```text
-tr(T^a T^a)      = 4   (expect 4)
-C_F = tr / N     = 1.33333   (expect 4/3 = 1.33333)
-f^{abc} f^{abc}  = 24   (expect 24)
-ALL TESTS PASSED
+```{literalinclude} ../../../Tutorials/step-02-colour-factors/colour_factors.expected.txt
+:language: text
 ```
 
 All three are *exact* — not "agrees to $10^{-12}$", but exactly the integers, because the fold sums
@@ -134,10 +129,10 @@ than trusting them.
 ## Possibilities for extensions
 
 1. **The adjoint Casimir.** $f^{acd}f^{bcd} = N\,\delta^{ab} = C_A\,\delta^{ab}$. Build it with
-   `a`, `b` free and `c`, `d` shared, close it with `sun3.deltaAdj(b, a)`, and check you get
+   `a`, `b` free and `c`, `d` shared, close it with `su3.delta(b, a)`, and check you get
    $N(N^2-1) = 24$ — the same number as `ff` above, which is not a coincidence. Then explain why.
 
-2. **Change the group.** Make a `SUNEnv sun2(2)` and recompute both quantities. Predict first:
+2. **Change the group.** Make an `nt::SUN su2(2)` and recompute both quantities. Predict first:
    $C_F = 3/4$, $\mathrm{tr}(T^aT^a) = 3/2$, $f^{abc}f^{abc} = 6$. SU(2) is the isospin group
    [step-17](step-17.md) uses.
 
@@ -146,10 +141,11 @@ than trusting them.
    calculation. Verify it by contracting both sides against a fixed pair of deltas and comparing.
    This is a miniature of what [step-19](step-19.md) does with a whole basis.
 
-4. **Break it deliberately — mix the sectors.** Give a fundamental slot an adjoint label, e.g.
-   `sun3.T(a, a, B)`. Reason about what the fold does with an index of extent 8 used where extent 3
-   was expected before you run it, then run it. The lesson is that label discipline is not
-   stylistic.
+4. **Break it deliberately — mix the sectors.** Give a fundamental slot an adjoint label,
+   `su3.T(a, a, j)`. It does not compile: `AdjIndex` is not a `FundIndex`. Now make a second group
+   `nt::SUN su2(2)` with its own `auto [x] = su2.adjoint<1>();` and write `su3.T(x, i, j)`. That
+   compiles — both are adjoint labels — and throws at run time, because `x` belongs to another
+   group.
 
 5. **Feel the blow-up you are avoiding.** Contract a chain of six $f$'s (a ring:
    $f^{a b c}f^{c d e}f^{e f g}\dots$ closing back on $a$) and time it. Then estimate how many

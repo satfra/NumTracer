@@ -26,7 +26,7 @@ Two properties make `Cx` work as a template argument:
 
 `Cx` is deliberately dependency-free: it includes nothing from the Lorentz / Dirac / SU(N)
 sectors, and sits at the bottom of the layer stack so every other header can use it. It is the
-element type of the dense trace and the numeric `MPoly`, and the coefficient type the
+element type of the dense trace and the numeric `Poly`, and the coefficient type the
 [numeric engine](numeric-engine.md) carries through a contraction.
 
 ## Lit: a compile-time constant carrier

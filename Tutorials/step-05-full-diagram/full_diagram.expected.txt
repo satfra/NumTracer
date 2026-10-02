@@ -1,0 +1,22 @@
+static inline void fill(double *f, double p, double l, double cos) {
+  f[0] = p;
+  f[1] = l;
+  f[2] = cos;
+}
+static inline double T([[maybe_unused]] const double *f) {
+  const double s0 = f[2];
+  const double s1 = f[0];
+  const double s2 = s0*s1;
+  const double s3 = f[1];
+  const double s6 = fma(s2, (-0.66666666666666663), s3);
+  const double s9 = s1*(-0.33333333333333331);
+  const double s10 = fma(s0, s6, s9);
+  const double s11 = s1*s10;
+  const double s13 = s11*(-12);
+  return s13;
+}
+
+numeric  T = 3.526848000000
+closed   T = 3.526848000000   (4 p (-3 c l + p + 2 c^2 p))
+lowered  T = 3.526848000000   (the emitted program, interpreted)
+ALL TESTS PASSED

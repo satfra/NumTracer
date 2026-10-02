@@ -1,0 +1,5 @@
+# The tutorials are read as text: the docs quote them line by line. Keep comment line breaks as
+# written (no reflow) and the same width as the library.
+BasedOnStyle: LLVM
+ColumnLimit: 120
+ReflowComments: false

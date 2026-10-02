@@ -40,7 +40,7 @@ NumTracer does not distribute. It keeps each dressed numerator **eager** as a *s
 its structure options — contracts the chain **once**, and collects the result into a `DPoly`:
 
 > a polynomial whose **variables** are the dressing calls and whose **coefficients** are the
-> kinematic `MPoly`s the engine already computes.
+> kinematic polynomials (`nt::Poly`) the engine already computes.
 
 The dressings ride along as opaque atom-ids and never enter the trace arithmetic. So the Dirac and
 Lorentz work is done a single time regardless of how many structures each numerator carries, and the
@@ -63,12 +63,12 @@ mechanism's footprint.
 | `DSlotOpt{coeff, dress, toks, netFacs}` | one structure option: a coefficient × a product of dressing atoms × a Dirac structure |
 | `DSlot = vector<DSlotOpt>` | one dressed numerator = the sum of its options |
 | `DChainTok` | one token of a dressed chain: either a **fixed** factor (`dtfix`) or a **slot reference** (`dtslot i`) |
-| `DPoly` | the collected result: dressing monomials → kinematic `MPoly` coefficients |
+| `DPoly` | the collected result: dressing monomials → kinematic `Poly` coefficients |
 
 The `toks` / `netFacs` pair is more general than this step needs, and the generality is the point:
 
 * `toks` is a **Dirac-token chain** spliced in place of the slot. Empty = the identity $\mathbb{1}$;
-  `{dslash(p)}` = a slash; `{dgamma(mu)}` = an **open-legged** $\gamma^\mu$.
+  `{nt::slash(p)}` = a slash; `{nt::gamma(mu)}` = an **open-legged** $\gamma^\mu$.
 * `netFacs` is a set of **Lorentz-net factors** carrying any remaining open legs (a vector $p^\mu$,
   a metric $g^{\mu\nu}$, …).
 
@@ -115,10 +115,10 @@ carry the same dressing and can be merged.
 ```
 
 A dressed chain is a list of `DChainTok`: `dtfix` for an ordinary factor, `dtslot i` for a reference
-into the slot list. `numeric_value_dressed` contracts it once.
+into the slot list. `F.trace(chain, slots, net)` contracts it once and returns the `DPoly`.
 
 The reference computation in the program does the opposite — it enumerates the $2\times2$ choices,
-builds each concrete undressed chain, contracts it with the *ordinary* `numeric_value`, and weights
+builds each concrete undressed chain, traces it the *ordinary* way with `F.trace`, and weights
 by the product of that choice's dressings. That is the $2^D$ path, written out so the two can be
 compared.
 
@@ -163,7 +163,7 @@ $$
               \;+\; \lambda_7\,\sigma^{\mu\nu}p_\nu + \dots
 $$
 
-which is exactly `toks = {dgamma(mu)}`, `{dslash(p1), dgamma(mu)}`, `{dcomm_fs(mu, p)}` — the
+which is exactly `toks = {gamma(mu)}`, `{slash(p1), gamma(mu)}`, `{comm(mu, p)}` — the
 general `DSlotOpt` form. So the same collection applies, and the front-end calls it `ntDiracSlot`.
 
 It is **opt-in**, via `NT_VERTEX_COLLECT=1` or `$ntVertexCollect = True`, because the trade is not
@@ -190,21 +190,20 @@ so the antisymmetric pair is never split. Disable with `NT_NO_SIGMA_FOLD` if you
    own dressing id. Distributed that is $3\times2 = 6$ traces; check how many `DPoly` monomials
    result and whether the reference loop still agrees.
 
-2. **Make the trace non-vanishing.** Replace one `dgamma` with a `dslash` so that the mixed
+2. **Make the trace non-vanishing.** Replace one `gamma` with a `slash` so that the mixed
    mass–slash terms survive. The monomial count should rise to 4, matching the distributed count —
    confirming that the reduction to 2 above was physics, not a dropped term.
 
 3. **Share an id across three terms.** Give all options the same dressing id and confirm the
    `DPoly` collapses to a single monomial whose coefficient is the sum of the individual traces.
 
-4. **An open-legged slot.** Build a slot whose options are `{dgamma(mu)}` and
-   `{dslash(p), dgamma(mu)}` — a miniature dressed vertex — and close `mu` with a metric. This is
+4. **An open-legged slot.** Build a slot whose options are `{gamma(mu)}` and
+   `{slash(p), gamma(mu)}` — a miniature dressed vertex — and close `mu` with a metric. This is
    vertex collection by hand, and it demonstrates that the `toks`/`netFacs` generality is not
    speculative.
 
 5. **Break it deliberately — mis-size `drVal`.** Pass a 2-element array with ids {0,1,2} in play.
-   Under a sanitizer build (`-DNUMTRACER_SANITIZE="ADDRESS;UNDEFINED"`) this is a clean diagnostic;
-   without one it is a silently wrong number. Worth seeing both.
+   `F.eval` refuses: "the polynomial carries dressing 2 but only 2 dressing values were given".
 
 6. **Measure the collection.** Time the collected path against the distributed reference as $D$
    grows (2, 3, 4 dressed numerators). The distributed cost doubles each time; the collected cost

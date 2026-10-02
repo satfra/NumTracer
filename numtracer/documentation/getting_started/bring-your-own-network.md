@@ -38,14 +38,12 @@ The program is `Tutorials/step-01-hello-network/hello_network.cpp`, walked throu
 cmake -S Tutorials -B Tutorials/build && cmake --build Tutorials/build --target hello_network
 ./Tutorials/build/hello_network
 ```
-```text
-a . b        = 0.26   (expect 0.26)
-a . P(k) . a = 0.403649   (expect a^2 - (a.k)^2/k^2 = 0.403649)
-ALL TESTS PASSED
+```{literalinclude} ../../../Tutorials/step-01-hello-network/hello_network.expected.txt
+:language: text
 ```
 
-That is the whole engine in miniature: describe a network as a list of factors sharing integer
-labels, hand it a frame that fixes each vector's components, and read off the scalar. Add a Dirac
+That is the whole engine in miniature: declare a frame that fixes each vector's components,
+describe a network as a product of factors sharing index labels, and read off the scalar. Add a Dirac
 chain or SU($N$) factors and nothing else changes — the sectors compose (see the
 [tutorials](../tutorials/index.md)).
 
@@ -53,8 +51,8 @@ chain or SU($N$) factors and nothing else changes — the sectors compose (see t
 
 | Path | You write | Needs | Good for |
 |---|---|---|---|
-| **C++ API** | the network with `nvec`/`nmet`/`nprojT`/`dgamma`/`SUN::T`… and call `env.numeric_value` on a `LorentzEnv` | nothing but a C++20 compiler — no external libraries | hand-built traces, embedding in your own code, the numeric oracle |
-| **Mathematica DSL** | the network with `ntVec`/`ntMetric`/`ntTransProj`/… and call `NumTrace` + `MakeNTKernel` | a Wolfram kernel | generating a committed, lowered C++ kernel from a symbolic network |
+| **C++ API** | an `nt::Frame`, the network with `vec`/`metric`/`projT`/`gamma`/`slash`…, and call `F.trace` / `F.contract`; SU($N$) factors through an `nt::SUN` | nothing but a C++20 compiler — no external libraries | hand-built traces, embedding in your own code, checking a result; `to_genprog` + `emit_cpp` lower one polynomial to a C++ function |
+| **Mathematica DSL** | the network with `ntVec`/`ntMetric`/`ntTransProj`/… and call `NumTrace` + `MakeNTKernel` | a Wolfram kernel and FunKit | a complete generated kernel: every diagram, the `fill()`, the signature, dressings and SU($N$) factors |
 
 Two things are worth stating plainly, because it is easy to assume otherwise:
 
@@ -68,39 +66,48 @@ Two things are worth stating plainly, because it is easy to assume otherwise:
 
 ## The dictionary: DSL head ↔ C++ builder
 
-The two front-ends describe the *same* engine, so every DSL head has a C++ builder:
+The two front-ends describe the *same* engine, so every DSL head has a C++ builder (`nt` is
+`namespace nt = numtracer;`; `F` a `nt::Frame`, `su` an `nt::SUN`):
 
-| Sector | Mathematica DSL | C++ builder |
+| Object | Mathematica DSL | C++ |
 |---|---|---|
-| metric $\delta_{\mu\nu}$ | `ntMetric[mu, nu]` | `nm::nmet(mu, nu)` |
-| vector $q_\mu$ | `ntVec[q, mu]` | `nm::nvec(mu, {{coeff, vid}, …})` |
-| transverse projector | `ntTransProj[q, mu, nu]` | `nm::nprojT(mu, nu, {{1.0, vid}}, atom)` |
-| longitudinal projector | `ntLongProj[q, mu, nu]` | `nm::nprojL(mu, nu, {{1.0, vid}}, atom)` |
-| Levi-Civita $\varepsilon$ | (γ5 trace) | `nm::neps(a, b, c, d)` |
-| gamma $\gamma^\mu$ (open leg) | `ntGamma[mu, …]` | `net::dgamma(mu)` |
-| slashed $\slashed q$ | slashed momentum | `net::dslash({{coeff, vid}, …})` |
-| SU($N$) generator $(T^a)_{ij}$ | `ntSUNT[N, a, i, j]` | `SUN::T(N, a, i, j)` |
-| SU($N$) structure constant | `ntSUNf[N, a, b, c]` | `SUN::f(N, a, b, c)` |
-| adjoint / fund. $\delta$ | `ntSUNDeltaAdj` / `ntSUNDeltaFund` | `SUN::deltaAdj` / `SUN::deltaFund` |
-
-(The `vid` is a vector id into your component table; the `atom` is the id of a projector's
-$1/q^2$. Colour networks are built as a `SUNNet` and folded with `network::sun_value_cx` — see the
-[step-02](../tutorials/step-02.md).)
+| momentum $q$ | a symbol placed by the frame, e.g. `propFrame[…]` | `nt::Momentum q = F.momentum(c0, c1, c2, c3);` |
+| Lorentz index labels | any symbols | `auto [mu, nu] = F.indices<2>();` |
+| metric $\delta_{\mu\nu}$ | `ntMetric[mu, nu]` | `nt::metric(mu, nu)` |
+| vector $q_\mu$ | `ntVec[q, mu]` | `nt::vec(mu, q)` |
+| transverse projector | `ntTransProj[q, mu, nu]` | `nt::projT(mu, nu, q)` |
+| longitudinal projector | `ntLongProj[q, mu, nu]` | `nt::projL(mu, nu, q)` |
+| finite-$T$ electric / magnetic projector | `ntElectricProj` / `ntMagneticProj` | `nt::projE` / `nt::projM` |
+| Levi-Civita $\varepsilon_{\mu\nu\rho\sigma}$ | (from a $\gamma_5$ trace) | `nt::epsilon(mu, nu, rho, sigma)` |
+| product / sum of tensors | `*` / `+` | `*` / `+` |
+| $\gamma^\mu$ (open leg) | `ntGamma[mu, d1, d2]` | `nt::gamma(mu)` in a chain |
+| slashed $\slashed q$ | `ntVec[q, mu] ntGamma[mu, d1, d2]` | `nt::slash(q)` in a chain |
+| $\gamma_5$ | `ntGamma5[d1, d2]` | `nt::gamma5()` in a chain |
+| closed spinor loop | spinor labels `d1 → d2 → … → d1` | `nt::DiracChain{…}` in trace order |
+| SU($N$) index labels | any symbols | `auto [a] = su.adjoint<1>(); auto [i, j] = su.fundamental<2>();` |
+| generator $(T^a)_{ij}$ | `ntSUNT[N, a, i, j]` | `su.T(a, i, j)` |
+| structure constant $f^{abc}$ | `ntSUNf[N, a, b, c]` | `su.f(a, b, c)` |
+| adjoint / fundamental $\delta$ | `ntSUNDeltaAdj` / `ntSUNDeltaFund` | `su.delta(a, b)` / `su.delta(i, j)` |
+| contract | `NumTrace` + `MakeNTKernel` | `F.trace(chain, net)`, `F.contract(net)`, `su.value(net)` |
 
 ## Mapping your own theory
 
-1. **List your indices and give each a label.** Use one unscoped `enum` across *all* sectors so
-   every label is distinct by construction (`enum { mu, nu, a, b, A, B };`). Reusing a label is how
-   you say "sum these together"; a label used once stays free.
-2. **Pick a frame.** Choose reference components for each vector — for a one-angle loop, one vector
-   along an axis and another at an angle (see [Key concepts](concepts.md#runtime-numbers-come-from-the-frame)).
-   Keep components you want as runtime symbols symbolic (`env.var`, from a `LorentzEnv env(nsym)`);
-   the rest are `env.constant`.
-3. **Build the network and contract.** Assemble the Dirac chain (`DiracNet`), the Lorentz network
-   (`NNet`), and any colour network, then call `env.numeric_value` (Lorentz+Dirac) and `sun_value_cx`
-   (colour). You get back a scalar `MPoly` in your frame symbols.
-4. **Read it or lower it.** `eval` the polynomial at a point, or hand it to the codegen to emit a
-   flat C++ kernel ([step-05](../tutorials/step-05.md)).
+1. **List your indices.** Get each sector's labels from its owner: Lorentz labels from the frame,
+   SU($N$) labels from one `nt::SUN` object per group. Reusing a label is how you say "sum these
+   together"; a label used once is an error.
+2. **Pick a frame.** Declare the runtime scalars as symbols and the momenta from them — for a
+   one-angle loop, one vector along an axis and another at an angle (see
+   [Key concepts](concepts.md#runtime-numbers-come-from-the-frame)). Components that are fixed
+   numbers are just numbers.
+3. **Build the network and contract.** Assemble the Dirac chain and the Lorentz network and call
+   `F.trace(chain, net)` (or `F.contract(net)` without a chain); fold each SU($N$) group with
+   `su.value(...)`. You get back a polynomial in your frame's symbols, and the SU($N$) numbers that
+   multiply it.
+4. **Read it or lower it.** `F.eval(poly, F.at(...))` evaluates the polynomial at a point;
+   `nt::to_genprog` + `nt::emit_cpp` lower it to a straight-line C++ function, and `F.emit_fill`
+   prints the function that computes its inputs ([step-05](../tutorials/step-05.md)). A complete
+   kernel — many diagrams, dressings, the integrator-facing signature — is the job of the
+   Mathematica front-end ([step-06](../tutorials/step-06.md)).
 
 If any object or convention above does not match your problem, check
 [Scope & conventions](scope-and-conventions.md) — that page is the exact boundary of what the

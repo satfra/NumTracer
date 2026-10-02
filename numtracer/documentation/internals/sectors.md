@@ -53,7 +53,7 @@ folds to a single number — the [numeric engine](numeric-engine.md) does this a
 these tables (`network/sun_net.hpp`), so the kernel never carries a colour tensor. A network that
 dresses each colour/flavour component differently (a group-diagonal $\delta$) folds instead with
 `sun_value_dressed` to a polynomial $\sum_a c_a Z_a$ over runtime per-component dressing leaves;
-`sun_value_cx` is left untouched, so colour-blind flows are unchanged.
+`sun_value` is left untouched, so colour-blind flows are unchanged.
 
 `core/cmat.hpp` defines `Mat<N>`, `matmul`, and `trace` — a plain dense complex matrix type used
 by the tables and the tests.

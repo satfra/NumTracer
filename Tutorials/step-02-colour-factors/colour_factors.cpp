@@ -1,50 +1,45 @@
-// step-02 — Colour factors fold to a number.
+// step-02 — SU(N) factors fold to a number.
 //
 // The quark self-energy exchanges one gluon, so its colour structure is T^a_{ij} T^a_{jk} =
-// C_F delta_ik with C_F = (N^2-1)/2N = 4/3 for SU(3). A colour network with no free indices is
-// just a number: numtracer::network::sun_value_cx contracts it over the typed-out SU(N)
-// tables. We compute C_F this way and check it against its known closed form.
-#include <numtracer.hpp> // the whole NumTracer API — here: sun_value_cx + SUNEnv (f / T / deltaAdj / deltaFund builders)
+// C_F delta_ik with C_F = (N^2-1)/2N = 4/3 for SU(3). A closed SU(N) network is just a number, and
+// NumTracer folds it exactly. We compute C_F this way and check it, and f^{abc} f^{abc}, against
+// their closed forms.
+#include <numtracer.hpp> // the whole NumTracer API
 
 #include <cmath>
 #include <cstdio>
 
-using namespace numtracer;          // Cx, approx
-namespace net = numtracer::network; // SUNNet, sun_value_cx, SUN — the same alias the other tutorials use
-
-// Name the colour axis labels. A single unscoped enum keeps every label distinct (auto-numbered),
-// so adjoint and fundamental indices never collide (axes contract iff their labels are equal).
-enum {
-  a, b, c,  // adjoint (gluon) indices
-  A, B      // fundamental (quark) indices
-};
+namespace nt = numtracer;
+using nt::Cx;
 
 int main() {
-  // Bind the SU(N) group rank once in a SUNEnv, so the factor builders don't repeat it. `sun3` mints
-  // factors for SU(3); a flavour SU(2) sector would use a separate `SUNEnv sun2(2)`.
-  net::SUNEnv sun3(3);
+  // @snip begin: labels
+  // An SU(N) group object: here colour SU(3). It hands out index labels, and they come in two
+  // types — adjoint (a, b, c: extent N^2-1) and fundamental (i, j: extent N) — so an adjoint label
+  // cannot end up in a fundamental slot. A flavour SU(2) would be a second object, nt::SUN su2(2).
+  nt::SUN su3(3);
+  auto [a, b, c] = su3.adjoint<3>();
+  auto [i, j] = su3.fundamental<2>();
+  // @snip end: labels
 
   // @snip begin: cf
-  // sun3.T(a, A, B) = (T^a)_{AB} in SU(3): adjoint index a, fundamental row A, column B.
-  // Sharing the gluon index a sums it; the fundamental labels A -> B -> A close the
-  // quark line into a loop. The closed trace is tr(T^a T^a) = (N^2-1)/2 = C_F * N.
-  net::SUNNet trTT = {sun3.T(a, A, B), sun3.T(a, B, A)};
-  const Cx t = net::sun_value_cx(trTT); // = 4 for SU(3)
-  const double CF = t.re / 3.0;        // C_F = tr / N = 4 / 3
+  // su3.T(a, i, j) = (T^a)_{ij}: adjoint index a, fundamental row i, column j. Sharing a sums the
+  // gluon index; i -> j -> i closes the quark line into a loop. The closed trace is
+  // tr(T^a T^a) = (N^2-1)/2 = C_F * N.
+  const Cx t = su3.value(su3.T(a, i, j) * su3.T(a, j, i)); // = 4 for SU(3)
+  const double CF = t.re / 3.0;                            // C_F = tr / N = 4/3
   // @snip end: cf
 
   // @snip begin: ff
   // A second classic, fully closed: f^{abc} f^{abc} = N(N^2-1) = 24 for SU(3).
-  // sun3.f(a, b, c) = f^{abc}; the two copies share all three adjoint indices a, b, c.
-  const Cx ff = net::sun_value_cx({sun3.f(a, b, c), sun3.f(a, b, c)});
+  const Cx ff = su3.value(su3.f(a, b, c) * su3.f(a, b, c));
   // @snip end: ff
 
   std::printf("tr(T^a T^a)      = %g   (expect 4)\n", t.re);
   std::printf("C_F = tr / N     = %g   (expect 4/3 = %g)\n", CF, 4.0 / 3.0);
   std::printf("f^{abc} f^{abc}  = %g   (expect 24)\n", ff.re);
 
-  const bool ok = approx(t, Cx{4, 0}) && std::fabs(CF - 4.0 / 3.0) < 1e-12 &&
-                  approx(ff, Cx{24, 0});
+  const bool ok = nt::approx(t, Cx{4, 0}) && std::fabs(CF - 4.0 / 3.0) < 1e-12 && nt::approx(ff, Cx{24, 0});
   std::printf(ok ? "ALL TESTS PASSED\n" : "TESTS FAILED\n");
   return ok ? 0 : 1;
 }

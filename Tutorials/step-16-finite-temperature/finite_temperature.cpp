@@ -23,44 +23,32 @@
 // The external quark sits at the lowest fermionic Matsubara frequency, p_0 = πT, and the loop
 // carries an independent temporal component l_0 — a genuinely broken-O(4) trace, not a vacuum one
 // dressed up. (At a T = 0 vacuum frame every q_0 vanishes and both checks would pass vacuously.)
-#include <numtracer.hpp> // here: numeric_value + nprojE / nprojM / nprojT / nmet, dslash / dgamma
+#include <numtracer.hpp> // the whole NumTracer API
 
-#include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <random>
 #include <vector>
 
-using numtracer::Cx;
-namespace nm = numtracer::numeric;
-namespace net = numtracer::network;
+namespace nt = numtracer;
 
-// 8 symbols: external p = vars 0..3 (vid 0), loop l = vars 4..7 (vid 1).
-constexpr int nsym = 8;
-constexpr int pVid = 0, lVid = 1;
 constexpr double ZAE = 1.3, ZAM = 0.7; // placeholder electric / magnetic gluon dressings
 constexpr double PI = 3.14159265358979323846;
-
-enum { mu, nu }; // the two free gluon legs
 
 int main() {
   // @snip begin: atoms
   // The frame. Every component of both momenta is an independent symbol — including the TEMPORAL
   // ones, which is the whole point: at finite T, p_0 is not tied to |p⃗|.
-  nm::LorentzEnv env(nsym);
-  std::vector<std::array<nm::MPoly, 4>> comp(2);
-  for (int c = 0; c < 4; ++c) {
-    comp[pVid][c] = env.var(0 + c);
-    comp[lVid][c] = env.var(4 + c);
-  }
-
-  // TWO inverse atoms now, not one. The 4d transverse projector divides by l^2; the magnetic
-  // projector divides by the SPATIAL |l⃗|^2 = l^2 - l_0^2, so component 0 is dropped from the sum.
-  // Getting these two mixed up is the characteristic finite-T bug.
-  nm::MPoly l2 = env.zero(), ls2 = env.zero();
-  for (int c = 0; c < 4; ++c) l2 = l2 + comp[lVid][c] * comp[lVid][c];
-  for (int c = 1; c < 4; ++c) ls2 = ls2 + comp[lVid][c] * comp[lVid][c]; // spatial only
-  const std::vector<nm::MPoly> atomDen = {l2, ls2}; // atom 0 = l², atom 1 = |l⃗|²
+  nt::Frame F;
+  auto P0 = F.symbol("p0"), P1 = F.symbol("p1"), P2 = F.symbol("p2"), P3 = F.symbol("p3");
+  auto L0 = F.symbol("l0"), L1 = F.symbol("l1"), L2 = F.symbol("l2"), L3 = F.symbol("l3");
+  nt::Momentum p = F.momentum(P0, P1, P2, P3);
+  nt::Momentum l = F.momentum(L0, L1, L2, L3);
+  auto [mu, nu] = F.indices<2>();
+  // The projectors divide by TWO different denominators: the 4d transverse projector by l^2, the
+  // magnetic one by the SPATIAL |l⃗|^2 = l^2 - l_0^2. The frame derives both from l's components
+  // (component 0 is the heat-bath direction); mixing them up is the characteristic finite-T bug.
   // @snip end: atoms
 
   // @snip begin: traces
@@ -68,15 +56,9 @@ int main() {
   // the SAME two legs is its trace: delta_{mu nu} P_{mu nu} = tr P. These must come out as the pure
   // numbers 1, 2 and 3 — no kinematics at all — because P_E projects onto one direction (the
   // time-like-transverse one), P_M onto the two spatial-transverse ones, and P_T onto all three.
-  auto traceOf = [&](const nm::NNet &proj) {
-    nm::NNet closed = proj;
-    for (nm::NTerm &t : closed) t.e.push_back(nm::nmet(mu, nu));
-    return env.numeric_value(net::DiracNet{}, closed, comp, atomDen);
-  };
-  const nm::NNet PE = {nm::NTerm{Cx{1, 0}, {nm::nprojE(mu, nu, {{1.0, lVid}}, 0, 1)}}};
-  const nm::NNet PM = {nm::NTerm{Cx{1, 0}, {nm::nprojM(mu, nu, {{1.0, lVid}}, 1)}}};
-  const nm::NNet PT = {nm::NTerm{Cx{1, 0}, {nm::nprojT(mu, nu, {{1.0, lVid}}, 0)}}};
-  const nm::MPoly trE = traceOf(PE), trM = traceOf(PM), trT = traceOf(PT);
+  const nt::Poly trE = F.contract(nt::projE(mu, nu, l) * nt::metric(mu, nu));
+  const nt::Poly trM = F.contract(nt::projM(mu, nu, l) * nt::metric(mu, nu));
+  const nt::Poly trT = F.contract(nt::projT(mu, nu, l) * nt::metric(mu, nu));
   // @snip end: traces
 
   // @snip begin: chain
@@ -84,11 +66,8 @@ int main() {
   // step-05 — the broken symmetry lives entirely in the FRAME and in the PROJECTORS, not in the
   // gamma algebra. The gluon line is a two-term Lorentz network: one term per projector, each with
   // its own dressing.
-  const net::DiracNet chain = {net::dslash({{1.0, pVid}}), net::dgamma(mu),
-                               net::dslash({{1.0, lVid}, {-1.0, pVid}}), net::dgamma(nu)};
-  const nm::NNet gluon = {nm::NTerm{Cx{ZAE, 0}, {nm::nprojE(mu, nu, {{1.0, lVid}}, 0, 1)}},
-                          nm::NTerm{Cx{ZAM, 0}, {nm::nprojM(mu, nu, {{1.0, lVid}}, 1)}}};
-  const nm::MPoly N = env.numeric_value(chain, gluon, comp, atomDen);
+  const nt::LorentzNet gluon = ZAE * nt::projE(mu, nu, l) + ZAM * nt::projM(mu, nu, l);
+  const nt::Poly N = F.trace({nt::slash(p), nt::gamma(mu), nt::slash(l - p), nt::gamma(nu)}, gluon);
   // @snip end: chain
 
   bool ok = true;
@@ -98,7 +77,7 @@ int main() {
   const int npts = 5000;
 
   for (int it = 0; it < npts; ++it) {
-    std::vector<double> x(nsym);
+    std::vector<double> x(8);
     const double T = UT(rng);
     x[0] = PI * T;                                    // p_0 = πT, the lowest fermionic Matsubara mode
     for (int c = 1; c < 4; ++c) x[c] = Usp(rng);      // spatial p⃗
@@ -112,12 +91,11 @@ int main() {
       l2v += ll[c] * ll[c];
       if (c > 0) ls2v += ll[c] * ll[c];
     }
-    const std::vector<double> atomVal = {1.0 / l2v, 1.0 / ls2v};
+    const nt::Point pt = F.at(x);
 
     // (A) the traces must be constants
-    worstTr = std::max({worstTr, std::fabs(nm::eval(trE, x, atomVal).re - 1.0),
-                        std::fabs(nm::eval(trM, x, atomVal).re - 2.0),
-                        std::fabs(nm::eval(trT, x, atomVal).re - 3.0)});
+    worstTr = std::max({worstTr, std::fabs(F.eval(trE, pt).re - 1.0), std::fabs(F.eval(trM, pt).re - 2.0),
+                        std::fabs(F.eval(trT, pt).re - 3.0)});
 
     // (B) the self-energy against the closed-form trace identity
     double PEm[4][4], PMm[4][4];
@@ -137,7 +115,7 @@ int main() {
     for (int c = 0; c < 4; ++c) pdotq += pp[c] * qq[c];
     const double trG = ZAE * 1.0 + ZAM * 2.0; // tr P_E = 1, tr P_M = 2
     const double oracle = 4.0 * (2.0 * (ZAE * pGq(PEm) + ZAM * pGq(PMm)) - pdotq * trG);
-    const double got = nm::eval(N, x, atomVal).re;
+    const double got = F.eval(N, pt).re;
     worstN = std::max(worstN, std::fabs(got - oracle) / (1e-300 + std::fabs(oracle)));
   }
 

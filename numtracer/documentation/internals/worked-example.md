@@ -63,7 +63,7 @@ frame symbols, a `fill` that evaluates the symbols from the runtime arguments
 $(|l|, \cos\theta, |p|, …)$ once per call, and the assembly
 $\sum_{\text{diagrams}} \text{coeff}\times\text{trace}$ with the scalar coefficients (dressings,
 regulators, denominators) emitted by FunKit's COEN. The committed kernel is plain C++ depending
-only on `codegen/runtime.hpp`.
+only on `codegen/runtime.hpp` and `sun/sun_data.hpp`.
 
 ## How it is validated
 

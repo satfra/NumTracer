@@ -57,10 +57,19 @@ enable_testing()
 # ---------------------------------------------------------------------------
 # Tier A — a self-checking C++ program, built and tested unconditionally.
 # ---------------------------------------------------------------------------
+#
+# If <name>.expected.txt sits next to the source, a second test checks the program prints exactly
+# that: the pages include those files as the program's output.
 function(nt_tutorial name src)
   add_executable(${name} ${src})
   target_link_libraries(${name} PRIVATE NumTracer::NumTracer ${ARGN})
   add_test(NAME ${name} COMMAND ${name})
+  get_filename_component(_dir ${CMAKE_CURRENT_SOURCE_DIR}/${src} DIRECTORY)
+  if(EXISTS ${_dir}/${name}.expected.txt)
+    add_test(NAME ${name}_output
+             COMMAND ${CMAKE_COMMAND} -DPROG=$<TARGET_FILE:${name}> -DEXPECTED=${_dir}/${name}.expected.txt
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/compare_output.cmake)
+  endif()
 endfunction()
 
 # ---------------------------------------------------------------------------

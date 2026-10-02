@@ -1,7 +1,7 @@
 # NumTracer
 
 **NumTracer** is a C++20 engine that builds and contracts tensor networks —
-metrics, momentum vectors, projectors, Dirac gamma matrices, and SU($N$) colour/flavour factors —
+metrics, momentum vectors, projectors, Dirac gamma matrices, and SU($N$) factors —
 and **generates flat, straight-line C++ kernels** from them, with no symbolic-algebra runtime and
 no external dependency.
 
@@ -10,11 +10,11 @@ worked examples in this guide are quantum-field-theory loop integrands (function
 Group flows for Yang–Mills and QCD), but nothing in the contraction or the codegen is specific to
 them — see [Bring your own network](getting_started/bring-your-own-network.md).
 
-NumTracer generates kernels by **numeric tracing**. A diagram is contracted *numerically* over a
-compact loop frame — its Dirac trace as 4×4 chiral matrix products, its Lorentz network by
-bounded index elimination, its colour factor folded to a number — so each diagram collapses
-to a small polynomial in the frame's scalar symbols, which is then lowered to straight-line
-real arithmetic in seconds.
+NumTracer generates kernels by **numeric tracing**. Every momentum is given explicit components
+in a kinematic *frame* (some of them symbols: magnitudes, angles), and each diagram is contracted
+over those components — the Dirac trace as $4\times4$ matrix products, the Lorentz indices summed,
+the SU($N$) factor folded to an exact number. What comes out is a small polynomial in the frame's
+symbols, which is lowered to straight-line real arithmetic in seconds.
 
 ::::{grid} 1 1 2 2
 :gutter: 3
@@ -22,8 +22,8 @@ real arithmetic in seconds.
 :::{grid-item-card} Getting started
 :link: getting_started/index
 :link-type: doc
-What NumTracer does, the mental model behind a traced network, and how to build, install,
-and consume the library.
+What NumTracer does, the mental model behind a traced network, a FORM-to-NumTracer dictionary,
+and how to build, install, and consume the library.
 :::
 
 :::{grid-item-card} Tutorials

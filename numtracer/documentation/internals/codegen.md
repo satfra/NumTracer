@@ -34,7 +34,7 @@ dressing halves are emitted by FunKit COEN.
 `MakeNTKernel "Numeric"` builds, per diagram, a Dirac chain and a pure-Lorentz network from the
 DSL heads, then calls the [numeric contraction engine](numeric-engine.md): the Dirac trace folds
 by 4×4 chiral matrix products, the Lorentz network reduces by bounded index elimination, and the
-colour factor folds to a number. Each diagram becomes one small polynomial (`MPoly`) in the
+colour factor folds to a number. Each diagram becomes one small polynomial (`Poly`) in the
 frame's scalar symbols, which is lowered (CSE + Horner) into the shared `f[]` symbol layout and
 printed.
 
@@ -150,9 +150,10 @@ codegen change.
 
 ## Self-contained kernels
 
-Generated kernels are self-contained by default: they `#include
-"numtracer/codegen/runtime.hpp"` (which supplies `numtracer::complex` and
-`numtracer::compute::{powr,pow,sqrt,fma}`), are wrapped in a neutral namespace, and take generic
+Generated kernels are self-contained by default: they include two small NumTracer headers,
+`numtracer/codegen/runtime.hpp` (which supplies `numtracer::complex` and
+`numtracer::compute::{powr,pow,sqrt,fma}`) and `numtracer/sun/sun_data.hpp`, are wrapped in a
+neutral namespace, and take generic
 dressing parameters — no consumer dependency. A consumer that provides its own support API points
 the codegen at it via the `"RuntimeInclude"` / `"SupportNamespace"` / `"KernelNamespace"` /
 `"DressingType"` / `"ExtraIncludes"` options; the in-repo tests use these to emit against the
@@ -220,7 +221,7 @@ recipe below silently ineffective.)
 | `NT_GEN_NO_POLYDIV` | phase A | off | Disable multi-term denominator cancellation (`divThroughPolyAtoms`). Costs a large amount of kernel size on quark/ghost loops; the control for that measurement. |
 | `NT_VERTEX_COLLECT` | front end | off | Enable the open-leg vertex collection (`ntDiracSlot`, above). Off because high-multiplicity flows OOM; on where it wins. |
 | `NT_NO_LABEL_CHECK` | front end | check on | Skip the per-diagram label census. ~14% of front-end time, but it is the guard that catches a label occurring more than twice — which otherwise becomes a silently wrong contraction. |
-| `NT_GEN_NOINLINE_MIN` | emission | `500` | Per-function instruction threshold above which a device trace function is emitted out-of-line. See [tests/gpu/README.md](../../tests/gpu/README.md). |
+| `NT_GEN_NOINLINE_MIN` | emission | `500` | Per-function instruction threshold above which a device trace function is emitted out-of-line. See `numtracer/tests/gpu/README.md`. |
 | `NT_GEN_NOINLINE_TRACES` | emission | off | Force out-of-line for every trace function, host and device — the nvcc compile-cost lever. |
 | `NT_GEN_PROFILE` | both | off | Per-phase timing/RSS diagnostics from the generator binary. `=2` adds the per-wave RSS trace. Note it must be run against the compiled `gen_<name>` binary directly — the output is lost through `wolframscript`'s `Run[]`. |
 | `NT_GEN_VERBOSE` | front end | off | Enable the `[prof]`/`[cse]`/`[time]` Wolfram-side diagnostics (`ntLog`). `tests/gen/regen_check.sh` sets it because its density guard greps the `[cse]` line. |

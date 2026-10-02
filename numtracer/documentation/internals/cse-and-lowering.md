@@ -3,7 +3,7 @@
 > Headers: `codegen/lower.hpp`, `codegen/real_cse.hpp`, `codegen/gen.hpp` · Namespace: `numtracer::network`
 
 After the [numeric engine](numeric-engine.md) contracts a diagram, the result is one small
-**polynomial** — an `MPoly`: a sum of monomials, each a complex coefficient times a product of
+**polynomial** — an `Poly`: a sum of monomials, each a complex coefficient times a product of
 the frame's scalar symbols (`l·p`, `l²`, …) and any surviving inverse-propagator atoms (`1/k²`).
 That polynomial is already *collected* (like terms merged during the contraction). What remains
 is to turn it into a fast, flat, straight-line real kernel. This page covers the two passes that do
@@ -18,13 +18,13 @@ The generator (`gen.hpp`) then prints the SSA as `s0 = …; s1 = …; …` C++.
 
 ```{note}
 There is no compile-time expression-template evaluation here: the contraction runs numerically in
-the generator, and everything below operates on plain `MPoly` monomials and an ordinary runtime
+the generator, and everything below operates on plain `Poly` monomials and an ordinary runtime
 builder.
 ```
 
-## From MPoly to a real monomial list
+## From a Poly to a real monomial list
 
-Lowering starts in `numeric::to_genprog`, which flattens the `MPoly` into a list of `LMono`
+Lowering starts in `numeric::to_genprog`, which flattens the `Poly` into a list of `LMono`
 (`lower.hpp`) — the lowering's own monomial type:
 
 ```cpp
@@ -98,8 +98,8 @@ index.
 
 ```cpp
 // real_cse.hpp
-enum ROp : int { RCONST, RVAR, RADD, RSUB, RMUL, RNEG };
-struct RInstr { int op = RCONST; int a = -1; int b = -1; double k = 0; };
+enum ROp : int { RCONST, RVAR, RADD, RMUL, RNEG };
+struct RInstr { int op = RCONST; int a = -1; int b = -1; double value = 0; };
 ```
 
 The emit helpers do algebraic folding *as they build*, which is where the arithmetic shrinks to a
@@ -115,8 +115,8 @@ compact flop count:
 // real_cse.hpp
 constexpr int rmul(RBuilder &w, int x, int y) {
   if (x < 0 || y < 0) return -1;                                  // ×0 -> structurally zero
-  if (w.ins[x].op == RCONST) { if (w.ins[x].k == 1.0) return y; if (w.ins[x].k == -1.0) return rneg(w, y); }
-  if (w.ins[y].op == RCONST) { if (w.ins[y].k == 1.0) return x; if (w.ins[y].k == -1.0) return rneg(w, x); }
+  if (w.ins[x].op == RCONST) { if (w.ins[x].value == 1.0) return y; if (w.ins[x].value == -1.0) return rneg(w, y); }
+  if (w.ins[y].op == RCONST) { if (w.ins[y].value == 1.0) return x; if (w.ins[y].value == -1.0) return rneg(w, x); }
   return w.find_or_add({RMUL, x < y ? x : y, x < y ? y : x, 0}); // commutative -> canonical
 }
 ```
@@ -131,10 +131,9 @@ with `RVAR` slots reading the shared `f[]` environment:
 
 ```cpp
 // what the printer emits, per opcode
-case RCONST: out << in.k;                       break;
+case RCONST: out << in.value;                    break;
 case RVAR:   out << "f[" << in.a << "]";        break;   // shared scalar-symbol env
 case RADD:   out << "s" << in.a << "+s" << in.b; break;
-case RSUB:   out << "s" << in.a << "-s" << in.b; break;
 case RMUL:   out << "s" << in.a << "*s" << in.b; break;
 default:     out << "-s" << in.a;               break;   // RNEG
 ```

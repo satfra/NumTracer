@@ -1,78 +1,49 @@
 // step-04 — Lorentz networks contract to a scalar polynomial.
 //
-// A network of metrics, momentum vectors and transverse projectors has no "components" once you
-// contract it: the numeric engine sums the shared Lorentz indices away over the loop frame and
-// collapses the network to a polynomial in the frame's momentum components, carrying any surviving
-// inverse propagators 1/l^2 as separate "atoms". numtracer::numeric::numeric_value does that
-// contraction. We apply it to the warm-up p.P(l).p and read off p^2 (1 - cos^2 theta) — the angular
-// factor of the ghost/gluon loop.
-#include <numtracer.hpp> // the whole NumTracer API — here: nvec / nprojT (NNet) + numeric_value -> MPoly
+// A network of metrics, momentum vectors and transverse projectors has no free indices once it is
+// contracted: the frame sums every shared Lorentz index away and collapses the network to a
+// polynomial in the frame's symbols, with each surviving inverse propagator 1/l^2 carried along as a
+// separate "atom". We apply it to the warm-up p.P(l).p and read off p^2 (1 - cos^2 theta) — the
+// angular factor of the ghost/gluon loop.
+#include <numtracer.hpp> // the whole NumTracer API
 
-#include <array>
 #include <cmath>
 #include <cstdio>
-#include <vector>
 
-namespace nm = numtracer::numeric;
-namespace net = numtracer::network;
-using numtracer::Cx;
-
-// Name the Lorentz axis labels with a single unscoped enum (every label auto-numbered, so all
-// distinct); the momentum ids (p = 0, l = 1, indexing the component table) stay plain integers.
-enum { mu, nu }; // Lorentz indices
+namespace nt = numtracer;
 
 int main() {
-  // The loop frame: each momentum is a vid into a component table comp[vid][0..3], whose entries are
-  // MPolys. We pick the concrete one-angle frame up front — p along axis 0, l in the 0-1 plane — and
-  // keep only its NON-ZERO components symbolic (one scalar variable each), so numeric_value contracts
-  // the network into the polynomial in exactly those frame scalars:
-  //   p_0 = var 0,   l_0 = var 1,   l_1 = var 2.
   // @snip begin: frame
-  const int nsym = 3;
-  nm::LorentzEnv env(nsym);
-  std::vector<std::array<nm::MPoly, 4>> comp(2, {env.zero(), env.zero(), env.zero(), env.zero()});
-  comp[0][0] = env.var(0); // p = (p_0, 0, 0, 0)
-  comp[1][0] = env.var(1); // l = (l_0, l_1, 0, 0)
-  comp[1][1] = env.var(2);
+  // The loop frame: p along axis 0, l at angle theta to it in the 0-1 plane. The symbols are the
+  // magnitudes p, l and cos(theta); sin(theta) is not a separate input — F.angle derives it, and
+  // knows cos^2 + sin^2 = 1, so l^2 = l^2 cos^2 + l^2 sin^2 simplifies to the single monomial l^2.
+  nt::Frame F;
+  auto P = F.symbol("p"), L = F.symbol("l");
+  auto [C, S] = F.angle("cos");
+  nt::Momentum p = F.momentum(P, 0, 0, 0);
+  nt::Momentum l = F.momentum(L * C, L * S, 0, 0);
+  auto [mu, nu] = F.indices<2>();
   // @snip end: frame
 
-  // @snip begin: atom
-  // The transverse projector P(l)_{mu nu} = delta_{mu nu} - l_mu l_nu / l^2 carries its 1/l^2 as
-  // "atom" id 0; numeric_value needs that atom's denominator l^2 = sum_i comp[1][i]^2.
-  nm::MPoly l2 = env.zero();
-  for (int i = 0; i < 4; ++i) l2 = l2 + comp[1][i] * comp[1][i];
-  std::vector<nm::MPoly> atomDen = {l2};
-  // @snip end: atom
-
   // @snip begin: net
-  // The Lorentz network as one product term (coefficient 1) of three factors:
-  //   nvec(Lbl, vlc)           : a 4-vector on Lorentz index Lbl, momentum = sum coeff*comp(vid).
-  //   nprojT(Mu, Nu, vlc, atom) : P_{Mu Nu}(l) = delta_{Mu Nu} - l_Mu l_Nu / l^2, l = sum coeff*comp(vid).
-  // Sharing index mu between the first p and the projector, and index nu between the projector and
-  // the second p, sums both Lorentz indices away -> a scalar network: p.P(l).p.
-  nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nvec(mu, {{1.0, 0}}),
-                                       nm::nprojT(mu, nu, {{1.0, 1}}, 0),
-                                       nm::nvec(nu, {{1.0, 0}})}}};
-
-  // Contract: empty Dirac chain (this is a pure-Lorentz network). The result is one MPoly =
-  // p.P(l).p = sp(p,p) - sp(p,l)^2 / l^2 = p_0^2 - p_0^2 l_0^2 / l^2 — two monomials in this frame
-  // (the second carries the 1/l^2 atom).
-  nm::MPoly poly = env.numeric_value(net::DiracNet{}, lor, comp, atomDen);
+  // The network as one product of three factors:
+  //   vec(mu, p)       : p_mu
+  //   projT(mu, nu, l) : P_T(l)_{mu nu} = delta_{mu nu} - l_mu l_nu / l^2
+  //   vec(nu, p)       : p_nu
+  // Sharing mu and nu sums both away: a scalar network, p.P(l).p. Its 1/l^2 is registered by the
+  // frame (from l's components) and evaluated with it.
+  nt::Poly poly = F.contract(nt::vec(mu, p) * nt::projT(mu, nu, l) * nt::vec(nu, p));
   // @snip end: net
 
-  // Evaluate the contracted polynomial at concrete values: p along axis 0, l at angle theta.
-  const double Pm = 1.3, l0 = 0.5, l1 = 0.7;
-  const std::vector<double> x = {Pm, l0, l1}; // var 0 = p_0, var 1 = l_0, var 2 = l_1
-  const double l2v = l0 * l0 + l1 * l1;
-  const std::vector<double> atomVal = {1.0 / l2v}; // value of atom 0 = 1/l^2 at this frame
-  const double val = nm::eval(poly, x, atomVal).re;
+  // Evaluate at one point: values of the independent symbols p, l, cos, in declaration order.
+  const double pv = 1.3, lv = 0.86, c = 0.58;
+  const double val = F.eval(poly, F.at(pv, lv, c)).re;
 
-  const double cth = l0 / std::sqrt(l2v); // cos theta
-  std::printf("contracted monomials = %d   (p.P.p = sp(p,p) - sp(p,l)^2 / l^2)\n", poly.size());
-  std::printf("p.P(l).p             = %g   (= p^2 (1 - cos^2) = %g)\n", val, Pm * Pm * (1 - cth * cth));
-  std::printf("p.P(l).p / p^2       = %g   (= 1 - cos^2 theta = %g)\n", val / (Pm * Pm), 1 - cth * cth);
+  std::printf("contracted monomials = %d   (p.P.p = p^2 - (p.l)^2 / l^2)\n", poly.size());
+  std::printf("p.P(l).p             = %g   (= p^2 (1 - cos^2) = %g)\n", val, pv * pv * (1 - c * c));
+  std::printf("p.P(l).p / p^2       = %g   (= 1 - cos^2 theta = %g)\n", val / (pv * pv), 1 - c * c);
 
-  const bool ok = std::fabs(val - Pm * Pm * (1 - cth * cth)) < 1e-12;
+  const bool ok = std::fabs(val - pv * pv * (1 - c * c)) < 1e-12;
   std::printf(ok ? "ALL TESTS PASSED\n" : "TESTS FAILED\n");
   return ok ? 0 : 1;
 }

@@ -8,19 +8,25 @@ a reader from another domain can skip the second list.
 ## Engine terms
 
 Network
-: A product of tensor *heads* with integer index labels. Repeated labels are summed (Einstein);
-  a label used once stays free. A network with no free labels is a scalar.
+: A product of tensor *heads* with index labels. Repeated labels are summed (Einstein); a label
+  used once stays free. A network with no free labels is a scalar.
+
+Index label
+: The name of an index slot. In C++ it is typed — `LorentzIndex`, `AdjIndex`, `FundIndex` — and
+  handed out by the frame (`F.indices<n>()`) or the SU($N$) group (`su.adjoint<n>()`,
+  `su.fundamental<n>()`).
 
 Head / builder
 : One factor of a network — a metric, vector, projector, gamma, SU($N$) object. `nt…` in the
-  Mathematica DSL, `n…`/`d…`/`SUN::…` in C++ (see the
-  [DSL↔C++ dictionary](bring-your-own-network.md)).
+  Mathematica DSL; `nt::metric`, `nt::vec`, `nt::projT`, `nt::gamma`, `nt::slash`, `su.T`, … in C++
+  (see the [DSL↔C++ dictionary](bring-your-own-network.md)).
 
 Frame
 : A choice of reference components for every vector in the network — e.g. one vector along an axis,
   another at a fixed angle. It fixes how each scalar product is written in terms of the kernel's
-  runtime arguments. Full definition under
-  [Key concepts](concepts.md#runtime-numbers-come-from-the-frame) and
+  runtime arguments. In C++, `nt::Frame` holds the symbols, the momenta and the projector
+  denominators, and does the contraction (`F.trace`) and evaluation (`F.eval`). Full definition
+  under [Key concepts](concepts.md#runtime-numbers-come-from-the-frame) and
   [internals Terminology](../internals/index.md#terminology).
 
 Scalar symbol
@@ -28,28 +34,26 @@ Scalar symbol
   each once per call; the lowered arithmetic is a polynomial in them.
 
 Atom
-: A surviving inverse propagator $1/k^2$ carried alongside a polynomial's monomials, supplied
-  numerically at evaluation time. Named because it is an indivisible reciprocal the contraction
-  tracks rather than expands.
+: A surviving inverse propagator $1/k^2$ carried alongside a polynomial's monomials and evaluated at
+  evaluation time. Named because it is an indivisible reciprocal the contraction tracks rather than
+  expands. The frame registers one per projector momentum and knows its denominator.
 
 Diagram
 : One term of the network at the top level — a scalar coefficient times one contraction. A kernel
   is a sum over diagrams. (In the running example each diagram is a Feynman diagram, but the engine
   just sees "a coefficient times a contraction.")
 
-MPoly
+Poly
 : The engine's multivariate polynomial in the frame's scalar symbols, carrying inverse atoms. Every
-  contraction returns one.
+  contraction returns one. (`DPoly` is the same with runtime dressings as extra variables.)
 
-LorentzEnv / SUNEnv
-: The small factory objects that bind a size once and mint every polynomial or colour factor. A
-  `LorentzEnv env(nsym)` binds the symbol-space size and is the sole construction path for
-  `MPoly`/`DPoly` — you call `env.var(i)`, `env.constant(c)`, `env.numeric_value(…)` on it rather
-  than passing `nsym` per call. A `SUNEnv sun(N)` is the analogous ergonomic wrapper binding an
-  SU($N$) rank for the colour builders.
+SUN
+: An SU($N$) group object, `nt::SUN su(N)`: it hands out the group's typed labels, builds its
+  factors (`f`, `T`, `delta`, `diag`) and folds a closed network of them to an exact number
+  (`su.value`). One object per group — colour, flavour, or any other SU($N$).
 
 Lowering (CSE + Horner)
-: The build-time passes that turn an `MPoly` into flat, straight-line real arithmetic — Horner
+: The build-time passes that turn a `Poly` into flat, straight-line real arithmetic — Horner
   factoring plus common-subexpression elimination. See [CSE and Horner lowering](../internals/cse-and-lowering.md).
 
 ## Physics terms, as used in the running example
@@ -74,7 +78,7 @@ Propagator
 
 Colour / flavour
 : The two SU($N$) sectors of the example (SU($N_c$) gauge colour, SU($N_f$) flavour). To the engine
-  they are indistinguishable SU($N$) index families told apart only by their labels.
+  they are just two SU($N$) groups, one `nt::SUN` object each.
 
 Fundamental / adjoint
 : The two SU($N$) representations the engine handles — the $N$-dimensional (quark-like) and

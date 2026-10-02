@@ -1,68 +1,71 @@
 # NumTracer
 
-NumTracer is a C++20 engine that builds and contracts the tensor networks that appear in
-quantum-field-theory loop integrands — Lorentz, Dirac, and SU(N) (colour and flavour) — and
-**generates flat, FORM-style C++ kernels** from them. It does the tensor algebra without a
-symbolic-algebra runtime and without a FORM dependency: each diagram is contracted numerically over
-a compact loop frame and lowered to straight-line real arithmetic.
+NumTracer is a C++20 engine that contracts the tensor networks of quantum-field-theory loop
+integrands — Lorentz, Dirac, and SU(N) structure — and **generates flat, straight-line C++ kernels**
+from them. It needs no symbolic-algebra system at run time: each diagram is contracted numerically
+over a kinematic frame, and the resulting polynomial is lowered to plain arithmetic.
 
-It is a *general* tensor-tracing engine — the physics lives in the network you hand it, not in the
-engine. The reference fixtures here are functional-Renormalization-Group (fRG) flows for Yang–Mills
-and QCD, but nothing in the contraction or codegen is specific to them.
+It is a *general* engine: the physics lives in the network you hand it. The reference fixtures here
+are functional-Renormalization-Group (fRG) flows for Yang–Mills and QCD, but nothing in the
+contraction or the code generation is specific to them.
 
-## Architecture
+## A first trace
 
-A kernel is produced by a four-stage pipeline, build-time generation followed by a dependency-free
-runtime kernel:
+$\mathrm{tr}[\slashed p\,\gamma^\mu \slashed q\,\gamma^\nu]\,P^T_{\mu\nu}(l)$ with $q = l - p$, in a
+one-angle frame:
 
-1. **Front-end** (`mathematica/`). `NumTrace[net, …]` parses a tensor network written in DSL heads
-   (`ntMetric`, `ntVec`, `ntTransProj`, `ntSUNf`, …) into an `NTKernel`: a list of diagrams (a scalar
-   coefficient × a contraction) plus the loop frame. `FromFunKit` imports a FunKit flow into the same DSL.
-2. **Numeric contraction** (`MakeNTKernel`). Emits, compiles, and runs a small C++ generator that
-   contracts each diagram numerically — the Dirac trace as 4×4 chiral matrix products, the Lorentz
-   network by bounded index elimination, the colour/flavour factor folded to a number. Each diagram
-   collapses to one small polynomial in the frame's scalar symbols.
-3. **Lowering** (`codegen/`). Greedy Horner factoring plus real value-numbering (CSE) lower that
-   polynomial to a flat straight-line kernel — `trN(const double* f)` trace functions, a `fill()`, and
-   the per-diagram assembly.
-4. **Consumer.** The committed kernel is plain C++ that includes only `codegen/runtime.hpp`, so the
-   runtime build is dependency-free.
+```cpp
+#include <numtracer.hpp>
+namespace nt = numtracer;
 
-The same contraction primitives are exposed directly in C++ for hand-built traces and as the numeric
-oracle the backend is validated against.
+nt::Frame F;
+auto P = F.symbol("p"), L = F.symbol("l");
+auto [C, S] = F.angle("cos");                        // sin is derived from cos
+nt::Momentum p = F.momentum(P, 0, 0, 0);
+nt::Momentum l = F.momentum(L * C, L * S, 0, 0);
+auto [mu, nu] = F.indices<2>();
 
-### Module layout
+nt::Poly T = F.trace({nt::slash(p), nt::gamma(mu), nt::slash(l - p), nt::gamma(nu)},
+                     nt::projT(mu, nu, l));         // a polynomial in p, l, cos
+double v = F.eval(T, F.at(1.3, 0.86, 0.58)).re;      // = 4p(-3 cos l + p + 2 cos^2 p)
+```
 
-Headers live under `include/numtracer/`; include paths use the full prefix, e.g.
-`#include "numtracer/numeric/numeric_contract.hpp"`.
+SU(N) factors fold to exact numbers through a group object:
 
-| path       | role                                                                                                                                                                                                                                                 |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `core/`    | foundations: the `constexpr` complex `Cx` (usable as a template parameter) and its `Lit<C>` carrier, the dense complex matrix `Mat<N>`, and build tunables                                                                                           |
-| `dirac/`   | typed-out Euclidean γ matrices (Weyl basis) — the `constexpr` tables every Dirac contraction reads                                                                                                                                                   |
-| `sun/`     | typed-out SU(2)/SU(3) colour/flavour tables plus the `SUNBuilder<N>` runtime oracle they are checked against                                                                                                                                         |
-| `network/` | the Lorentz network value (`NetVal`) and its builders, plus the generator-side numeric colour and Dirac contractions                                                                                                                                 |
-| `numeric/` | the **numeric matrix-product backend**: fold a diagram's Dirac trace by 4×4 spinor products and contract the Lorentz network to one polynomial (`MPoly`), then hand it to the lowering driver                                                        |
-| `codegen/` | build-time emission: Horner-factor a polynomial (`lower.hpp`) through the real value-numbering CSE builder (`real_cse.hpp`) into a straight-line program and print the kernel header (`gen.hpp`); `runtime.hpp` is the minimal consumer-side support |
-| `cuda/`    | a two-phase CUDA quadrature integrator over a grid of external momenta, consuming `__host__ __device__` generated kernels                                                                                                                            |
+```cpp
+nt::SUN su3(3);
+auto [a] = su3.adjoint<1>();
+auto [i, j] = su3.fundamental<2>();
+nt::Cx CFN = su3.value(su3.T(a, i, j) * su3.T(a, j, i));   // tr(T^a T^a) = 4
+```
+
+## Two ways to use it
+
+- **C++ API** (needs only a C++20 compiler): build networks as above, contract and evaluate them,
+  lower a polynomial to a straight-line C++ function (`nt::to_genprog`, `nt::emit_cpp`).
+- **Mathematica code generator** (needs Wolfram and [FunKit](https://github.com/satfra/FunKit)):
+  write the network in a small DSL (`ntVec`, `ntTransProj`, `ntGamma`, `ntSUNT`, …) or import a
+  FunKit flow, and `MakeNTKernel` writes a complete kernel — every diagram, a `fill()` for the frame
+  symbols, dressings, and the integrator-facing signature.
+
+A generated kernel includes only two small NumTracer headers (`codegen/runtime.hpp`,
+`sun/sun_data.hpp`), so the consumer build has no other dependency.
 
 ## Build & test
 
-The CMake project root is `numtracer/`, **not** the repo root. It builds a small static library by
-default (header-only on opt-in via `-DNUMTRACER_HEADER_ONLY=ON`).
+The CMake project root is `numtracer/`, **not** the repository root. It builds a small static
+library (header-only on opt-in, `-DNUMTRACER_HEADER_ONLY=ON`).
 
 ```bash
 cmake -S numtracer -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
+cmake --build build -j4
 ctest --test-dir build --output-on-failure
 ```
 
-Builds use `-O3 -march=native -Wall -Wextra`. Tests and benchmarks build only when NumTracer is the
-top-level project (`-DNUMTRACER_BUILD_TESTS=OFF` to skip). Each generated kernel under `tests/gen/` is
-gated against a FORM or equivalence oracle over random points; regenerate them only when a flow or the
-codegen changes. Opt-in `-DNUMTRACER_SANITIZE="ADDRESS;UNDEFINED"` runs the suite under ASan/UBSan.
-
-GPU integration tests (CUDA + GSL) are off by default — see `tests/gpu/README.md`.
+Tests and benchmarks build only when NumTracer is the top-level project
+(`-DNUMTRACER_BUILD_TESTS=OFF` to skip). Each generated kernel under `numtracer/tests/gen/` is
+gated against a FORM or equivalence oracle over random points. GPU integration tests (CUDA + GSL)
+are off by default — see `numtracer/tests/gpu/README.md`.
 
 ## Install & use from other projects
 
@@ -75,31 +78,22 @@ find_package(NumTracer REQUIRED HINTS ~/.local/share/NumTracer)
 target_link_libraries(my_target PRIVATE NumTracer::NumTracer)
 ```
 
-If `wolframscript` is found at configure time, the Mathematica front-end is also installed so
+If a Wolfram kernel is found at configure time, the Mathematica front-end is also installed so
 `Needs["NumTracer`"]` resolves from anywhere (disable with `-DNUMTRACER_INSTALL_MATHEMATICA=OFF`).
-
-## Generating kernels
-
-The codegen runs under `wolframscript`. The two entry points:
-
-- `NumTrace[net, "Frame" -> frame, "Args" -> {…}]` — analyse a DSL network into an `NTKernel`.
-- `MakeNTKernel[ntk, genFile, kernelFile, tracesFile, …]` — emit, compile, and run the numeric
-  generator, producing the committed kernel.
-
-Generated kernels are self-contained by default (they include `codegen/runtime.hpp`, are wrapped in a
-neutral namespace, and take generic dressing parameters). A consumer with its own support API redirects
-the codegen via the `"RuntimeInclude"` / `"SupportNamespace"` / `"DressingType"` options.
-
-## Performance
-
-NumTracer trades a small amount of runtime for a large amount of generation time. On the quark–gluon
-vertex flows measured (see `numtracer/PERFORMANCE.md`):
-
-- **Generation** is roughly **80–175× faster** than the FORM path (~18 s per structure vs ~25–56 min).
-- **Runtime** kernels run at roughly **1.0–1.6× FORM** per evaluation. The lowered kernel is
-  straight-line real arithmetic with no integer division, so it is GPU-friendly.
 
 ## Documentation
 
-A Sphinx + Doxygen site (narrative guide + C++ API) lives in `numtracer/documentation/`; build it with
-`documentation/build.sh` (needs `doxygen` plus a Python 3.9–3.12 environment — see that directory).
+A Sphinx + Doxygen site (getting started, 22 tutorials, internals, C++ reference) lives in
+`numtracer/documentation/`; build it with `documentation/build.sh`. Coming from FORM? Start with
+*Getting started → Coming from FORM*. The tutorial programs are a standalone CMake project in
+`Tutorials/` (`cmake -S Tutorials -B Tutorials/build && ctest --test-dir Tutorials/build`).
+
+## Layout
+
+| path | contents |
+|---|---|
+| `numtracer/include/numtracer/` | the library headers; `#include <numtracer.hpp>` pulls in the whole API |
+| `numtracer/mathematica/` | the Mathematica front-end (`NumTrace`, `MakeNTKernel`, `FromFunKit`) |
+| `numtracer/tests/` | unit tests, generated-kernel gates, and their fixtures |
+| `numtracer/documentation/` | the documentation site |
+| `Tutorials/` | the tutorial programs the documentation walks through |

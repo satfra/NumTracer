@@ -37,7 +37,7 @@ produces the *same kind* of flat scalar kernel, but does the contraction numeric
 fixed frame. In practice it generates a kernel **~80–175× faster**, and the generated kernel is
 **competitive with or faster than** the symbolic one: on the quark–gluon vertex `ZAqbq{1,4,7}_147`
 it runs at **0.96× / 0.99× / 0.62×** the FORM kernel's time (`tests/refshim/bench_aqbq147.cpp`),
-and on the pure-gauge `ZA3_147` at 1.01×. See [PERFORMANCE.md](../../PERFORMANCE.md) for the
+and on the pure-gauge `ZA3_147` at 1.01×. See `numtracer/PERFORMANCE.md` for the
 per-flow table. Nothing downstream depends on that tool: the emitted kernel is self-contained C++.
 
 A fixed-frame contraction was long assumed to be structurally unable to do the partial-fractioning
@@ -60,7 +60,7 @@ accuracy at the same time — the division and the terms that cancel against it 
         Lorentz net  ─ bounded index elimination  ─▶ polynomial
         colour       ─ folded to a number
         │
-        ▼  one small polynomial (MPoly) per diagram, in the frame's scalar symbols
+        ▼  one small polynomial (Poly) per diagram, in the frame's scalar symbols
    lowering: CSE + Horner  ─▶  flat straight-line kernel  (trN(f) + fill + assembly)
 ```
 

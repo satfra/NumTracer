@@ -1,0 +1,4 @@
+contracted monomials = 2   (p.P.p = p^2 - (p.l)^2 / l^2)
+p.P(l).p             = 1.12148   (= p^2 (1 - cos^2) = 1.12148)
+p.P(l).p / p^2       = 0.6636   (= 1 - cos^2 theta = 0.6636)
+ALL TESTS PASSED
