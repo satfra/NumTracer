@@ -367,11 +367,13 @@ commonFactorMultiset[factLists_] := Module[{cnts = Counts /@ factLists, keys},
   Flatten[Function[k, ConstantArray[k, Min[(Lookup[#, k, 0] &) /@ cnts]]] /@ keys]];
 
 dressedNumDecomposeRaw[p_Plus] := Module[
-   (* Flatten only this local numerator sum. At finite T, psdash[p] contains
-      gamma.mu vecs[p, mu]; after fixed-component normalization the temporal
-      subtraction must become a separate slash option rather than making the
-      complete propagator numerator non-collectible. *)
-   {rows = dressedNumTerm /@ (List @@ Expand[p]), din, dout, others, common, scalFacs, commonScal, opts},
+   (* Flatten only this local numerator sum, and only over its tensor structure. At finite T,
+      psdash[p] contains gamma.mu vecs[p, mu]; after fixed-component normalization the temporal
+      subtraction must become a separate slash option rather than making the complete propagator
+      numerator non-collectible. A tensor-free factor (a composite dressing such as
+      -(Zq[q] + Zq[k] RF/|q|)) stays whole: expanding it too would turn each of its atoms into its
+      own dressing slot and multiply the distinct sub-terms (4.75x on za4_147). *)
+   {rows = dressedNumTerm /@ (List @@ Expand[p, $ntTensorPat]), din, dout, others, common, scalFacs, commonScal, opts},
   If[MemberQ[rows, $Failed], Return[$Failed]];
   {din, dout} = rows[[1, {1, 2}]];
   If[! AllTrue[rows, #[[1]] === din && #[[2]] === dout &], Return[$Failed]]; (* all terms din→dout *)
@@ -417,7 +419,7 @@ openLorentzOf[t_] := Complement[freeIdx[t], allSpinorLabels[t], colourLabelsOf[t
    same 2 open spinor indices and the same NON-EMPTY set of open Lorentz legs (so the surrounding net
    contracts a fixed leg set for every structure choice). Expand first so a term carrying an inner Dirac
    Plus (e.g. a σ commutator written out) splits into monomials. *)
-diracSlotSumQ[p_Plus] := Module[{terms = List @@ Expand[p], opens, lors},
+diracSlotSumQ[p_Plus] := Module[{terms = List @@ Expand[p, $ntTensorPat], opens, lors},
   opens = openSpinorOf /@ terms;
   lors  = Sort /@ (openLorentzOf /@ terms);
   AllTrue[terms, ! FreeQ[#, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac] &] &&
@@ -432,7 +434,7 @@ diracSlotSumQ[_] := False;
 NumTrace::slotorient = "diracSlotDecompose: a collected Dirac slot has `1` candidate in-legs, not 1. A slot is an open chain din->dout, so exactly one open spinor label must be an IN leg and no OUT leg; two (an anomalous qq vertex) or zero (its qbar qbar conjugate) leave it without an orientation, and guessing one could emit the segment backwards. Open spinor labels: `2`. First term: `3`.";
 
 diracSlotDecomposeRaw[p_Plus] := Module[
-  {terms = List @@ Expand[p], legs, opens, din, dout, io, ins, outs, dinCands, rows, cols, common, scals, commonScal, opts},
+  {terms = List @@ Expand[p, $ntTensorPat], legs, opens, din, dout, io, ins, outs, dinCands, rows, cols, common, scals, commonScal, opts},
   If[! diracSlotSumQ[p], Return[$Failed]];
   legs   = Sort @ openLorentzOf[First[terms]];
   opens  = openSpinorOf[First[terms]];

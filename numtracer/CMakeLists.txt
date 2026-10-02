@@ -707,6 +707,13 @@ if(NUMTRACER_BUILD_TESTS)
                      -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/gen/test_diracslot_roundtrip.wls")
     set_tests_properties(wolfram_diracslot_roundtrip PROPERTIES LABELS wolfram TIMEOUT 300)
 
+    # A propagator numerator is split over its tensor structure only: the finite-T psdash γ sum
+    # becomes separate slash options, a composite scalar dressing stays one coefficient.
+    add_test(NAME wolfram_dressednum_expand
+             COMMAND "${NT_WOLFRAM_EXE}" -noprompt
+                     -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/gen/test_dressednum_expand.wls")
+    set_tests_properties(wolfram_dressednum_expand PROPERTIES LABELS wolfram TIMEOUT 300)
+
     # The C++ TYPE of each runtime kernel parameter: an AD-flagged scalar must be emitted
     # `const auto&` (an abbreviated template, the only thing that binds autodiff::real) and not
     # `const double&`. The ParameterOrder rework lost that to a With[] that closed one line early,
