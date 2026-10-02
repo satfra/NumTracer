@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
   const auto &f = numtracer::network::sun_net_detail::sun_data_for(N).f_nz;
   const int A = N * N - 1;
   // f^{acd} f^{bcd} contracted over (c,d) — an inline numeric contraction (the library folds
-  // colour numerically via sun_value_cx).
+  // colour numerically via sun_value).
   auto ff = [&](int a, int b) {
     double s = 0;
     for (const auto &e1 : f)

@@ -15,7 +15,7 @@
 //   leg   = lS . P_T(p) . lS                = lS.lS - (lS.p)^2/(p.p)
 //
 // `leg` is the only one that is not a slash. That distinction matters: a slash is emitted as
-// dslash({{1.0, base}}) and carries NO frameMask, reading all four env components, whereas an open
+// slash(Momentum{{{1.0, base}}}) and carries NO frameMask, reading all four env components, whereas an open
 // leg is emitted as lvec<id, base, MASK> — mask from the frame, components from the frame spec. Only
 // `leg` makes those two agree in anger (here mask = 0b0110, the parent loop's own being 0b0111).
 //

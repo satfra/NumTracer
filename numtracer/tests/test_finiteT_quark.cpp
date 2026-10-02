@@ -20,7 +20,9 @@
 // spatial components are random — a genuinely broken-O(4) Dirac × projector trace. Prints
 // ALL TESTS PASSED / exits non-zero on failure.
 #include "numtracer/numeric/numeric_contract.hpp"
-#include "numtracer/numeric/env.hpp"
+#include "engine_test_util.hpp"
+using namespace numtracer; // the typed builders (LorentzIndex, Momentum, …) the tests spell unqualified
+#include "numtracer/numeric/frame.hpp"
 
 #include <array>
 #include <cmath>
@@ -40,28 +42,28 @@ constexpr double ZAE = 1.3, ZAM = 0.7; // placeholder transverse/longitudinal gl
 
 int main()
 {
-  nm::LorentzEnv env(nsym);
-  std::vector<std::array<nm::MPoly, 4>> comp(2);
+  nm::Frame env(ntest::names(nsym));
+  std::vector<std::array<nm::Poly, 4>> comp(2);
   for (int mu = 0; mu < 4; ++mu) {
     comp[pVid][static_cast<std::size_t>(mu)] = env.var(0 + mu);
     comp[lVid][static_cast<std::size_t>(mu)] = env.var(4 + mu);
   }
   // l² (atom 0) and spatial |l⃗|² (atom 1, component 0 = temporal dropped).
-  nm::MPoly l2 = env.zero(), ls2 = env.zero();
+  nm::Poly l2 = env.zero(), ls2 = env.zero();
   for (int mu = 0; mu < 4; ++mu)
     l2 = l2 + comp[lVid][static_cast<std::size_t>(mu)] * comp[lVid][static_cast<std::size_t>(mu)];
   for (int mu = 1; mu < 4; ++mu)
     ls2 = ls2 + comp[lVid][static_cast<std::size_t>(mu)] * comp[lVid][static_cast<std::size_t>(mu)];
-  const std::vector<nm::MPoly> atomDen = {l2, ls2};
+  const std::vector<nm::Poly> atomDen = {l2, ls2};
 
   // closed Dirac trace tr[ (γ·p) γ^μ (γ·q) γ^ν ], free legs μ=100, ν=101; q = l − p.
-  const network::DiracNet chain = {network::dslash({{1.0, pVid}}), network::dgamma(100),
-                                   network::dslash({{1.0, lVid}, {-1.0, pVid}}), network::dgamma(101)};
+  const network::DiracChain chain = {network::slash(Momentum{{{1.0, pVid}}}), network::gamma(LorentzIndex{100}),
+                                   network::slash(Momentum{{{1.0, lVid}, {-1.0, pVid}}}), network::gamma(LorentzIndex{101})};
   // finite-T gluon line G_{μν}(l) = ZAE·P_E(l) + ZAM·P_M(l) on the free legs.
-  const nm::NNet gluon = {nm::NTerm{Cx{ZAE, 0}, {nm::nprojE(100, 101, {{1.0, lVid}}, 0, 1)}},
-                          nm::NTerm{Cx{ZAM, 0}, {nm::nprojM(100, 101, {{1.0, lVid}}, 1)}}};
+  const LorentzNet gluon = {LorentzTerm{Cx{ZAE, 0}, {ntest::fprojE(100, 101, {{1.0, lVid}}, 0, 1)}},
+                          LorentzTerm{Cx{ZAM, 0}, {ntest::fprojM(100, 101, {{1.0, lVid}}, 1)}}};
 
-  const nm::MPoly N = env.numeric_value(chain, gluon, comp, atomDen);
+  const nm::Poly N = ntest::contract(env, chain, gluon, comp, atomDen);
 
   std::mt19937_64 rng(20260622);
   std::uniform_real_distribution<double> Usp(-2.0, 2.0), UT(0.05, 0.6);
@@ -87,7 +89,7 @@ int main()
       if (mu > 0) ls2v += ll[mu] * ll[mu];
     }
     const std::vector<double> atomVal = {1.0 / l2v, 1.0 / ls2v};
-    const double num = nm::eval(N, x, atomVal).re;
+    const double num = nm::ndetail::eval(N, x, atomVal).re;
 
     // closed-form oracle
     double PE[4][4], PM[4][4];

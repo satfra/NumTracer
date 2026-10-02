@@ -9,21 +9,20 @@
 #include "numtracer/network/sun_net.hpp"
 #endif
 using numtracer::Cx;
-namespace numtracer::network {
-template<int Mu,int Nu,int Lb,int Mask,int Inv> NetVal tproj(){ return projT(Mu,Nu,Lb,Inv); }
-template<int Mu,int Nu,int Lb,int Mask,int Inv> NetVal lproj(){ return projL(Mu,Nu,Lb,Inv); }
-template<int Mu,int Nu,int Lb,int Mask,int InvS> NetVal mproj(){ return projM(Mu,Nu,Lb,InvS); }
-template<int Mu,int Nu,int Lb,int Mask,int Inv,int InvS> NetVal eproj(){ return projE(Mu,Nu,Lb,Inv,InvS); }
-template<int Mu,int Nu> NetVal lmetric(){ return met(Mu,Nu); }
-template<int Lbl,int Base,int Mask> NetVal lvec(){ return vec(Lbl,Base); }
-template<int A,int B,int C,int D> NetVal leps(){ return epsilon(A,B,C,D); }
-inline NetVal konst(double c){ return NetVal{PTerm{Cx{c,0}, {}}}; }
+namespace numtracer {
+template<int Mu,int Nu,int Lb,int Mask,int Inv> LorentzNet tproj(){ return leaf({.kind=LorentzFactor::ProjT,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv}); }
+template<int Mu,int Nu,int Lb,int Mask,int Inv> LorentzNet lproj(){ return leaf({.kind=LorentzFactor::ProjL,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv}); }
+template<int Mu,int Nu,int Lb,int Mask,int InvS> LorentzNet mproj(){ return leaf({.kind=LorentzFactor::ProjM,.a=Mu,.b=Nu,.vid=Lb,.atomS=InvS}); }
+template<int Mu,int Nu,int Lb,int Mask,int Inv,int InvS> LorentzNet eproj(){ return leaf({.kind=LorentzFactor::ProjE,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv,.atomS=InvS}); }
+template<int Mu,int Nu> LorentzNet lmetric(){ return metric(LorentzIndex{Mu},LorentzIndex{Nu}); }
+template<int Lbl,int Base,int Mask> LorentzNet lvec(){ return leaf({.kind=LorentzFactor::Vector,.a=Lbl,.b=-1,.vlc={{1.0,Base}}}); }
+template<int A,int B,int C,int D> LorentzNet leps(){ return epsilon(LorentzIndex{A},LorentzIndex{B},LorentzIndex{C},LorentzIndex{D}); }
+inline LorentzNet konst(double c){ return LorentzNet{LorentzTerm{Cx{c,0}, {}}}; }
 template<class L> struct litco;
 template<numtracer::Cx C> struct litco<numtracer::Lit<C>>{ static constexpr numtracer::Cx v=C; };
-template<class L> NetVal sc(NetVal x){ return scale(litco<L>::v, std::move(x)); }
+template<class L> LorentzNet sc(LorentzNet x){ return scale(litco<L>::v, std::move(x)); }
 }
-using namespace numtracer::network;
-using namespace numtracer::numeric;
-const NetVal& lc2(){ static const NetVal v = contract(tproj<37, 0, 8, 7, 26>(), tproj<37, 38, 8, 7, 26>(), tproj<40, 38, 8, 7, 26>(), tproj<39, 40, 8, 7, 26>(), tproj<39, 3, 8, 7, 26>(), tproj<41, 1, 20, 7, 27>(), tproj<41, 42, 20, 7, 27>(), tproj<42, 2, 20, 7, 27>()); return v; }
-const NetVal& lc4(){ static const NetVal v = contract(tproj<40, 1, 0, 7, 24>(), tproj<40, 41, 0, 7, 24>(), tproj<41, 2, 0, 7, 24>(), tproj<42, 3, 0, 7, 24>(), tproj<43, 42, 0, 7, 24>(), tproj<43, 4, 0, 7, 24>()); return v; }
-const NetVal& lc0(){ static const NetVal v = contract(tproj<40, 1, 0, 7, 24>(), tproj<40, 41, 0, 7, 24>(), tproj<41, 2, 0, 7, 24>(), tproj<42, 3, 4, 7, 25>(), tproj<42, 43, 4, 7, 25>(), tproj<43, 4, 4, 7, 25>()); return v; }
+using namespace numtracer;
+const LorentzNet& lc2(){ static const LorentzNet v = mul(tproj<37, 0, 8, 7, 26>(), tproj<37, 38, 8, 7, 26>(), tproj<40, 38, 8, 7, 26>(), tproj<39, 40, 8, 7, 26>(), tproj<39, 3, 8, 7, 26>(), tproj<41, 1, 20, 7, 27>(), tproj<41, 42, 20, 7, 27>(), tproj<42, 2, 20, 7, 27>()); return v; }
+std::vector<DSlotOpt> optp0(){ return {DSlotOpt{Cx{1,0}, {}, {}, {}}, DSlotOpt{Cx{1,0}, {}, {slash(Momentum{{{1.,8}}})}, {}}, DSlotOpt{Cx{1,0}, {}, {slash(Momentum{{{1.,12}}})}, {}}, DSlotOpt{Cx{1,0}, {}, {slash(Momentum{{{1.,16}}})}, {}}}; }
+const LorentzNet& lc4(){ static const LorentzNet v = mul(tproj<40, 1, 0, 7, 24>(), tproj<40, 41, 0, 7, 24>(), tproj<41, 2, 0, 7, 24>(), tproj<42, 3, 0, 7, 24>(), tproj<43, 42, 0, 7, 24>(), tproj<43, 4, 0, 7, 24>()); return v; }

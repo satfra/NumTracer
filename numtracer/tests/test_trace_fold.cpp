@@ -8,15 +8,16 @@
 // a plausible polynomial. So exercise it directly, against the naive left fold it replaces, at the
 // sizes and cache regimes the real flows hit:
 //
-//   - fold_net == the left fold  (reassociation must not change the VALUE; MPoly/DPoly addition is
+//   - fold_net == the left fold  (reassociation must not change the VALUE; Poly/DPoly addition is
 //     exact term collection over Cx, so this is an exact equality, not a tolerance)
 //   - every cache regime: nCache = 0 (nothing resident, all recomputed), 1, n/2, n (all resident)
 //   - a trace beyond nCache is recomputed EXACTLY ONCE (the singleton-eviction assumption: Codegen*.m
 //     only leaves refCount==1 traces uncached, so a recompute must never be duplicated work)
-//   - both backends: MPoly (plain) and DPoly (dressed)
+//   - both backends: Poly (plain) and DPoly (dressed)
 //   - the degenerate shapes that the binary counter gets wrong if the carry is off by one: 0, 1, 2, 3
 //     and 7 terms (7 = 0b111 leaves three unmerged partials on the stack -> the leftover sweep)
-#include "numtracer/numeric/env.hpp"
+#include "numtracer/numeric/frame.hpp"
+#include "engine_test_util.hpp"
 #include "numtracer/numeric/trace_fold.hpp"
 
 #include <cstdio>
@@ -42,14 +43,14 @@ namespace
 
   // A distinct, non-trivial polynomial per trace id: c(k)·x0^(k%3) · x1^(k%2) + k·x2. Distinct enough
   // that a dropped or double-counted term cannot cancel out of the total by luck.
-  MPoly trace_of(int k)
+  Poly trace_of(int k)
   {
-    LorentzEnv env(NSYM);
-    MPoly p = env.mono({k % 3, k % 2, 0}, Cx{1.0 + k, 0.5 * k});
+    Frame env(ntest::names(NSYM));
+    Poly p = env.mono({k % 3, k % 2, 0}, Cx{1.0 + k, 0.5 * k});
     return p + env.mono({0, 0, 1}, Cx{static_cast<double>(k), 0.0});
   }
 
-  bool same(const MPoly &a, const MPoly &b)
+  bool same(const Poly &a, const Poly &b)
   {
     if (a.terms.size() != b.terms.size()) return false;
     for (std::size_t i = 0; i < a.terms.size(); ++i) {
@@ -70,7 +71,7 @@ namespace
   }
 
   // A stand-in polynomial that records how many ELEMENTS each addition touches. `size` models the
-  // term count; the cost of adding two polynomials is linear in their combined size (MPoly::operator+
+  // term count; the cost of adding two polynomials is linear in their combined size (Poly::operator+
   // is a merge). Summing that over the fold is the quantity the tree fold is built to keep at
   // O(n log n) — a left fold against a growing accumulator makes it O(n²).
   struct Counted {
@@ -93,7 +94,7 @@ namespace
   template <class P, class TraceFn>
   P left_fold(const std::vector<int> &idx, const std::vector<Cx> &sc, TraceFn &&trace)
   {
-    P acc = zero_like<P>(NSYM); // MPoly/DPoly route through the private-factory attorney; Counted uses its ctor
+    P acc = zero_like<P>(NSYM); // Poly/DPoly route through the private-factory attorney; Counted uses its ctor
     for (std::size_t j = 0; j < idx.size(); ++j)
       acc = acc + scale_trace(NSYM, trace(idx[j]), sc[j]);
     return acc;
@@ -157,11 +158,11 @@ int main()
 {
   std::printf("trace_fold: tree fold vs left fold, all cache regimes\n");
 
-  run_backend<MPoly>("MPoly", trace_of);
+  run_backend<Poly>("Poly", trace_of);
   run_backend<DPoly>("DPoly", [](int k) {
     // A dressed trace: the same kinematic polynomial under a dressing monomial that varies with k, so
     // the DPoly merge (which is keyed on the dressing monomial) is exercised rather than bypassed.
-    LorentzEnv env(NSYM);
+    Frame env(ntest::names(NSYM));
     DPoly d = env.dzero();
     d.add(dmono_sorted(DMono{k % 2, k % 3}), trace_of(k));
     return d;
@@ -172,8 +173,8 @@ int main()
   {
     const std::vector<int> idx = {2, 2, 5, 2, 5, 0, 5, 5};
     const std::vector<Cx> sc = {{1, 0}, {-1, 0.5}, {2, 0}, {0.5, -0.25}, {1, 1}, {3, 0}, {-2, 0}, {0.25, 0}};
-    std::vector<MPoly> T = contract_traces<MPoly>(NSYM, 6, 4, trace_of);
-    check(same(fold_net<MPoly>(NSYM, idx, sc, T, 6, trace_of), left_fold<MPoly>(idx, sc, trace_of)),
+    std::vector<Poly> T = contract_traces<Poly>(NSYM, 6, 4, trace_of);
+    check(same(fold_net<Poly>(NSYM, idx, sc, T, 6, trace_of), left_fold<Poly>(idx, sc, trace_of)),
           "repeated-trace net: tree fold == left fold");
   }
 
@@ -246,27 +247,27 @@ int main()
       colv[d] = Cx{0.75 - 0.03 * static_cast<double>(d), 0.4 * static_cast<double>(d % 3)};
 
     for (long nCache : {0L, 5L, static_cast<long>(NPT)}) {
-      const std::vector<MPoly> T = contract_traces<MPoly>(NSYM, nCache, /*W=*/4, trace_of);
+      const std::vector<Poly> T = contract_traces<Poly>(NSYM, nCache, /*W=*/4, trace_of);
 
       // Reference: exactly the code path being replaced.
-      const std::vector<MPoly> mp = fold_nets<MPoly>(NSYM, sidx, sc, T, nCache, /*W=*/4, trace_of);
-      std::vector<MPoly> want;
+      const std::vector<Poly> mp = fold_nets<Poly>(NSYM, sidx, sc, T, nCache, /*W=*/4, trace_of);
+      std::vector<Poly> want;
       for (const auto &grp : groups) {
-        LorentzEnv env(NSYM);
-        MPoly acc = env.zero();
+        Frame env(ntest::names(NSYM));
+        Poly acc = env.zero();
         for (int d : grp)
           acc = acc + mp[static_cast<std::size_t>(d)] * env.constant(colv[static_cast<std::size_t>(d)]);
         want.push_back(std::move(acc));
       }
 
       for (long window : {1L, 5L, static_cast<long>(groups.size())}) {
-        std::vector<MPoly> got;
+        std::vector<Poly> got;
         std::vector<std::size_t> order;
-        LorentzEnv env(NSYM);
-        env.fold_groups_streaming<MPoly>(
+        Frame env(ntest::names(NSYM));
+        env.fold_groups_streaming<Poly>(
             sidx, sc, groups, T, nCache, /*W=*/4, window, trace_of,
-            [&](int d, MPoly &&m) { return m * env.constant(colv[static_cast<std::size_t>(d)]); },
-            [&](std::size_t gi, MPoly &&a) {
+            [&](int d, Poly &&m) { return m * env.constant(colv[static_cast<std::size_t>(d)]); },
+            [&](std::size_t gi, Poly &&a) {
               order.push_back(gi);
               got.push_back(std::move(a));
             });
@@ -317,7 +318,7 @@ int main()
 
   // poly_bytes must actually track size — it is what the generator reports as the trace table's RAM
   // cost, and a constant would silently hide the one way this design can regress (peak RSS).
-  LorentzEnv env(NSYM);
+  Frame env(ntest::names(NSYM));
   check(poly_bytes(env.zero()) == 0, "poly_bytes: empty is 0");
   check(poly_bytes(trace_of(4)) > poly_bytes(env.constant(Cx{1, 0})), "poly_bytes: grows with terms");
 

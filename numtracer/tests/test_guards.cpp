@@ -3,7 +3,7 @@
 // These cover latent bugs the end-to-end FORM oracles cannot catch because no committed flow
 // triggers them:
 //   (A1) network::add collapses a same-index vector sum into one compound-vector leaf whose weights
-//        are REAL (Elem::vlc is std::pair<double,int>). A complex coefficient on such a term would
+//        are REAL (LorentzFactor::vlc is std::pair<double,int>). A complex coefficient on such a term would
 //        have its imaginary part silently dropped; the collapse must refuse it loudly instead.
 //   (B3) an EMPTY colour network is the identity factor (1), not a UnionFind(-1)/degenerate path.
 //   (C1) dirac_value's gamma-parity count must treat a Comm (sigma) as TWO gammas and a LoopSep as
@@ -14,7 +14,7 @@
 //        trace_rec, whose pair_factor read the Comm's empty vlc and silently collapsed it. This
 //        function is the cross-validation ORACLE in test_numeric_contract.cpp, so a wrong verdict
 //        here would "confirm" a wrong engine result.
-//   (D2) MPoly::atom narrowed the atom id to int16 with no check; aid>=32768 wrapped to a different
+//   (D2) Poly::atom narrowed the atom id to int16 with no check; aid>=32768 wrapped to a different
 //        (or negative) id, so the term carried somebody else's denominator into the cancellation.
 //   (D3) collect_atom_denoms overwrote atomDen[id] unconditionally, so two projectors sharing an id
 //        with different momenta silently gave the second one's k² to both.
@@ -37,9 +37,10 @@
 //        left alone (the front-end's NumTrace::badlabel owns those), so no valid net changes value —
 //        which is what the anchors below pin down.
 #include "numtracer/network/dirac.hpp"
+#include "engine_test_util.hpp"
 #include "numtracer/network/network.hpp"
 #include "numtracer/network/sun_net.hpp"
-#include "numtracer/numeric/env.hpp"
+#include "numtracer/numeric/frame.hpp"
 #include "numtracer/numeric/numeric_contract.hpp"
 #include "numtracer/sun/sun_data.hpp"
 
@@ -62,13 +63,13 @@ int main() {
   {
     using namespace numtracer::network;
     // two momentum legs on the same Lorentz index, real weights → one compound-vector leaf.
-    NetVal s = add(scale(Cx{2, 0}, vec(0, 5)), scale(Cx{-1, 0}, vec(0, 7)));
+    LorentzNet s = add(scale(Cx{2, 0}, ntest::ivec(0, 5)), scale(Cx{-1, 0}, ntest::ivec(0, 7)));
     ok("real vecsum collapses to one term", s.size() == 1 && s[0].e.size() == 1);
     ok("compound vector carries both momenta", !s.empty() && s[0].e[0].vlc.size() == 2);
 
     bool threw = false;
     try {
-      (void)add(scale(Cx{0, 1}, vec(0, 5)), scale(Cx{0, 1}, vec(0, 7)));
+      (void)add(scale(Cx{0, 1}, ntest::ivec(0, 5)), scale(Cx{0, 1}, ntest::ivec(0, 7)));
     } catch (const std::exception &) {
       threw = true;
     }
@@ -78,8 +79,8 @@ int main() {
   // ---- B3: the empty colour network is the identity factor ----------------------------------
   {
     using namespace numtracer::network;
-    const Cx e = sun_value_cx(SUNNet{});
-    ok("sun_value_cx(empty) == 1", e.re == 1.0 && e.im == 0.0);
+    const Cx e = sun_value(SUNNet{});
+    ok("sun_value(empty) == 1", e.re == 1.0 && e.im == 0.0);
 
     const SUNPoly p = sun_value_dressed(SUNNet{});
     const bool unit = (p.size() == 1 && p[0].dress.empty() && p[0].coeff.re == 1.0 && p[0].coeff.im == 0.0);
@@ -89,7 +90,7 @@ int main() {
   // ---- C1: dirac_value refuses tokens its Wick recursion cannot trace ------------------------
   {
     using namespace numtracer::network;
-    auto refuses = [&](const DiracNet &ch) {
+    auto refuses = [&](const DiracChain &ch) {
       try {
         (void)dirac_value(ch, 900000);
         return false;
@@ -98,18 +99,18 @@ int main() {
       }
     };
     // physically 4 gammas (nonzero trace) — the old count said "odd" and returned a structural zero
-    ok("dirac_value refuses {sigma,gamma,gamma}", refuses({dcomm(0, 1), dgamma(2), dgamma(3)}));
+    ok("dirac_value refuses {sigma,gamma,gamma}", refuses({comm(LorentzIndex{0}, LorentzIndex{1}), gamma(LorentzIndex{2}), gamma(LorentzIndex{3})}));
     // physically 3 gammas (vanishing trace) — the old count said "even" and fell into trace_rec
-    ok("dirac_value refuses {sigma,gamma}", refuses({dcomm(0, 1), dgamma(2)}));
-    ok("dirac_value refuses a LoopSep chain", refuses({dgamma(0), dloopsep(), dgamma(1)}));
+    ok("dirac_value refuses {sigma,gamma}", refuses({comm(LorentzIndex{0}, LorentzIndex{1}), gamma(LorentzIndex{2})}));
+    ok("dirac_value refuses a LoopSep chain", refuses({gamma(LorentzIndex{0}), loop_sep(), gamma(LorentzIndex{1})}));
     // tr(γ5 γγγγ) is nonzero; a γ5 read as an empty slash would silently return a wrong value.
-    ok("dirac_value refuses a gamma5 chain", refuses({dg5(), dgamma(0), dgamma(1), dgamma(2), dgamma(3)}));
+    ok("dirac_value refuses a gamma5 chain", refuses({gamma5(), gamma(LorentzIndex{0}), gamma(LorentzIndex{1}), gamma(LorentzIndex{2}), gamma(LorentzIndex{3})}));
 
     // plain gamma/slash chains must be completely unaffected by the guard + recount
-    ok("even gamma chain still traces", !dirac_value({dgamma(0), dgamma(1)}, 900000).empty());
-    ok("odd gamma chain still vanishes", dirac_value({dgamma(0), dgamma(1), dgamma(2)}, 900000).empty());
+    ok("even gamma chain still traces", !dirac_value({gamma(LorentzIndex{0}), gamma(LorentzIndex{1})}, 900000).empty());
+    ok("odd gamma chain still vanishes", dirac_value({gamma(LorentzIndex{0}), gamma(LorentzIndex{1}), gamma(LorentzIndex{2})}, 900000).empty());
     ok("slash pair still traces",
-       !dirac_value({dslash({{1.0, 0}}), dslash({{1.0, 4}})}, 900000).empty());
+       !dirac_value({slash(Momentum{{{1.0, 0}}}), slash(Momentum{{{1.0, 4}}})}, 900000).empty());
   }
 
   auto throws = [](auto &&f) {
@@ -124,16 +125,16 @@ int main() {
   // ---- D2 / D3 / D4: numeric-engine silent-corruption guards ---------------------------------
   {
     using namespace numtracer::numeric;
-    LorentzEnv env(4);
-    ok("MPoly::atom accepts the largest in-range id", !throws([&] { (void)env.atom(32767); }));
-    ok("MPoly::atom rejects an id that would wrap int16", throws([&] { (void)env.atom(32768); }));
-    ok("MPoly::atom rejects a negative id", throws([&] { (void)env.atom(-1); }));
+    Frame env(ntest::names(4));
+    ok("Poly::atom accepts the largest in-range id", !throws([&] { (void)env.atom(32767); }));
+    ok("Poly::atom rejects an id that would wrap int16", throws([&] { (void)env.atom(32768); }));
+    ok("Poly::atom rejects a negative id", throws([&] { (void)env.atom(-1); }));
 
     // D3: two ProjT on the SAME inv id. Same vid => the ordinary repeated-projector case, silent.
     // Different vid => the corruption, must throw.
     {
       using namespace numtracer::network;
-      std::vector<std::array<MPoly, 4>> comp(2);
+      std::vector<std::array<Poly, 4>> comp(2);
       for (int v = 0; v < 2; ++v)
         for (int mu = 0; mu < 4; ++mu) {
           std::vector<int> e(4, 0);
@@ -143,26 +144,26 @@ int main() {
               env.mono(e, Cx{v == 0 ? 1.0 : 2.0, 0});
         }
       auto projNet = [](int vid, int inv, int a, int b) {
-        Elem el{};
-        el.kind = Elem::ProjT;
+        LorentzFactor el{};
+        el.kind = LorentzFactor::ProjT;
         el.a = a;
         el.b = b;
         el.vid = vid;
-        el.inv = inv;
-        el.invS = -1;
-        PTerm t;
+        el.atom = inv;
+        el.atomS = -1;
+        LorentzTerm t;
         t.coeff = Cx{1, 0};
         t.e.push_back(el);
-        NetVal nv;
+        LorentzNet nv;
         nv.push_back(t);
         return nv;
       };
-      std::vector<NetVal> sameVid{projNet(0, 3, 0, 1), projNet(0, 3, 1, 2)};
-      std::vector<NetVal> diffVid{projNet(0, 3, 0, 1), projNet(1, 3, 1, 2)};
+      std::vector<LorentzNet> sameVid{projNet(0, 3, 0, 1), projNet(0, 3, 1, 2)};
+      std::vector<LorentzNet> diffVid{projNet(0, 3, 0, 1), projNet(1, 3, 1, 2)};
       ok("collect_atom_denoms: same inv id + same momentum is silent",
-         !throws([&] { (void)collect_atom_denoms(4, sameVid, comp); }));
+         !throws([&] { (void)ndetail::collect_atom_denoms(4, sameVid, comp); }));
       ok("collect_atom_denoms: same inv id + DIFFERENT momentum throws",
-         throws([&] { (void)collect_atom_denoms(4, diffVid, comp); }));
+         throws([&] { (void)ndetail::collect_atom_denoms(4, diffVid, comp); }));
     }
 
     // D4: a non-finite coefficient must abort the lowering, not reach the emitted kernel.
@@ -178,15 +179,15 @@ int main() {
     using namespace numtracer::network;
     // The step-04 frame: p = (p0,0,0,0) along axis 0, l = (l0,l1,0,0) in the 0-1 plane.
     const int nsym = 3;
-    LorentzEnv env(nsym);
-    std::vector<std::array<MPoly, 4>> comp(2, {env.zero(), env.zero(), env.zero(), env.zero()});
+    Frame env(ntest::names(nsym));
+    std::vector<std::array<Poly, 4>> comp(2, {env.zero(), env.zero(), env.zero(), env.zero()});
     comp[0][0] = env.var(0);
     comp[1][0] = env.var(1);
     comp[1][1] = env.var(2);
-    MPoly l2 = env.zero();
+    Poly l2 = env.zero();
     for (int i = 0; i < 4; ++i)
       l2 = l2 + comp[1][i] * comp[1][i];
-    const std::vector<MPoly> atomDen = {l2};
+    const std::vector<Poly> atomDen = {l2};
     const double Pm = 1.3, l0 = 0.5, l1 = 0.7;
     const std::vector<double> x = {Pm, l0, l1};
     const double l2v = l0 * l0 + l1 * l1;
@@ -195,23 +196,23 @@ int main() {
 
     // ANCHOR: the closed contraction p·P(l)·p = p²(1−cos²θ) is untouched by the guard.
     {
-      NNet lor = {NTerm{Cx{1, 0}, {nvec(mu, {{1.0, 0}}), nprojT(mu, nu, {{1.0, 1}}, 0), nvec(nu, {{1.0, 0}})}}};
-      const double got = eval(env.numeric_value(DiracNet{}, lor, comp, atomDen), x, av).re;
+      LorentzNet lor = {LorentzTerm{Cx{1, 0}, {ntest::fvec(mu, {{1.0, 0}}), ntest::fprojT(mu, nu, {{1.0, 1}}, 0), ntest::fvec(nu, {{1.0, 0}})}}};
+      const double got = ndetail::eval(ntest::contract(env, DiracChain{}, lor, comp, atomDen), x, av).re;
       const double cth = l0 / std::sqrt(l2v);
       ok("open-index guard: closed p.P(l).p still exact", std::fabs(got - Pm * Pm * (1 - cth * cth)) < 1e-12);
     }
     // THE trap: drop the second p and ν occurs once. Pre-guard this returned Σ_ν (p·P)_ν silently.
     {
-      NNet lor = {NTerm{Cx{1, 0}, {nvec(mu, {{1.0, 0}}), nprojT(mu, nu, {{1.0, 1}}, 0)}}};
+      LorentzNet lor = {LorentzTerm{Cx{1, 0}, {ntest::fvec(mu, {{1.0, 0}}), ntest::fprojT(mu, nu, {{1.0, 1}}, 0)}}};
       ok("open Lorentz index throws (not summed over 0..3)",
-         throws([&] { (void)env.numeric_value(DiracNet{}, lor, comp, atomDen); }));
+         throws([&] { (void)ntest::contract(env, DiracChain{}, lor, comp, atomDen); }));
     }
     // ANCHOR: a SELF-PAIRED free leg (γ^μ … γ^μ, both slots on one Dirac factor) is a legitimate
     // count-2 contraction that close_free_legs routes through contract_factors — it must still work.
     // tr(γ^μ p̸ γ_μ q̸) = −8 p·q in d = 4.
     {
-      const DiracNet ch = {dgamma(mu), dslash({{1.0, 0}}), dgamma(mu), dslash({{1.0, 1}})};
-      const double got = eval(env.numeric_value(ch, NNet{}, comp, atomDen), x, av).re;
+      const DiracChain ch = {gamma(LorentzIndex{mu}), slash(Momentum{{{1.0, 0}}}), gamma(LorentzIndex{mu}), slash(Momentum{{{1.0, 1}}})};
+      const double got = ndetail::eval(ntest::contract(env, ch, LorentzNet{}, comp, atomDen), x, av).re;
       ok("open-index guard: self-paired gamma legs still contract", std::fabs(got - (-8.0 * Pm * l0)) < 1e-12);
     }
   }
@@ -219,25 +220,25 @@ int main() {
   // ---- E1b: an open SU(N) leg must throw, in every sector -------------------------------------
   {
     using namespace numtracer::network;
-    SUNEnv sun3(3); // Adim = 8
+    SUN sun3(3); // Adim = 8
     enum { a, b, c, d, i, j, k };
 
     // ANCHORS: the closed nets keep their values.
-    ok("open-leg guard: f^{abc}f^{abc} still 24", sun_value_cx({sun3.f(a, b, c), sun3.f(a, b, c)}).re == 24.0);
-    ok("open-leg guard: tr(T^a T^a) still 4", std::fabs(sun_value_cx({sun3.T(a, i, j), sun3.T(a, j, i)}).re - 4.0) < 1e-12);
+    ok("open-leg guard: f^{abc}f^{abc} still 24", sun_value({sun3.f(AdjIndex{a}, AdjIndex{b}, AdjIndex{c}), sun3.f(AdjIndex{a}, AdjIndex{b}, AdjIndex{c})}).re == 24.0);
+    ok("open-leg guard: tr(T^a T^a) still 4", std::fabs(sun_value({sun3.T(AdjIndex{a}, FundIndex{i}, FundIndex{j}), sun3.T(AdjIndex{a}, FundIndex{j}, FundIndex{i})}).re - 4.0) < 1e-12);
     // a label used TWICE WITHIN ONE factor is a legal closed loop (δ^{aa} = N²−1), not an open leg.
-    ok("open-leg guard: delta^{aa} still 8", sun_value_cx({sun3.deltaAdj(a, a)}).re == 8.0);
+    ok("open-leg guard: delta^{aa} still 8", sun_value({sun3.delta(AdjIndex{a}, AdjIndex{a})}).re == 8.0);
 
     // THE traps. Pre-guard values in comments — every one of them silently wrong.
-    ok("open adjoint delta leg throws (was 8)", throws([&] { (void)sun_value_cx({sun3.deltaAdj(a, b)}); }));
+    ok("open adjoint delta leg throws (was 8)", throws([&] { (void)sun_value({sun3.delta(AdjIndex{a}, AdjIndex{b})}); }));
     ok("open adjoint f legs throw (was 24)",
-       throws([&] { (void)sun_value_cx({sun3.f(a, b, c), sun3.f(a, b, d)}); }));
+       throws([&] { (void)sun_value({sun3.f(AdjIndex{a}, AdjIndex{b}, AdjIndex{c}), sun3.f(AdjIndex{a}, AdjIndex{b}, AdjIndex{d})}); }));
     ok("open adjoint generator legs throw (was 4)",
-       throws([&] { (void)sun_value_cx({sun3.T(a, i, j), sun3.T(b, j, i)}); }));
-    ok("open fundamental delta leg throws (was 3)", throws([&] { (void)sun_value_cx({sun3.deltaFund(i, j)}); }));
+       throws([&] { (void)sun_value({sun3.T(AdjIndex{a}, FundIndex{i}, FundIndex{j}), sun3.T(AdjIndex{b}, FundIndex{j}, FundIndex{i})}); }));
+    ok("open fundamental delta leg throws (was 3)", throws([&] { (void)sun_value({sun3.delta(FundIndex{i}, FundIndex{j})}); }));
     // the one case that was already caught (extract_cycles) — now caught earlier, still caught.
     ok("open fundamental generator chain still throws",
-       throws([&] { (void)sun_value_cx({sun3.T(a, i, j), sun3.T(a, j, k)}); }));
+       throws([&] { (void)sun_value({sun3.T(AdjIndex{a}, FundIndex{i}, FundIndex{j}), sun3.T(AdjIndex{a}, FundIndex{j}, FundIndex{k})}); }));
 
     // the DRESSED fold is a second contraction core with the same union-find; guard it too.
     auto arr = [](int dim) {
@@ -246,9 +247,36 @@ int main() {
       return v;
     };
     ok("dressed: closed diagAdj loop still evaluates",
-       !throws([&] { (void)sun_value_dressed({sun3.diagAdj(a, b, arr(8)), sun3.deltaAdj(b, a)}); }));
+       !throws([&] { (void)sun_value_dressed({sun3.diag(AdjIndex{a}, AdjIndex{b}, arr(8)), sun3.delta(AdjIndex{b}, AdjIndex{a})}); }));
     ok("dressed: open diagAdj leg throws",
-       throws([&] { (void)sun_value_dressed({sun3.diagAdj(a, b, arr(8)), sun3.deltaAdj(b, c)}); }));
+       throws([&] { (void)sun_value_dressed({sun3.diag(AdjIndex{a}, AdjIndex{b}, arr(8)), sun3.delta(AdjIndex{b}, AdjIndex{c})}); }));
+  }
+
+  // ---- input checks at the API entry points: each of these used to crash or return a wrong number ----
+  {
+    using namespace numtracer;
+    Frame env(ntest::names(2));
+    const Poly x0 = env.var(0);
+    const Poly withAtom = x0 * env.atom(1);
+    ok("eval: too few symbol values throws (was a silent wrong number)",
+       throws([&] { (void)ndetail::eval(x0, {1.0}, {}); }));
+    ok("eval: missing atom value throws (was a segfault)", throws([&] { (void)ndetail::eval(withAtom, {1.0, 2.0}, {0.5}); }));
+    ok("eval: all values present still evaluates", !throws([&] { (void)ndetail::eval(withAtom, {1.0, 2.0}, {0.5, 0.25}); }));
+    DPoly dp = env.dzero();
+    dp.add({3}, x0);
+    ok("eval: missing dressing value throws", throws([&] { (void)ndetail::eval(dp, {1.0, 2.0}, {}, {1.0}); }));
+    ok("Frame::var out of range throws", throws([&] { (void)env.var(2); }));
+
+    std::vector<std::array<Poly, 4>> comp(1, {x0, env.zero(), env.zero(), env.zero()});
+    ok("momentum id outside the component table throws (was std::bad_alloc)",
+       throws([&] { (void)ntest::contract(env, {slash(Momentum{{{1.0, 3}}}), slash(Momentum{{{1.0, 0}}})}, {}, comp, {}); }));
+    ok("projector without a registered 1/k^2 throws",
+       throws([&] { (void)ntest::contract(env, {}, ntest::ivec(0, 0) * ntest::iprojT(0, 1, 0, 5) * ntest::ivec(1, 0), comp, {}); }));
+
+    // SU(N): one label in an adjoint AND a fundamental slot (sun3.T(a, a, B) in the old int API)
+    ok("SU(N) label in both sectors throws (was 4)",
+       throws([&] { (void)sun_value({ntest::sunT(3, 0, 0, 1), ntest::sunT(3, 0, 1, 0)}); }));
+    ok("negative SU(N) label throws", throws([&] { (void)sun_value({ntest::sunDeltaAdj(3, -1, -1)}); }));
   }
 
   std::printf("\n%s (%d failure%s)\n", fail ? "TESTS FAILED" : "ALL TESTS PASSED", fail, fail == 1 ? "" : "s");

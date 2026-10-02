@@ -10,7 +10,7 @@
                              matrix-product backend (the sole generation path).
 
    The network is `Σ_terms coeff(dressings…) × trace(momenta)`: the trace is a
-   contraction of the tensor heads (contracted numerically to an MPoly, then
+   contraction of the tensor heads (contracted numerically to a Poly, then
    Horner-lowered to a real straight-line kernel), the coeff is flat C++. This is exactly the split
    tests/refshim/flow_ym_zc.hpp demonstrates by hand — we generate it. *)
 
@@ -61,7 +61,7 @@ ntEpsFund::usage = "ntEpsFund[N, i1, ..., iN] -- the SU(N) FUNDAMENTAL Levi-Civi
 
 ntUnitVec::usage = "ntUnitVec[i] — the constant unit basis 4-vector e_i (i = 0..3, 0 = temporal/Matsubara). Not written by hand: NumTrace introduces it when it rewrites a FIXED-component Lorentz index (gamma^0 and friends, the finite-T 3+1 split used by the four-quark Fierz bases) into a contraction with e_i, and injects its components into the frame. A fixed-component gamma is therefore emitted as an ordinary slash.";
 
-ntSpatialVec::usage = "ntSpatialVec[q] — the SPATIAL part of momentum q as a momentum in its own right: components {0, q_1, q_2, q_3} (slot 0 = temporal/Matsubara). Not written by hand: FromFunKit introduces it for FormTracer's finite-T acronym vecs[q, mu], which becomes ntVec[ntSpatialVec[q], mu]. NumTrace pushes it through sums (it is linear) and injects the resulting components into the frame, so downstream it is an ORDINARY momentum leaf — in particular a spatial slash vecs[q,mu] gamma[mu,d1,d2] is emitted as an ordinary dslash and frameMask prunes its zero temporal component. Contrast ntSPS, the spatial scalar product, which is a scalar coefficient and needs no leaf.";
+ntSpatialVec::usage = "ntSpatialVec[q] — the SPATIAL part of momentum q as a momentum in its own right: components {0, q_1, q_2, q_3} (slot 0 = temporal/Matsubara). Not written by hand: FromFunKit introduces it for FormTracer's finite-T acronym vecs[q, mu], which becomes ntVec[ntSpatialVec[q], mu]. NumTrace pushes it through sums (it is linear) and injects the resulting components into the frame, so downstream it is an ORDINARY momentum leaf — in particular a spatial slash vecs[q,mu] gamma[mu,d1,d2] is emitted as an ordinary slash and frameMask prunes its zero temporal component. Contrast ntSPS, the spatial scalar product, which is a scalar coefficient and needs no leaf.";
 
 ntTransProj::usage = "ntTransProj[q, mu, nu] — transverse projector P_{mu nu}(q) = delta - q_mu q_nu/q^2 (valid at finite T).";
 

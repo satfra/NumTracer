@@ -40,13 +40,13 @@ namespace numtracer::inline numeric
 {
 
   /// @brief Construct an empty polynomial of the phase-B backend type `P` at symbol-space size `nsym`.
-  ///        For the real backends `MPoly`/`DPoly` this routes through the private-factory attorneys (the
+  ///        For the real backends `Poly`/`DPoly` this routes through the private-factory attorneys (the
   ///        `nsym`-taking ctors are not public); any OTHER `P` (e.g. a unit test's mock polynomial with a
   ///        public `explicit P(int)`) falls back to the plain ctor, so the fold templates stay generic.
   template <class P> inline P zero_like(int nsym)
   {
-    if constexpr (std::is_same_v<P, MPoly>)
-      return MPolyFactory::zero(nsym);
+    if constexpr (std::is_same_v<P, Poly>)
+      return PolyFactory::zero(nsym);
     else if constexpr (std::is_same_v<P, DPoly>)
       return DPolyFactory::zero(nsym);
     else
@@ -54,14 +54,14 @@ namespace numtracer::inline numeric
   }
 
   /// @brief Scale a contracted trace by its sub-term scalar. Overloaded so phase B is one template
-  ///        over both backends: the plain path multiplies by a constant `MPoly`, the dressed path
+  ///        over both backends: the plain path multiplies by a constant `Poly`, the dressed path
   ///        scales every kinematic coefficient (@ref scaleCx).
-  inline MPoly scale_trace(int nsym, const MPoly &p, Cx c) { return MPolyFactory::scaled(nsym, p, c); }
+  inline Poly scale_trace(int nsym, const Poly &p, Cx c) { return PolyFactory::scaled(nsym, p, c); }
   inline DPoly scale_trace(int, const DPoly &p, Cx c) { return scaleCx(p, c); }
 
   /// @brief Approximate heap footprint of a polynomial, for the trace-table RAM report. The table is
   ///        the one place this design trades memory for time, so the generator prints what it costs.
-  inline std::size_t poly_bytes(const MPoly &p) { return p.terms.size() * sizeof(std::pair<Mono, Cx>); }
+  inline std::size_t poly_bytes(const Poly &p) { return p.terms.size() * sizeof(std::pair<Mono, Cx>); }
   inline std::size_t poly_bytes(const DPoly &p)
   {
     std::size_t b = 0;
@@ -167,7 +167,7 @@ namespace numtracer::inline numeric
   ///    memory-bound before they are compute-bound).
   ///
   /// @param trace `trace(k) -> P`, the contraction of distinct trace `k`. Must be pure and safe to
-  ///        call concurrently (the numeric_value_* entry points take everything by const reference).
+  ///        call concurrently (Frame's const trace members only read the frame).
   template <class P, class TraceFn>
   std::vector<P> contract_traces(int nsym, long nCache, unsigned W, TraceFn &&trace)
   {
@@ -244,10 +244,10 @@ namespace numtracer::inline numeric
     });
   }
 
-  /// @brief PHASE B (dressed) — fold one net whose traces are PLAIN @ref MPoly into a
+  /// @brief PHASE B (dressed) — fold one net whose traces are PLAIN @ref Poly into a
   ///        @ref DPoly: `Σ_j subScale[j] · traceTable[traceIdx[j]] ⊗ subDress[j]`.
   ///
-  /// This is the dressed analogue of @ref fold_net. The trace table is plain `MPoly` (the dressing
+  /// This is the dressed analogue of @ref fold_net. The trace table is plain `Poly` (the dressing
   /// dimension was stripped at codegen time and lives in the per-sub-term `subDress`/`subScale`), so the
   /// same net can reference one concrete trace across MANY dressing channels without re-contracting it.
   /// Each sub-term becomes a one-term `DPoly` (`subDress[j]` →
@@ -255,13 +255,13 @@ namespace numtracer::inline numeric
   /// `DPoly::operator+` collects the channels.
   template <class TraceFn>
   DPoly fold_net_dressed(int nsym, const std::vector<int> &traceIdx, const std::vector<Cx> &subScale,
-                         const std::vector<DMono> &subDress, const std::vector<MPoly> &traceTable, long nCache,
+                         const std::vector<DMono> &subDress, const std::vector<Poly> &traceTable, long nCache,
                          TraceFn &&trace)
   {
-    MPoly recomputed;
+    Poly recomputed;
     return tree_sum<DPoly>(nsym, traceIdx.size(), [&](std::size_t j) {
-      const MPoly &src = resident_or_recompute(traceIdx[j], traceTable, nCache, trace, recomputed);
-      // Empty if the scaled trace cancels to nothing (DPoly::add drops an empty MPoly), matching
+      const Poly &src = resident_or_recompute(traceIdx[j], traceTable, nCache, trace, recomputed);
+      // Empty if the scaled trace cancels to nothing (DPoly::add drops an empty Poly), matching
       // fold_net's zero handling.
       DPoly cur = DPolyFactory::zero(nsym);
       cur.add(subDress[j], scale_trace(nsym, src, subScale[j]));
@@ -499,9 +499,9 @@ namespace numtracer::inline numeric
   ///    instruction stream identical to the non-streamed lowering.
   ///
   /// @param scale `scale(d, P&&) -> P` applies net `d`'s colour weight. Deliberately a caller-supplied
-  ///        callable rather than @ref scale_trace: the emitted MPoly branches write
+  ///        callable rather than @ref scale_trace: the emitted Poly branches write
   ///        `mp[d] * env.constant(colv[d])` (poly x constant) while `scale_trace` computes
-  ///        constant x poly. The two are bit-identical (see `MPoly::scaled`); the lambda keeps each
+  ///        constant x poly. The two are bit-identical (see `Poly::scaled`); the lambda keeps each
   ///        branch's exact expression and `colv` out of this signature.
   /// @param trace as in @ref fold_net: pure and safe to call concurrently.
   template <class P, class TraceFn, class ScaleFn, class Sink>
@@ -521,7 +521,7 @@ namespace numtracer::inline numeric
         std::forward<Sink>(sink));
   }
 
-  /// @brief PHASE B, streaming driver — dressed variant. Trace table is plain @ref MPoly; each
+  /// @brief PHASE B, streaming driver — dressed variant. Trace table is plain @ref Poly; each
   ///        net folds into a @ref DPoly via @ref fold_net_dressed (carrying the per-sub-term dressing
   ///        monomials @p subDress), then the colour @p scale and @p sink run exactly as in the plain
   ///        driver. Same bounded live set and ascending-group sink order, so `GlobalEnv` intern order /
@@ -531,7 +531,7 @@ namespace numtracer::inline numeric
                                      const std::vector<std::vector<Cx>> &subScale,
                                      const std::vector<std::vector<DMono>> &subDress,
                                      const std::vector<std::vector<int>> &groups,
-                                     const std::vector<MPoly> &traceTable, long nCache, unsigned W,
+                                     const std::vector<Poly> &traceTable, long nCache, unsigned W,
                                      long window, TraceFn &&trace, ScaleFn &&scale, Sink &&sink)
   {
     fold_groups_streaming_impl<DPoly>(

@@ -375,7 +375,7 @@ ntPruneSpec[netCoeff_, groups_, complexQ_, offline_, pruneRequested_, realProbe_
       1. ntGenOptions             every OptionValue, read once; parameter names normalised.
       2. ntFrameSpec              the frame parametrisation (unit-loop / mixed / polynomial) and the
                                   component table over it.
-         ntMatsubaraSymbol        the Matsubara frequency as a symbol and as an MPoly variable index.
+         ntMatsubaraSymbol        the Matsubara frequency as a symbol and as a Poly variable index.
       3. ntResetGeneration        clear the net-builder memos, stamp $ctCtx, bind fresh interners.
       4. ntBuildNets              per diagram (ntDiagramRecords): colour groups, Dirac chain and
                                   Lorentz remainder -> net records; then the harvested dressing tables.
@@ -549,7 +549,7 @@ ntFrameSpec[k_, components_, userSymDefs_] :=
         "NComp" -> ncomp, "SymDefs" -> symDefs|>]];
 
 (* The Matsubara frequency, in two forms. `MatsubaraSym` is the SYMBOL, used by the Mathematica-side
-   evenness test and finite-extent partition. `MVarIdx` is its MPoly variable index, used only by the
+   evenness test and finite-extent partition. `MVarIdx` is its Poly variable index, used only by the
    generator to prove evenness of the TRACES. -1 is not an error: a purely SCALAR integrand has no
    momentum components, yet still depends on the frequency through its coefficient (denominators,
    regulator arguments). The lookup therefore spans the frame's symbols AND the fill arguments. *)
@@ -574,8 +574,8 @@ ntMatsubaraSymbol[mv_, usyms_, fillArgs_] :=
     If[matsubaraSym =!= None,
       ntLog["[matsubara] frequency symbol ", matsubaraSym, " = ",
         If[mVarIdx >= 0,
-          "MPoly var " <> ToString[mVarIdx] <> " — trace evenness will be proven at generation time",
-          "not a momentum-component variable (scalar integrand) — the traces carry no MPoly " <>
+          "Poly var " <> ToString[mVarIdx] <> " — trace evenness will be proven at generation time",
+          "not a momentum-component variable (scalar integrand) — the traces carry no Poly " <>
             "variable, so the traits are decided entirely here"]]];
     ntStageResult["ntMatsubaraSymbol", {"MatsubaraSym", "MVarIdx"}, <|"MatsubaraSym" -> matsubaraSym, "MVarIdx" -> mVarIdx|>]];
 
@@ -623,7 +623,7 @@ ntDiagramRecords[diag_, d_, base_, env_, mask_, frame_] :=
       Function[comp,
         If[comp["Constant"],
 (* Constant SU(N) component (colour and/or flavour; each head carries its own rank N). The fold
-   is COMPLEX (sun_value_cx), so an imaginary non-abelian colour survives into the trace. A
+   is COMPLEX (sun_value), so an imaginary non-abelian colour survives into the trace. A
    diagram may carry SEVERAL constant components (e.g. a colour AND a flavour trace): ACCUMULATE
    all factors and compile their product once after the loop (colBr), since a component may be a
    PLUS (e.g. the Fierz flavour structure δδ - 4·T·T) with no single-net representation. *)
@@ -640,7 +640,7 @@ ntDiagramRecords[diag_, d_, base_, env_, mask_, frame_] :=
             pureLorAcc = Join[pureLorAcc, comp["Factors"]]]]],
       diag["Components"]];
 (* The diagram's CONSTANT colour/flavour part, as a list of {netString, scalar} branches — one
-   branch unless a constant component was a sum. Colour folds to a scalar (sun_value_cx -> Cx)
+   branch unless a constant component was a sum. Colour folds to a scalar (sun_value -> Cx)
    and the generator already sums colour by emitting several nets into one group, so a summed
    colour component costs one extra net record per branch and needs no C++ support. *)
     colBr =

@@ -225,6 +225,15 @@ check_flow_log() {
   (( n == 0 )) || { echo "      Syntax::/loadsyntax x$n — numtracer/mathematica/ FAILED TO PARSE; fix that first, the rest of this log is noise"; bad=1; }
   n=$(grep -ac 'genfail' "$log" 2>/dev/null || true)
   (( n == 0 )) || { echo "      genfail x$n — the emitted generator failed to build/run"; bad=1; }
+  # MakeNTKernel refuses to link an engine archive older than the headers (an ODR mismatch once
+  # produced wrong traces) and aborts — but `wolfram -script` still exits 0, no kernel is written,
+  # and the committed kernels then read as "byte-identical". Rebuild the archive, or touch it if
+  # only a header it does not compile changed.
+  # a flow's own fixture guard (Print + Abort[]: exit 0 again) — the rest of the flow never ran
+  n=$(grep -ac 'GUARD FAILED' "$log" 2>/dev/null || true)
+  (( n == 0 )) || { echo "      GUARD FAILED x$n — the flow's fixture guard aborted it"; bad=1; }
+  n=$(grep -ac 'stalelib' "$log" 2>/dev/null || true)
+  (( n == 0 )) || { echo "      stalelib x$n — libNumTracer.a is older than the headers; nothing was generated"; bad=1; }
   n=$(grep -acE '::string|cppleak' "$log" 2>/dev/null || true)
   (( n == 0 )) || { echo "      ::string/cppleak x$n — Codegen*.m aborted before emitting"; bad=1; }
   n=$(grep -ac 'wrote generator:' "$log" 2>/dev/null || true)

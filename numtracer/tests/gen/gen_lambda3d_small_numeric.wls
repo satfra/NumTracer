@@ -8,7 +8,7 @@
    parametrisation runs and reduce_units collapses sin^2 -> 1-cos^2 and the bare-loop denominator
    to l1^2. A flow whose externals carry shape coordinates (S0,S1,SPhi — the with_mesons
    lambda1L3D class) falls to the general polyFrameSpec parametrisation, where before this fixture
-   NOTHING was covered: minted radical symbols, a wider MPoly symbol space, +/- duplicated momentum
+   NOTHING was covered: minted radical symbols, a wider Poly symbol space, +/- duplicated momentum
    bases, and dressed+complex traces. See tests/qcd_lambda3d_setup.m for the physics content.
 
    TWO KERNELS are emitted, in SEPARATE directories (the imaginary-part probe writes ONE
@@ -98,7 +98,8 @@ Print["[time] NumTracer generation TOTAL (analyse+codegen): ", tA + tG, " s"];
 Module[{genSrc, traces, symLine, nsym},
   genSrc = Import[FileNameJoin[{$dirA, "gen_lambda3d_small_num.cpp"}], "Text"];
   traces = Import[FileNameJoin[{$dirA, "Lambda3DSmall_num_kernels.hh"}], "Text"];
-  symLine = First[StringCases[genSrc, "symNames = {" ~~ Shortest[s__] ~~ "};" :> s], ""];
+  (* the emitted `Frame frame({"<sym>", …},\n {<units>}, <nMomenta>);` *)
+  symLine = First[StringCases[genSrc, "Frame frame({" ~~ Shortest[s__] ~~ "},\n" :> s], ""];
   nsym = Length[StringSplit[symLine, "\",\""]];
   Print["lambda3d(small) guard: nsym = ", nsym];
   (* Off the pure fast path: the externals' shape coordinates force minted radical fills (a sqrt in
@@ -107,9 +108,9 @@ Module[{genSrc, traces, symLine, nsym},
   If[nsym < 8,
     Print["FIXTURE GUARD FAILED: nsym < 8 — the flow did not leave the unit-loop fast path."]; Abort[]];
   (* The MIXED unit-loop branch must have fired: the loop rides opaque unit-direction symbols with
-     a non-empty unit-constraint table (the pre-2026-08-07 fallback emitted `units = {}`). The
+     a non-empty unit-constraint table (the pre-2026-08-07 fallback emitted an empty one). The
      control kernel (NT_NO_UNIT_GROUPS below) covers the empty-units path. *)
-  If[!StringContainsQ[genSrc, "units = {{"],
+  If[!StringContainsQ[genSrc, RegularExpression["Frame frame\\(\\{[^\\n]*\\},\\s*\\{\\{"]],
     Print["FIXTURE GUARD FAILED: units table empty — the mixed unit-loop branch did not fire."]; Abort[]];
   If[!StringContainsQ[genSrc, "sdr"] || !StringContainsQ[traces, "dress("],
     Print["FIXTURE GUARD FAILED: no dressing atoms — the dressed (DPoly) path is not exercised."]; Abort[]];

@@ -11,7 +11,7 @@
 
    Three things make it a genuinely harder test than the AqbqDirect gates:
      * FOUR external legs and TWO independent spinor lines (the earlier gates have one), so the
-       multi-loop dloopsep path is exercised;
+       multi-loop loop_sep path is exercised;
      * a TWO-TERM inner product with a MINUS sign, 2 T1[1,2,3,4] T2[2,1,4,3] - 2 T1[1,2,3,4] T2[2,3,4,1],
        which makes the contraction itself a Plus — exactly the shape of the multi-term-projector bug;
      * momentum-INDEPENDENT contact structures, so the trace must come out constant.

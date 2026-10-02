@@ -97,7 +97,7 @@ emit[netF, "Fixc_g_kernel", "fixc_g", frame];
 (* --- Assertion G: a fixed component on a SIGMA leg. -------------------------------------------
    sigma's free leg carries an OPEN Lorentz id; a fixed component is not a free leg, so the rewrite
    must convert it to the existing SLASH leg kind instead. tr(sigma^{0 nu} ...) exercises the
-   dcomm_sf / dcomm_ss builders rather than dcomm. *)
+   comm overloads with a slashed leg rather than two free legs. *)
 netG = ntSigma[{"free", 0}, {"slash", {{1, Global`q1}}}, d1, d2] *
        ntGamma[a1, d2, d3] ntVec[Global`ql, a1] *
        ntGamma[a2, d3, d1] ntVec[Global`q1, a2];

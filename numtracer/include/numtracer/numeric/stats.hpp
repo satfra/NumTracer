@@ -28,7 +28,7 @@ namespace numtracer::inline numeric::stats
 
   /// One thread's phase-A counters. Fields are totals; times are nanoseconds.
   struct PhaseACounters {
-    // MPoly arithmetic (mpoly.hpp)
+    // Poly arithmetic (mpoly.hpp)
     nt_u64 mul_calls = 0;      ///< operator* invocations with both sides non-empty
     nt_u64 mul_empty = 0;      ///< operator* short-circuits (an operand was the zero poly)
     nt_u64 mul_prod_terms = 0; ///< Σ |a|·|b| product monomials emitted into scratch
@@ -55,11 +55,11 @@ namespace numtracer::inline numeric::stats
     nt_u64 nd_tokens = 0;      ///< Σ chain tokens
     nt_u64 nd_assign = 0;      ///< Σ 4^f free-leg assignments folded
     nt_u64 nd_odd_skip = 0;    ///< odd-parity chains skipped (zero tensor, no arithmetic)
-    nt_u64 mul2_calls = 0;     ///< 2×2 Weyl-block multiplies (8 MPoly mults + 4 adds each)
-    nt_u64 traces = 0;         ///< numeric_value_netval invocations
-    // Section times inside numeric_value_netval (ns)
+    nt_u64 mul2_calls = 0;     ///< 2×2 Weyl-block multiplies (8 Poly mults + 4 adds each)
+    nt_u64 traces = 0;         ///< ndetail::contract_net invocations
+    // Section times inside ndetail::contract_net (ns)
     nt_u64 t_dirac = 0;    ///< dirac_loop_factors (the 4^f chain folds)
-    nt_u64 t_elem = 0;     ///< elem_to_nelem + fuse_projectors + elem_factor building
+    nt_u64 t_elem = 0;     ///< fuse_projectors + elem_factor building
     nt_u64 t_contract = 0; ///< contract_factors (greedy elimination incl. its in-step reductions)
     nt_u64 t_cf_score = 0; ///< within t_contract: the min-fill id scoring rescans
     nt_u64 t_cf_reduce = 0; ///< within t_contract: eliminate's per-outFlat reduce_units+divmono

@@ -897,7 +897,7 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
 
 (* One diagram -> {pure-scalar coeff, axis-id map, tensor components}. Components keep
    their factors un-expanded (heads, Plus-vertices, Times-structures); the recursive
-   net builder (CodegenNets.m compileLorentz) turns Plus -> add(...), Times -> contract(...). *)
+   net builder (CodegenNets.m compileLorentz) turns Plus -> add(...), Times -> mul(...). *)
 analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
   factors = ntProfTimed["rewriteDressedNums", rewriteDressedNums @
     ntProfTimed["splitSelfTraces", splitSelfTraces[If[Head[diagram] === Times, List @@ diagram, {diagram}]]]];

@@ -297,6 +297,10 @@ if(NUMTRACER_BUILD_TESTS)
   # vector-sum coefficient (real-only Elem::vlc), and the empty colour net folding to the identity.
   nt_add_test(test_guards tests/test_guards.cpp NAME guards)
 
+  # The user-facing layer: Frame (named symbols, automatic projector atoms, checked evaluation),
+  # typed labels, SUN groups, and the lowered program run through interpret() against its polynomial.
+  nt_add_test(test_frame tests/test_frame.cpp NAME frame)
+
   # The generator's sub-term dedup (numeric/trace_fold.hpp): the balanced tree fold vs the left fold
   # it replaces, and every trace-cache regime. This is the ONLY test that sees the fold: the dedup
   # needs many sub-terms per net, and every flow in tests/gen has exactly one — so the flow tests and

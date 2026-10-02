@@ -1,19 +1,22 @@
 (* CodegenNets.m — net builders: lower one diagram component (Lorentz tensors, SU(N) colour/flavour
    factors, Dirac chains, dressed numerators, collected Dirac slots) to the C++ net literals
-   (NetVal builders, SUNNet, DiracNet, DSlotOpt) that the emitted generator contracts numerically.
+   (LorentzNet builders, SUNNet, DiracChain, DSlotOpt) that the emitted generator contracts numerically.
    Loaded by NumTracer.m via ntLoadPart, in the NumTracer`Private` context. *)
 
 (* ---- Lorentz-factor emission ------------------------------------------------------------------
    Each tensor head becomes a call to one of the generator's wrapper templates
    (tproj / lproj / eproj / mproj / lmetric / lvec / leps / sc / contract / add), which the emitted
-   generator defines over `NetVal`. `lorentzNetStr` emits the CALL TEXT for one head;
-   `lorentzElemStr` emits the same head as the `Elem` aggregate that a collected Dirac slot's
+   generator defines over `LorentzNet`. `lorentzNetStr` emits the CALL TEXT for one head;
+   `lorentzElemStr` emits the same head as the `LorentzFactor` aggregate that a collected Dirac slot's
    factor nets take instead. *)
 
 (* C++ argument lists. The separators are byte-load-bearing: ", " in the Lorentz dialect, "," in
    the SU(N) one. *)
 ntLorArgs[xs___] := StringRiffle[ToString /@ {xs}, ", "];
 ntSunArgs[xs___] := StringRiffle[ToString /@ {xs}, ","];
+(* typed SU(N) labels: an adjoint / fundamental index of the emitted SUNFac builders *)
+ntAdj[id_] := "AdjIndex{" <> ToString[id] <> "}";
+ntFund[id_] := "FundIndex{" <> ToString[id] <> "}";
 
 lorentzNetStr[ntMetric[mu_, nu_], ids_, env_, nonzeroCompMask_] :=
   "lmetric<" <> ntLorArgs[ids[mu], ids[nu]] <> ">()";
@@ -36,31 +39,31 @@ lorentzNetStr[ntElectricProj[q_, mu_, nu_], ids_, env_, nonzeroCompMask_] :=
 lorentzNetStr[ntEpsilon[a_, b_, c_, d_], ids_, env_, nonzeroCompMask_] :=
   "leps<" <> ntLorArgs[ids[a], ids[b], ids[c], ids[d]] <> ">()";
 
-(* A Lorentz factor as a single `network::Elem{...}` literal (for a collected Dirac slot's per-option
-   `netFacs`). Mirrors lorentzNetStr's id/momentum/atom resolution but emits the Elem aggregate the
-   numeric backend appends to the net, rather than a NetVal builder. Emitted with C++20 designated
-   initializers, so the fields must be given in network.hpp's declaration order
-   (kind, a, b, vid, inv, c, d, invS, vlc); omitted ones take their defaults. A projector's momentum
-   rides `vid = env Base` (elem_to_nelem reconstructs it as {{1.0, vid}}); a vector's rides `vlc`. *)
+(* A Lorentz factor as a single `LorentzFactor{...}` literal (for a collected Dirac slot's per-option
+   `netFacs`). Mirrors lorentzNetStr's id/momentum/atom resolution but emits the LorentzFactor
+   aggregate the numeric backend appends to the net, rather than a LorentzNet builder. Emitted with
+   C++20 designated initializers, so the fields must be given in network.hpp's declaration order
+   (kind, a, b, vid, atom, c, d, atomS, vlc); omitted ones take their defaults. A projector's momentum
+   rides `vid = env Base`; a vector's rides `vlc`. *)
 ntElemStr[fields___Rule] :=
-  "Elem{" <> StringRiffle[("." <> #[[1]] <> " = " <> ToString[#[[2]]]) & /@ {fields}, ", "] <> "}";
+  "LorentzFactor{" <> StringRiffle[("." <> #[[1]] <> " = " <> ToString[#[[2]]]) & /@ {fields}, ", "] <> "}";
 lorentzElemStr[ntMetric[mu_, nu_], ids_, env_] :=
-  ntElemStr["kind" -> "Elem::Metric", "a" -> ids[mu], "b" -> ids[nu], "vid" -> -1, "inv" -> -1];
+  ntElemStr["kind" -> "LorentzFactor::Metric", "a" -> ids[mu], "b" -> ids[nu], "vid" -> -1, "atom" -> -1];
 lorentzElemStr[ntVec[q_, mu_], ids_, env_] :=
-  ntElemStr["kind" -> "Elem::Vector", "a" -> ids[mu], "b" -> -1, "vid" -> -1, "inv" -> -1,
+  ntElemStr["kind" -> "LorentzFactor::Vector", "a" -> ids[mu], "b" -> -1, "vid" -> -1, "atom" -> -1,
     "vlc" -> "{{" <> ntLorArgs["1.0", env[q]["Base"]] <> "}}"];
 lorentzElemStr[ntTransProj[q_, mu_, nu_], ids_, env_] :=
-  ntElemStr["kind" -> "Elem::ProjT", "a" -> ids[mu], "b" -> ids[nu], "vid" -> env[q]["Base"], "inv" -> env[q]["Inv"]];
+  ntElemStr["kind" -> "LorentzFactor::ProjT", "a" -> ids[mu], "b" -> ids[nu], "vid" -> env[q]["Base"], "atom" -> env[q]["Inv"]];
 lorentzElemStr[ntLongProj[q_, mu_, nu_], ids_, env_] :=
-  ntElemStr["kind" -> "Elem::ProjL", "a" -> ids[mu], "b" -> ids[nu], "vid" -> env[q]["Base"], "inv" -> env[q]["Inv"]];
+  ntElemStr["kind" -> "LorentzFactor::ProjL", "a" -> ids[mu], "b" -> ids[nu], "vid" -> env[q]["Base"], "atom" -> env[q]["Inv"]];
 lorentzElemStr[ntMagneticProj[q_, mu_, nu_], ids_, env_] :=
-  ntElemStr["kind" -> "Elem::ProjM", "a" -> ids[mu], "b" -> ids[nu], "vid" -> env[q]["Base"], "inv" -> -1,
-    "invS" -> env[q]["InvS"]];
+  ntElemStr["kind" -> "LorentzFactor::ProjM", "a" -> ids[mu], "b" -> ids[nu], "vid" -> env[q]["Base"], "atom" -> -1,
+    "atomS" -> env[q]["InvS"]];
 lorentzElemStr[ntElectricProj[q_, mu_, nu_], ids_, env_] :=
-  ntElemStr["kind" -> "Elem::ProjE", "a" -> ids[mu], "b" -> ids[nu], "vid" -> env[q]["Base"], "inv" -> env[q]["Inv"],
-    "invS" -> env[q]["InvS"]];
+  ntElemStr["kind" -> "LorentzFactor::ProjE", "a" -> ids[mu], "b" -> ids[nu], "vid" -> env[q]["Base"], "atom" -> env[q]["Inv"],
+    "atomS" -> env[q]["InvS"]];
 lorentzElemStr[ntEpsilon[a_, b_, c_, d_], ids_, env_] :=
-  ntElemStr["kind" -> "Elem::Epsilon", "a" -> ids[a], "b" -> ids[b], "vid" -> -1, "inv" -> -1, "c" -> ids[c], "d" -> ids[d]];
+  ntElemStr["kind" -> "LorentzFactor::Epsilon", "a" -> ids[a], "b" -> ids[b], "vid" -> -1, "atom" -> -1, "c" -> ids[c], "d" -> ids[d]];
 
 scaleStr[str_, 1] := str;
 
@@ -73,7 +76,7 @@ wrapContract[{}] := "";
 
 wrapContract[{one_}] := one;
 
-wrapContract[many_] := "contract(" <> StringRiffle[many, ", "] <> ")";
+wrapContract[many_] := "mul(" <> StringRiffle[many, ", "] <> ")";
 
 (* ---- memo keys for the net builders ----------------------------------------------------------
    The caches are keyed on the builders' TRUE argument, not the argument tuple as written:
@@ -270,7 +273,7 @@ chunkLorentz[lorExpr_, ids_, env_, nonzeroCompMask_] := Which[
    splitColourGroups's `Expand` distributes it into TWO full Dirac traces. `foldDiracSigma`
    collapses that Plus into a single `ntSigma[legA, legB, din, dout]` token (each leg a slashed
    momentum {"slash",mom} or a free gluon id {"free",mu}), so the commutator is traced ONCE (the C++
-   engine folds [A,B] as a block-diagonal 2×2 factor — `dcomm*` in network/dirac.hpp). The i/2 and any
+   engine folds [A,B] as a block-diagonal 2×2 factor — `comm` in network/dirac.hpp). The i/2 and any
    sign live in the SCALAR (the Plus is already a bare bracket). It is a pure OPTIMIZATION: when the
    Plus is not an UNAMBIGUOUS commutator the recognizer returns $Failed and it distributes. *)
 
@@ -444,10 +447,10 @@ splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
                 ({#[[1]], #[[2]], ""}&) /@ chunkLorentz[Times @@ rest, ids, env, nonzeroCompMask]]}]
         ] /@ terms;
     groups = GatherBy[branchNets, First];
-    (* A branch's `core` is a bare DiracNet contracted against its Lorentz rest only at runtime
-       (numeric_value_netval), so branches cannot be fused into one net. A group carries them as
-       parallel lists: bodyNet = {core_b…} (DiracNet, or a Lorentz NetVal for a gamma-free branch),
-       restNet = {{rest_b, scal_b}…}; the generator sums Σ_b scal_b·numeric_value_netval(dnet_b, lnet_b). *)
+    (* A branch's `core` is a bare DiracChain contracted against its Lorentz rest only at runtime
+       (Frame::trace), so branches cannot be fused into one net. A group carries them as
+       parallel lists: bodyNet = {core_b…} (DiracChain, or a Lorentz LorentzNet for a gamma-free branch),
+       restNet = {{rest_b, scal_b}…}; the generator sums Σ_b scal_b·Frame::trace(dnet_b, lnet_b). *)
     Function[group,
         Module[{colProd = group[[1, 1]], colNet, colScalar, branchRecs},
           {colNet, colScalar} =
@@ -463,30 +466,30 @@ splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
    A constant SU(N) component is a product of structure constants, generators and Kronecker deltas,
    emitted as a `SUNNet` literal for the generator's numeric SU(N) contraction. Each head carries its
    group rank N as leading argument, so one net can mix several groups (colour SU(Nc) ⊗ flavour
-   SU(Nf)); sun_net.hpp's sun_value_cx contracts each rank separately and multiplies. Each factor is
-   minted by the per-rank `sun<n>` SUNEnv (declared in the generator main, the analogue of
-   LorentzEnv), so the rank is written once, not on every factor. *)
+   SU(Nf)); sun_net.hpp's sun_value contracts each group separately and multiplies. Each factor is
+   minted by the per-rank `sun<n>` SUN group object (declared where the net is built), so the rank
+   is written once, not on every factor; the labels are typed (AdjIndex / FundIndex). *)
 
 colourFacStr[ntSUNf[n_, a_, b_, c_], ids_] :=
-  "sun" <> ToString[n] <> ".f(" <> ntSunArgs[ids[a], ids[b], ids[c]] <> ")";
+  "sun" <> ToString[n] <> ".f(" <> ntSunArgs[ntAdj[ids[a]], ntAdj[ids[b]], ntAdj[ids[c]]] <> ")";
 
 colourFacStr[ntSUNDeltaAdj[n_, a_, b_], ids_] :=
-  "sun" <> ToString[n] <> ".deltaAdj(" <> ntSunArgs[ids[a], ids[b]] <> ")";
+  "sun" <> ToString[n] <> ".delta(" <> ntSunArgs[ntAdj[ids[a]], ntAdj[ids[b]]] <> ")";
 
 colourFacStr[ntSUNT[n_, a_, i_, j_], ids_] :=
-  "sun" <> ToString[n] <> ".T(" <> ntSunArgs[ids[a], ids[i], ids[j]] <> ")";
+  "sun" <> ToString[n] <> ".T(" <> ntSunArgs[ntAdj[ids[a]], ntFund[ids[i]], ntFund[ids[j]]] <> ")";
 
 colourFacStr[ntSUNDeltaFund[n_, i_, j_], ids_] :=
-  "sun" <> ToString[n] <> ".deltaFund(" <> ntSunArgs[ids[i], ids[j]] <> ")";
+  "sun" <> ToString[n] <> ".delta(" <> ntSunArgs[ntFund[ids[i]], ntFund[ids[j]]] <> ")";
 
 (* per-component diagonal dressings: parse the spec into a per-component dressing-id vector
    (component → dr, -1 = drop; 1-based physics indices) and emit a diag factor carrying it. *)
 
 colourFacStr[ntSUNDiagFund[n_, i_, j_, spec_], ids_] :=
-  "sun" <> ToString[n] <> ".diagFund(" <> ntSunArgs[ids[i], ids[j], diagVecStr[diagComp2Dr[spec, n]]] <> ")";
+  "sun" <> ToString[n] <> ".diag(" <> ntSunArgs[ntFund[ids[i]], ntFund[ids[j]], diagVecStr[diagComp2Dr[spec, n]]] <> ")";
 
 colourFacStr[ntSUNDiagAdj[n_, a_, b_, spec_], ids_] :=
-  "sun" <> ToString[n] <> ".diagAdj(" <> ntSunArgs[ids[a], ids[b], diagVecStr[diagComp2Dr[spec, n^2 - 1]]] <> ")";
+  "sun" <> ToString[n] <> ".diag(" <> ntSunArgs[ntAdj[ids[a]], ntAdj[ids[b]], diagVecStr[diagComp2Dr[spec, n^2 - 1]]] <> ")";
 
 MakeNTKernel::colleak = "compileColour: a factor of a constant SU(N) component is not one of the six group heads (ntSUNf/ntSUNDeltaAdj/ntSUNT/ntSUNDeltaFund/ntSUNDiag{Fund,Adj}) and would be emitted as raw Mathematica. A Plus means a colour/flavour sum missed compileColourSum; any other head means it is missing from the head registry ($ntHeads in DSL.m). Offending factor:\n`1`";
 
@@ -570,7 +573,7 @@ diracSpinorSymmetricQ[_ntDeltaDirac] := True;
 diracSpinorSymmetricQ[_]             := False;
 
 (* ---- Dirac trace in the C++ generator (network/dirac.hpp `dirac_value`) ----------------------
-   The gamma chain is emitted as a `DiracNet` literal and the generator traces the closed spinor loop
+   The gamma chain is emitted as a `DiracChain` literal and the generator traces the closed spinor loop
    NUMERICALLY (4×4 matrix products) against the Lorentz rest, as colour is folded by
    `SUNNet`/`compileColour`. *)
 
@@ -683,29 +686,27 @@ vlcCpp[pairs_List, env_, what_] :=
   "{" <> StringRiffle[("{" <> cppNum[#[[1]]] <> "," <> envBaseStr[#[[2]], env, what] <> "}") & /@ pairs, ", "] <> "}";
 
 (* an ntSigma leg: a free open Lorentz leg (its axis id) or a slashed leg (a vlc) *)
-sigmaLegCpp[{"slash", pairs_List}, ids_, env_] := vlcCpp[pairs, env, "σ slash leg"];
-sigmaLegCpp[{"free", mu_}, ids_, env_] := ToString[ids[mu]];
-$sigmaBuilder = <|{"free", "free"} -> "dcomm(", {"slash", "slash"} -> "dcomm_ss(",
-                  {"free", "slash"} -> "dcomm_fs(", {"slash", "free"} -> "dcomm_sf("|>;
+sigmaLegCpp[{"slash", pairs_List}, ids_, env_] := "Momentum{" <> vlcCpp[pairs, env, "σ slash leg"] <> "}";
+sigmaLegCpp[{"free", mu_}, ids_, env_] := "LorentzIndex{" <> ToString[ids[mu]] <> "}";
 
 (* the bare DFac of one fixed token. A γ whose Lorentz leg is contracted with an ntVec[q,μ] factor
    (vecOf: μ -> q) is a slash, otherwise a free leg. ntTransposed marks a factor the spinor walk
    traversed against its declared direction: the engine multiplies its transpose. *)
-fixedTokCpp[ntTransposed[g_], vecOf_, ids_, env_] := "dtr(" <> fixedTokCpp[g, vecOf, ids, env] <> ")";
-fixedTokCpp[_ntGamma5, __] := "dg5()";
-fixedTokCpp[_ntC, __] := "dc()";
+fixedTokCpp[ntTransposed[g_], vecOf_, ids_, env_] := "transposed(" <> fixedTokCpp[g, vecOf, ids, env] <> ")";
+fixedTokCpp[_ntGamma5, __] := "gamma5()";
+fixedTokCpp[_ntC, __] := "chargeC()";
 fixedTokCpp[ntSigma[a_, b_, __], vecOf_, ids_, env_] :=
-  $sigmaBuilder[{a[[1]], b[[1]]}] <> sigmaLegCpp[a, ids, env] <> ", " <> sigmaLegCpp[b, ids, env] <> ")";
+  "comm(" <> sigmaLegCpp[a, ids, env] <> ", " <> sigmaLegCpp[b, ids, env] <> ")";
 fixedTokCpp[ntGamma[mu_, _, _], vecOf_, ids_, env_] :=
   If[KeyExistsQ[vecOf, mu],
-    "dslash({{1.0," <> envBaseStr[vecOf[mu], env, "slash"] <> "}})",
-    "dgamma(" <> ToString[ids[mu]] <> ")"];
+    "slash(Momentum{{{1.0," <> envBaseStr[vecOf[mu], env, "slash"] <> "}}})",
+    "gamma(LorentzIndex{" <> ToString[ids[mu]] <> "})"];
 fixedTokCpp[g_, __] := (Message[compileDirac::badtok, g]; Abort[]);
 
 (* one token of a closed chain. A slot (dressed numerator or collected Dirac slot) is a DChainTok
    referencing the slot list, which is Sow'n under "slot" in chain order; a transposed slot is
    dtrslot(k) (reversed at the dress_enumerate splice). In a dressed chain every fixed DFac is
-   wrapped as dtfix(DFac), so a transposed one reads dtfix(dtr(…)). *)
+   wrapped as dtfix(DFac), so a transposed one reads dtfix(transposed(…)). *)
 chainTokCpp[g : (_ntDressedNum | _ntDiracSlot), dressed_, vecOf_, ids_, env_, mask_] := (
   Sow[If[Head[g] === ntDressedNum, dressedSlotStr[g, env], diracSlotStr[g, ids, env, mask]], "slot"];
   "dtslot(" <> ToString[$ntSlotN++] <> ")");
@@ -736,17 +737,17 @@ dressedSlotStrBody[ntDressedNum[opts_, _, _], env_] := Function[opt,
           Module[{num, dr, vlcStr},
             {num, dr} = drDecompose[$ntDressResolve[opt[[1]]]];
             vlcStr = If[opt[[2, 1]] === "slash", vlcCpp[opt[[2, 2]], env, "dressed slash"], ""];
-            (* ident → empty toks; slash → one dslash token. netFacs is empty: a propagator
+            (* ident → empty toks; slash → one slash token. netFacs is empty: a propagator
                numerator has no open leg. *)
             {"DSlotOpt{Cx{1,0}, {}, {" <>
-              If[opt[[2, 1]] === "slash", "dslash(" <> vlcStr <> ")", ""] <> "}, {}}", num, dr}]
+              If[opt[[2, 1]] === "slash", "slash(Momentum{" <> vlcStr <> "})", ""] <> "}, {}}", num, dr}]
         ] /@ opts;
 
 (* ---- general collected Dirac slot → C++ DSlot literal (any open-leg count) ----------------------
    An ntDiracSlot option keeps its WHOLE structure (Dirac chain × Lorentz-net factors); here we split
    each option into DSlotOpt{coeff, {dress}, {toks}, {netFacs}} — the Dirac chain as a token list
-   (dgamma/dslash/dcomm/dg5, open legs = ids of the free Lorentz tokens) and the Lorentz factors as
-   network::Elem literals (the gluon propagator/metric that closes the open leg). Every label already
+   (gamma/slash/comm/gamma5, open legs = ids of the free Lorentz tokens) and the Lorentz factors as
+   LorentzFactor literals (the gluon propagator/metric that closes the open leg). Every label already
    has an id and every momentum an env slot (allLabels/momentumOf recurse into the slot via
    Cases[Infinity]); internal legs (the γ↔projector bridge) keep their own distinct ids, closed within
    the option, so no fresh-id allocation is needed. *)
@@ -812,7 +813,7 @@ diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, nonzeroComp
        string joined by loop separators;
      - a chain with a dressed numerator or a collected slot is returned as
        ntDressedCore[std::vector<DChainTok>{…}, slots] (slots: per-slot option lists, expanded into
-       single-option sub-terms by emitNumericGenerator), else as DiracNet{…};
+       single-option sub-terms by emitNumericGenerator), else as DiracChain{…};
      - the remaining factors must be Dirac-free (a dressed numerator sum that was neither distributed
        nor collected would otherwise lose or leak its γ structure) and compile through compileLorentz.
    Not memoised: canonicalised calls repeat only ~2x, so the key costs more than it saves (measured
@@ -844,7 +845,7 @@ compileDiracBody[factors_, ids_, env_, nonzeroCompMask_] := Module[
        the empty segments and multiplies by 4 per loop. The dressed chain keeps every separator (the
        runtime counts collapsed loops from them) and only drops the empty segments' text. *)
     If[dressed,
-      {ntDressedCore["std::vector<DChainTok>{" <> StringRiffle[DeleteCases[Riffle[loopStrs, "dtfix(dloopsep())"], ""], ", "] <> "}", slots],
+      {ntDressedCore["std::vector<DChainTok>{" <> StringRiffle[DeleteCases[Riffle[loopStrs, "dtfix(loop_sep())"], ""], ", "] <> "}", slots],
        restCompiled[[2]], restCompiled[[1]]},
-      {"DiracNet{" <> StringRiffle[DeleteCases[loopStrs, ""], ", dloopsep(), "] <> "}",
+      {"DiracChain{" <> StringRiffle[DeleteCases[loopStrs, ""], ", loop_sep(), "] <> "}",
        restCompiled[[2]] * 4^Count[loopStrs, ""], restCompiled[[1]]}]];

@@ -204,7 +204,7 @@ unitLoopOkQ[frame_, pSym_, magSym_] := !ntEnvFlag["NT_NO_UNIT_GROUPS"] && AllTru
 (* ---- numeric (matrix-product) backend: component table + user symbols ----------------------------
    The numeric backend evaluates scalar products from each momentum's 4 COMPONENTS, so it needs only:
    the polynomial variables (the free user symbols), each fundamental momentum's 4 components as
-   MPoly-builder C++, and the C++ fill formula for each symbol (a kernel argument, or a derived
+   Poly-builder C++, and the C++ fill formula for each symbol (a kernel argument, or a derived
    symbol like sin1 = sqrt(1-cos1^2)). Composite momenta resolve by component arithmetic via
    resolveComponents. *)
 numericComponents::nonpoly = "Non-polynomial momentum components (a fractional power of a symbol remains): `1`";
@@ -222,20 +222,20 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
     usyms = Sort @ DeleteDuplicates @ Flatten[Variables /@ Values[compExpr]];
     nsym = Length[usyms];
     (* Coefficients may be complex (a silver-blaze component pi T - I muq), so emit Re and Im
-       separately: cppNum of a Complex is Wolfram's Complex(a,b), which is not C++. MPoly is built
-       only through the generator's `env` (a LorentzEnv bound to nsym). *)
+       separately: cppNum of a Complex is Wolfram's Complex(a,b), which is not C++. A Poly is built
+       only through the generator's `frame` (a Frame bound to the symbol list). *)
     mpcpp[e_] := Module[{rules = CoefficientRules[e, usyms]},
         If[rules === {},
-          "env.zero()",
-          "(" <> StringRiffle[("env.mono({" <> StringRiffle[ToString /@ #[[1]], ","] <> "},Cx{" <> cppNum[Re[#[[2]]]] <> "," <> cppNum[Im[#[[2]]]] <> "})")& /@ rules, " + "] <> ")"
+          "frame.zero()",
+          "(" <> StringRiffle[("frame.mono({" <> StringRiffle[ToString /@ #[[1]], ","] <> "},Cx{" <> cppNum[Re[#[[2]]]] <> "," <> cppNum[Im[#[[2]]]] <> "})")& /@ rules, " + "] <> ")"
         ]];
     compCpp = Association @ KeyValueMap[#1 -> (mpcpp /@ #2)&, compExpr];
     vfill[s_] := If[KeyExistsQ[symDefs, s],
         cppFlat[symDefs[s]],
         SymbolName[s]];
-    (* indexed by MPoly var id (0-based) *)
+    (* indexed by Poly var id (0-based) *)
     varFill = vfill /@ usyms;
-    (* Unit-constraint groups (ΣUμ²=1) as MPoly var-index lists, so the C++ reduce_units collapses
+    (* Unit-constraint groups (ΣUμ²=1) as Poly var-index lists, so the C++ reduce_units collapses
        the bare-loop denominator to the monomial l1². Drop symbols not in usyms (a vanished
        component) and groups with < 2 surviving symbols. *)
     idx = AssociationThread[usyms -> Range[Length[usyms]] - 1];

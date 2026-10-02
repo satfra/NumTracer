@@ -6,14 +6,15 @@
 // claim as "the engine contracts both forms to the same polynomial": the two forms take different
 // elimination orders, carry different atoms in the numerator, and meet `reduce_units` and the
 // monomial-cancellation logic differently. This test makes the second claim directly — contract the
-// SAME network both ways, in one process, and compare the resulting MPoly by evaluation.
+// SAME network both ways, in one process, and compare the resulting Poly by evaluation.
 //
 // Comparing by evaluation rather than term-by-term is deliberate: the two forms legitimately produce
 // different (algebraically equal) monomial sets, so a structural diff would report differences that
 // are not errors. Grading is against the scale of the terms involved, never pointwise-relative — a
 // structurally-zero contraction leaves fp residue in one form and an exact 0 in the other, and a
 // relative test would call that a 100% error.
-#include "numtracer/numeric/env.hpp"
+#include "numtracer/numeric/frame.hpp"
+#include "engine_test_util.hpp"
 #include "numtracer/numeric/numeric_contract.hpp"
 
 #include <cmath>
@@ -40,11 +41,11 @@ namespace
   // the other fp residue — measures nothing while looking like a catastrophic failure.
   constexpr int kNsym = 8; // k0..k3, p0..p3
 
-  std::vector<std::array<MPoly, 4>> makeComp()
+  std::vector<std::array<Poly, 4>> makeComp()
   {
-    LorentzEnv env(kNsym, {});
-    std::array<MPoly, 4> k{env.zero(), env.zero(), env.zero(), env.zero()};
-    std::array<MPoly, 4> p{env.zero(), env.zero(), env.zero(), env.zero()};
+    Frame env(ntest::names(kNsym), {});
+    std::array<Poly, 4> k{env.zero(), env.zero(), env.zero(), env.zero()};
+    std::array<Poly, 4> p{env.zero(), env.zero(), env.zero(), env.zero()};
     for (int i = 0; i < 4; ++i) {
       std::vector<int> ek(kNsym, 0), ep(kNsym, 0);
       ek[static_cast<std::size_t>(i)] = 1;
@@ -57,38 +58,38 @@ namespace
 
   /// atomDen[0] = k², atomDen[1] = |k⃗|² — what collect_atom_denoms fills for a ProjE with
   /// inv=0, invS=1. Both are built from k (vid 0) only; p carries no atom.
-  std::vector<MPoly> makeAtomDen()
+  std::vector<Poly> makeAtomDen()
   {
-    LorentzEnv env(kNsym, {});
-    MPoly k2 = env.zero(), ks2 = env.zero();
+    Frame env(ntest::names(kNsym), {});
+    Poly k2 = env.zero(), ks2 = env.zero();
     for (int i = 0; i < 4; ++i) {
       std::vector<int> e(kNsym, 0);
       e[static_cast<std::size_t>(i)] = 2;
-      const MPoly sq = env.mono(e, Cx{1., 0});
+      const Poly sq = env.mono(e, Cx{1., 0});
       k2 = k2 + sq;
       if (i > 0) ks2 = ks2 + sq;
     }
     return {k2, ks2};
   }
 
-  /// Evaluate an MPoly at a numeric point. atomVal[a] = 1/atomDen[a].
-  double evalAt(const MPoly &poly, const std::array<double, 8> &x8)
+  /// Evaluate an Poly at a numeric point. atomVal[a] = 1/atomDen[a].
+  double evalAt(const Poly &poly, const std::array<double, 8> &x8)
   {
     const double k2 = x8[0] * x8[0] + x8[1] * x8[1] + x8[2] * x8[2] + x8[3] * x8[3];
     const double ks2 = x8[1] * x8[1] + x8[2] * x8[2] + x8[3] * x8[3];
     const std::vector<double> x(x8.begin(), x8.end());
     const std::vector<double> atomVal = {1.0 / k2, 1.0 / ks2};
-    return eval(poly, x, atomVal).re;
+    return ndetail::eval(poly, x, atomVal).re;
   }
 
   /// Contract one Lorentz network, forcing either the dense or the rank-1 ProjE factorisation.
   /// Calls the two builders
   /// directly — this test needs both forms in the SAME process.
-  MPoly contractBoth(const std::vector<NElem> &elems, bool rank1, const std::vector<MPoly> &aden,
-                     const std::vector<std::array<MPoly, 4>> &comp)
+  Poly contractBoth(const std::vector<LorentzFactor> &elems, bool rank1, const std::vector<Poly> &aden,
+                     const std::vector<std::array<Poly, 4>> &comp)
   {
     std::vector<ndetail::Factor> facs;
-    for (const NElem &el : elems) {
+    for (const LorentzFactor &el : elems) {
       if (rank1)
         ndetail::push_elem_factors(facs, kNsym, el, comp, aden);
       else
@@ -109,12 +110,12 @@ namespace
   /// ZERO, and then `rel` is a ratio of two roundings and means nothing — one form leaves fp
   /// residue, the other cancels exactly. `maxAbs` is what to assert on in that case, which is why
   /// it is returned rather than folded into a single verdict here.
-  Gap worstGap(const char *what, const std::vector<NElem> &elems)
+  Gap worstGap(const char *what, const std::vector<LorentzFactor> &elems)
   {
     const auto comp = makeComp();
     const auto aden = makeAtomDen();
-    const MPoly a = contractBoth(elems, false, aden, comp);
-    const MPoly b = contractBoth(elems, true, aden, comp);
+    const Poly a = contractBoth(elems, false, aden, comp);
+    const Poly b = contractBoth(elems, true, aden, comp);
 
     std::mt19937 rng(20260811);
     std::uniform_real_distribution<double> U(-2.0, 2.0);
@@ -141,11 +142,11 @@ namespace
 int main()
 {
   // Lorentz index ids: 0..3. inv=0 (k²), invS=1 (|k⃗|²), momentum vid 0.
-  const auto E = [](int a, int b) { return nprojE(a, b, {{1.0, 0}}, 0, 1); };
-  const auto Tp = [](int a, int b) { return nprojT(a, b, {{1.0, 0}}, 0); };
-  const auto M = [](int a, int b) { return nprojM(a, b, {{1.0, 0}}, 1); };
-  const auto V = [](int a) { return nvec(a, {{1.0, 1}}); }; // p, NOT k — see makeComp
-  const auto G = [](int a, int b) { return nmet(a, b); };
+  const auto E = [](int a, int b) { return ntest::fprojE(a, b, {{1.0, 0}}, 0, 1); };
+  const auto Tp = [](int a, int b) { return ntest::fprojT(a, b, {{1.0, 0}}, 0); };
+  const auto M = [](int a, int b) { return ntest::fprojM(a, b, {{1.0, 0}}, 1); };
+  const auto V = [](int a) { return ntest::fvec(a, {{1.0, 1}}); }; // p, NOT k — see makeComp
+  const auto G = [](int a, int b) { return ntest::fmet(a, b); };
 
   std::printf("rank-1 vs dense electric projector, through contract_factors:\n");
 

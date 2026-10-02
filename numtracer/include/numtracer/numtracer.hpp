@@ -2,9 +2,9 @@
 /// @brief Convenience umbrella header: pulls in the whole public NumTracer API so a consumer
 ///        can `#include <numtracer.hpp>` instead of the individual subsystem headers.
 ///
-/// This bundles the numeric contraction engine (the hand-coding path: build a `DiracNet` + `NNet`,
-/// contract with `numeric_value`, evaluate the resulting `MPoly`), the SU(N) colour/flavour fold,
-/// and the build-time codegen/lowering helpers. Every header below is `#pragma once`-guarded, so
+/// This bundles the numeric contraction engine (the hand-coding path: declare a @ref numtracer::Frame,
+/// build a `DiracChain` + `LorentzNet`, contract with `Frame::trace`, evaluate the resulting `Poly`),
+/// the SU(N) fold (@ref numtracer::SUN), and the build-time codegen/lowering helpers. Every header below is `#pragma once`-guarded, so
 /// including this alongside any individual header is harmless.
 ///
 /// It does NOT change how the engine ships: the compiled-vs-header-only choice is still governed by
@@ -39,11 +39,12 @@
 #include "numtracer/numeric/spinor_mat.hpp"       // IWYU pragma: export
 #include "numtracer/numeric/numeric_contract.hpp" // IWYU pragma: export
 #include "numtracer/numeric/numeric_driver.hpp"   // IWYU pragma: export
-#include "numtracer/numeric/env.hpp"              // IWYU pragma: export (LorentzEnv factory)
+#include "numtracer/numeric/frame.hpp"            // IWYU pragma: export
 
-// Codegen: the real-SSA CSE, the MPoly lowering, the emitter, and the emitted-kernel support layer
+// Codegen: the real-SSA CSE, the Poly lowering, the emitter, and the emitted-kernel support layer
 // (numtracer::complex / numtracer::compute) that a generated kernel compiles against.
 #include "numtracer/codegen/real_cse.hpp" // IWYU pragma: export
 #include "numtracer/codegen/lower.hpp"    // IWYU pragma: export
 #include "numtracer/codegen/gen.hpp"      // IWYU pragma: export
 #include "numtracer/codegen/runtime.hpp"  // IWYU pragma: export
+#include "numtracer/codegen/interpret.hpp" // IWYU pragma: export

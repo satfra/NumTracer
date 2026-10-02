@@ -56,7 +56,7 @@ $ffMap = <|
   "sps" -> ntSPS,
   (* finite-T spatial VECTOR vecs[q, mu] = {0, q_1, q_2, q_3}. Unlike sps this is a tensor LEG, so
      it gets a momentum of its own, ntSpatialVec[q] (DSL.m expandSpatialVecs / spatialVecFrame).
-     Downstream a spatial slash vecs[q,mu] gamma[mu,d1,d2] is then an ordinary dslash. *)
+     Downstream a spatial slash vecs[q,mu] gamma[mu,d1,d2] is then an ordinary slash. *)
   "vecs" -> (ntVec[ntSpatialVec[#1], #2] &)
 |>;
 

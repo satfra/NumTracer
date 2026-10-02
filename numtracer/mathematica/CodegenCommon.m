@@ -9,7 +9,7 @@
    (imaginary-part probe), Generator (the build-time generator program), Kernel (the kernel header).
 
    NumTracer owns only the tensor part: each component is contracted numerically to a polynomial
-   (MPoly) and Horner-lowered to straight-line C++. Everything scalar (coefficients, CSE, boilerplate)
+   (Poly) and Horner-lowered to straight-line C++. Everything scalar (coefficients, CSE, boilerplate)
    goes through FunKit's COEN emitter. The seam: each trace result is a C++ identifier that appears as
    a string placeholder in the integrand, which CppForm emits verbatim (CExpression[a_String] := a).
 

@@ -13,6 +13,7 @@
 /// polynomial. The `pure constant`, `cancels to zero` and `empty` cases below are exactly those.
 
 #include "numtracer/codegen/gen.hpp"
+#include "numtracer/codegen/interpret.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -31,25 +32,6 @@ namespace
   const bool kModes[] = {false, true};
   const char *kModeNames[] = {"plain", "normalised"};
   constexpr int kNumModes = 2;
-
-  /// Evaluate an emitted instruction stream — the semantics `emit_stmt` prints.
-  double interpret(const std::vector<RInstr> &ins, int root, const double *f)
-  {
-    if (root < 0) return 0.0;
-    std::vector<double> v(ins.size(), 0.0);
-    auto val = [&](int r) { return r < 0 ? 0.0 : v[static_cast<std::size_t>(r)]; };
-    for (std::size_t i = 0; i < ins.size(); ++i) {
-      const RInstr &in = ins[i];
-      switch (in.op) {
-      case RCONST: v[i] = in.value; break;
-      case RVAR: v[i] = f[in.a]; break;
-      case RADD: v[i] = val(in.a) + val(in.b); break;
-      case RMUL: v[i] = val(in.a) * val(in.b); break;
-      default: v[i] = -val(in.a); break;
-      }
-    }
-    return v[static_cast<std::size_t>(root)];
-  }
 
   /// Evaluate the monomial set directly — the reference every lowering must reproduce.
   double evaluate(const std::vector<LMono> &ms, const double *f)

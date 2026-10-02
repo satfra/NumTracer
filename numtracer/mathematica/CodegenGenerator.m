@@ -8,7 +8,7 @@
    Output: the distinct traces, the per-net fold entries that reference them, and the counts the
    caching decision needs.
 
-   WHY. A net is Σ_b scal_b · contract(trace_b), and the same trace recurs across nets and colour
+   WHY. A net is Σ_b scal_b · trace_b, and the same trace recurs across nets and colour
    branches (5-7x on the dense flows). So each DISTINCT trace is contracted once into a shared table
    that every net folds with its own scalars. This also turns the parallel contraction into a flat
    list of uniform work items; per-net scheduling stalls on a few huge nets.
@@ -198,8 +198,8 @@ ntLptBinPack[defs_List, nUnits_Integer] :=
     Lookup[GroupBy[Transpose[{bin, defs[[order]]}], First -> Last], Range[nUnits], {}]];
 
 (* ---- STAGE 1: sub-term expansion + interning --------------------------------------------------
-   Per net, a colour group is a SUM of sub-terms: coreNets[i] = {core_b…} (a DiracNet literal for a
-   gamma branch, a Lorentz NetVal for a gamma-free one), restScalars[i] = {{rest_b, scal_b}…} parallel.
+   Per net, a colour group is a SUM of sub-terms: coreNets[i] = {core_b…} (a DiracChain literal for a
+   gamma branch, a Lorentz LorentzNet for a gamma-free one), restScalars[i] = {{rest_b, scal_b}…} parallel.
    Each branch yields {ds, ls, scal, dc, dl, dr} columns (usually one sub-term). A DRESSED branch
    (ntDressedCore[chainStr, slotsStr]) expands the Cartesian product of its chain's slot options,
    each a triple {structStr, num, dr}: the structures (dl) form the trace key, ∏ num folds into the
@@ -255,30 +255,30 @@ ntGenExpandSubTerms[coreNets_, restScalars_] :=
                 Join @@@ Transpose @
                     MapThread[
                       Function[{nv, rv, scal},
-                        Module[{lsStr = If[rv === "", "NetVal{}", rv]},
+                        Module[{lsStr = If[rv === "", "LorentzNet{}", rv]},
                           Which[
                             (* dressed numerator: expand slot options → structural sub-terms *)
                             MatchQ[nv, _ntDressedCore],
                               With[{chain = nv[[1]], slotOpts = nv[[2]]},
                                 If[slotOpts === {},
-                                  {{internDiracNet["DiracNet{}"]}, {internLorNet[lsStr]}, ntPackCx[{scal}], {internChain[chain]}, {internSlotTuple[{}]}, {internDressMono[{}]}},
+                                  {{internDiracNet["DiracChain{}"]}, {internLorNet[lsStr]}, ntPackCx[{scal}], {internChain[chain]}, {internSlotTuple[{}]}, {internDressMono[{}]}},
 (* dl = this combination's STRUCTURAL option-string LIST (one dressing-free structStr per chain
    slot), interned so the table emitter still pools the distinct structures; the numeric Cx folds
    into the sub-term scalar and the dress ids become the DPoly key. *)
                                   Module[{tb = slotCombo[slotOpts], n},
                                     n = tb[[4]];
-                                    {ConstantArray[internDiracNet["DiracNet{}"], n],
+                                    {ConstantArray[internDiracNet["DiracChain{}"], n],
                                      ConstantArray[internLorNet[lsStr], n],
                                      ntPackCx[scal * tb[[3]]],
                                      ConstantArray[internChain[chain], n],
                                      tb[[1]],
                                      tb[[2]]}]]],
-                            (* gamma branch: DiracNet + projector rest *)
-                            StringStartsQ[nv, "DiracNet"],
+                            (* gamma branch: DiracChain + projector rest *)
+                            StringStartsQ[nv, "DiracChain"],
                               {{internDiracNet[nv]}, {internLorNet[lsStr]}, ntPackCx[{scal}], {internChain["std::vector<DChainTok>{}"]}, {internSlotTuple[{}]}, {internDressMono[{}]}},
                             (* gamma-free branch: whole net is the rest *)
                             True,
-                              {{internDiracNet["DiracNet{}"]}, {internLorNet[nv]}, ntPackCx[{scal}], {internChain["std::vector<DChainTok>{}"]}, {internSlotTuple[{}]}, {internDressMono[{}]}}]]],
+                              {{internDiracNet["DiracChain{}"]}, {internLorNet[nv]}, ntPackCx[{scal}], {internChain["std::vector<DChainTok>{}"]}, {internSlotTuple[{}]}, {internDressMono[{}]}}]]],
                       {cores, rss[[All, 1]], rss[[All, 2]]}]]],
             {coreNets, restScalars}];];
     ntLog["[prof] sub-term expansion: ", ntT, " s"];
@@ -296,7 +296,7 @@ ntGenExpandSubTerms[coreNets_, restScalars_] :=
    LPT-packed -O0 units like every other builder (ChunkDefs), with external (non-static) linkage,
    and only forward decls + the assembler ntColNets() stay in the main TU (MainDecls).
    colnets are HASH-CONSED: nets differing only in their Lorentz/Dirac part share a colour net, so
-   sun_value_cx runs once per DISTINCT net and colR maps each net to it (ColRDef, MainText). *)
+   sun_value runs once per DISTINCT net and colR maps each net to it (ColRDef, MainText). *)
 ntGenColourTables[colourNets_, nNet_] :=
   Module[{hc = ntHashConsRows[colourNets], uCol, mainDecls, chunkDefs, colR},
     uCol = hc["Rows"];
@@ -304,7 +304,7 @@ ntGenColourTables[colourNets_, nNet_] :=
       If[uCol === {},
         {"static std::vector<SUNNet> ntColNets(){ return {}; }\n", {}},
         Module[{envDecl, chunks},
-          envDecl = StringJoin["SUNEnv sun" <> # <> "(" <> # <> "); "& /@ DeleteDuplicates @ Flatten @ StringCases[uCol, "sun" ~~ r : DigitCharacter.. ~~ "." :> r]];
+          envDecl = StringJoin["SUN sun" <> # <> "(" <> # <> "); "& /@ DeleteDuplicates @ Flatten @ StringCases[uCol, "sun" ~~ r : DigitCharacter.. ~~ "." :> r]];
           chunks = ntSplitByChars[uCol, 2];
           {StringJoin[
              MapIndexed["void ntColNets_c" <> ToString[#2[[1]] - 1] <> "(std::vector<SUNNet>& o);\n"&, chunks],
@@ -316,7 +316,7 @@ ntGenColourTables[colourNets_, nNet_] :=
         "MainText" ->
           StringJoin["  std::vector<SUNNet> colnetsU = ntColNets();\n", colR[[2]],
             "  std::vector<numtracer::Cx> colvU(colnetsU.size());\n",
-            "  for(size_t i=0;i<colnetsU.size();++i) colvU[i]=sun_value_cx(colnetsU[i]);\n",
+            "  for(size_t i=0;i<colnetsU.size();++i) colvU[i]=sun_value(colnetsU[i]);\n",
             "  std::vector<numtracer::Cx> colv(" <> ToString[nNet] <> ");\n",
             "  for(int i=0;i<" <> ToString[nNet] <> ";++i) colv[i]=colvU[colR[i]];\n"]|>]];
 
@@ -326,7 +326,7 @@ ntGenColourTables[colourNets_, nNet_] :=
 ntGenPreambles[hasDressed_, colMainDecls_String, colourUnitsQ_] :=
   Module[{tmpl, unitInc},
     (* shared wrapper templates so the net-builder strings compile. *)
-    tmpl = "template<int Mu,int Nu,int Lb,int Mask,int Inv> NetVal tproj(){ return projT(Mu,Nu,Lb,Inv); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int Inv> NetVal lproj(){ return projL(Mu,Nu,Lb,Inv); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int InvS> NetVal mproj(){ return projM(Mu,Nu,Lb,InvS); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int Inv,int InvS> NetVal eproj(){ return projE(Mu,Nu,Lb,Inv,InvS); }\n" <> "template<int Mu,int Nu> NetVal lmetric(){ return met(Mu,Nu); }\n" <> "template<int Lbl,int Base,int Mask> NetVal lvec(){ return vec(Lbl,Base); }\n" <> "template<int A,int B,int C,int D> NetVal leps(){ return epsilon(A,B,C,D); }\n" <> "inline NetVal konst(double c){ return NetVal{PTerm{Cx{c,0}, {}}}; }\n" <> "template<class L> struct litco;\n" <> "template<numtracer::Cx C> struct litco<numtracer::Lit<C>>{ static constexpr numtracer::Cx v=C; };\n" <> "template<class L> NetVal sc(NetVal x){ return scale(litco<L>::v, std::move(x)); }\n";
+    tmpl = "template<int Mu,int Nu,int Lb,int Mask,int Inv> LorentzNet tproj(){ return leaf({.kind=LorentzFactor::ProjT,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv}); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int Inv> LorentzNet lproj(){ return leaf({.kind=LorentzFactor::ProjL,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv}); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int InvS> LorentzNet mproj(){ return leaf({.kind=LorentzFactor::ProjM,.a=Mu,.b=Nu,.vid=Lb,.atomS=InvS}); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int Inv,int InvS> LorentzNet eproj(){ return leaf({.kind=LorentzFactor::ProjE,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv,.atomS=InvS}); }\n" <> "template<int Mu,int Nu> LorentzNet lmetric(){ return metric(LorentzIndex{Mu},LorentzIndex{Nu}); }\n" <> "template<int Lbl,int Base,int Mask> LorentzNet lvec(){ return leaf({.kind=LorentzFactor::Vector,.a=Lbl,.b=-1,.vlc={{1.0,Base}}}); }\n" <> "template<int A,int B,int C,int D> LorentzNet leps(){ return epsilon(LorentzIndex{A},LorentzIndex{B},LorentzIndex{C},LorentzIndex{D}); }\n" <> "inline LorentzNet konst(double c){ return LorentzNet{LorentzTerm{Cx{c,0}, {}}}; }\n" <> "template<class L> struct litco;\n" <> "template<numtracer::Cx C> struct litco<numtracer::Lit<C>>{ static constexpr numtracer::Cx v=C; };\n" <> "template<class L> LorentzNet sc(LorentzNet x){ return scale(litco<L>::v, std::move(x)); }\n";
 (* The shared header block goes through a per-flow `_pch.hh` so the build can precompile it ONCE
    instead of per unit TU (unit compiles are header-bound; the PCH cuts their work ~5x).
    The `#ifndef NT_GEN_PCH` guard keeps the emitted source STANDALONE-compilable (ab_gen.sh and hand
@@ -342,7 +342,7 @@ ntGenPreambles[hasDressed_, colMainDecls_String, colourUnitsQ_] :=
           ""
         ] <>
 (* colour-net chunk defs ride the units (stage 2); they build SUNNet literals through function-local
-   SUNEnvs, so those units need the SU(N) engine header the net builders otherwise don't touch.
+   SUN group objects, so those units need the SU(N) engine header the net builders otherwise don't touch.
    Gated: colour-free flows keep their units byte-identical. *)
         If[colourUnitsQ,
           "#include \"numtracer/network/sun_net.hpp\"\n",
@@ -369,25 +369,22 @@ ntGenPreambles[hasDressed_, colMainDecls_String, colourUnitsQ_] :=
             "static double ntRssMB(){ long pages=0; if(FILE* f=std::fopen(\"/proc/self/statm\",\"r\")){ long tot=0; if(std::fscanf(f,\"%ld %ld\",&tot,&pages)!=2) pages=0; std::fclose(f); } return pages*(double)sysconf(_SC_PAGESIZE)/1048576.0; }\n",
             "#include <sstream>\n#include <unordered_map>\n",
             "using numtracer::Cx;\n",
-            "namespace numtracer::network {\n",
+            "namespace numtracer {\n",
             tmpl,
             "}\n",
-            "using namespace numtracer::network;\nusing namespace numtracer::numeric;\n",
+            "using namespace numtracer;\n",
             colMainDecls],
         "UnitPre" ->
           "// GENERATED by MakeNTKernel — do not edit. Numeric net-builder unit (compiled -O0).\n" <>
             "#ifndef NT_GEN_PCH\n" <> unitInc <> "#endif\n" <>
-            "using numtracer::Cx;\nnamespace numtracer::network {\n" <> tmpl <> "}\nusing namespace numtracer::network;\n" <>
-            If[hasDressed,
-              "using namespace numtracer::numeric;\n",
-              ""]|>]];
+            "using numtracer::Cx;\nnamespace numtracer {\n" <> tmpl <> "}\nusing namespace numtracer;\n"|>]];
 
 (* ---- STAGE 4: net-level CSE -------------------------------------------------------------------
    Dense projections emit the SAME net sub-term thousands of times (e.g. the σ^μν quark-gluon vertex:
    ~500x), ballooning the generator source and its -O0 compile. Hash-cons each recurring net term
    into a shared accessor `lc<k>()` / `dc<k>()` (a function-local `static const`, so it is also BUILT
    once at run time). Trivial/empty literals and unique terms stay inline. Each use copies the shared
-   NetVal/DiracNet, so the committed kernel is unchanged. *)
+   LorentzNet/DiracChain, so the committed kernel is unchanged. *)
 ntGenNetCSE[dPool_List, lPool_List, diracNetIds_, lorNetIds_] :=
   Module[{lCnt, dCnt, lMap = <||>, dMap = <||>, li = 0, di = 0, dPoolCse, lPoolCse, ntT},
 (* Counted by interned ID. `Range[0, n-1]` yields the counts in id order, i.e. first-appearance
@@ -398,13 +395,13 @@ ntGenNetCSE[dPool_List, lPool_List, diracNetIds_, lorNetIds_] :=
     ntLog["[prof] CSE Counts (", Total[lCnt], "+", Total[dCnt], " terms): ", ntT, " s"];
     Do[
       With[{t = lPool[[k]]},
-        If[lCnt[[k]] >= 2 && t =!= "NetVal{}" && t =!= "",
+        If[lCnt[[k]] >= 2 && t =!= "LorentzNet{}" && t =!= "",
           lMap[t] = "lc" <> ToString[li];
           li++]],
       {k, Length[lPool]}];
     Do[
       With[{t = dPool[[k]]},
-        If[dCnt[[k]] >= 2 && t =!= "DiracNet{}" && t =!= "",
+        If[dCnt[[k]] >= 2 && t =!= "DiracChain{}" && t =!= "",
           dMap[t] = "dc" <> ToString[di];
           di++]],
       {k, Length[dPool]}];
@@ -419,14 +416,14 @@ ntGenNetCSE[dPool_List, lPool_List, diracNetIds_, lorNetIds_] :=
     ntStageResult["ntGenNetCSE", {"Defs", "Decls", "DiracPool", "LorPool"},
       <|"Defs" ->
           Join[
-            KeyValueMap["const DiracNet& " <> #2 <> "(){ static const DiracNet v = " <> #1 <> "; return v; }"&, dMap],
-            KeyValueMap["const NetVal& " <> #2 <> "(){ static const NetVal v = " <> #1 <> "; return v; }"&, lMap]],
+            KeyValueMap["const DiracChain& " <> #2 <> "(){ static const DiracChain v = " <> #1 <> "; return v; }"&, dMap],
+            KeyValueMap["const LorentzNet& " <> #2 <> "(){ static const LorentzNet v = " <> #1 <> "; return v; }"&, lMap]],
         "Decls" ->
           StringJoin[
             Riffle[
               Join[
-                KeyValueMap["const DiracNet& " <> #2 <> "();"&, dMap],
-                KeyValueMap["const NetVal& " <> #2 <> "();"&, lMap]],
+                KeyValueMap["const DiracChain& " <> #2 <> "();"&, dMap],
+                KeyValueMap["const LorentzNet& " <> #2 <> "();"&, lMap]],
               "\n"]],
         "DiracPool" -> dPoolCse, "LorPool" -> lPoolCse|>]];
 
@@ -485,8 +482,8 @@ ntGenDressedSlotTables[distinctSubs_, nSub_] :=
 (* the distinct-trace tables sdn (Dirac nets) and sln (Lorentz nets), plus the dressed slot tables *)
 ntGenTraceTables[distinctSubs_, nSub_, hasDressed_] :=
   Module[{sdnDefs, sdnDecl, slnDefs, slnDecl, dressed},
-    {sdnDefs, sdnDecl} = ntChunkDefs["sdn", "std::vector<DiracNet>", If[nSub === 0, {{}}, {distinctSubs[[All, 1]]}]];
-    {slnDefs, slnDecl} = ntChunkDefs["sln", "std::vector<NetVal>", If[nSub === 0, {{}}, {distinctSubs[[All, 2]]}]];
+    {sdnDefs, sdnDecl} = ntChunkDefs["sdn", "std::vector<DiracChain>", If[nSub === 0, {{}}, {distinctSubs[[All, 1]]}]];
+    {slnDefs, slnDecl} = ntChunkDefs["sln", "std::vector<LorentzNet>", If[nSub === 0, {{}}, {distinctSubs[[All, 2]]}]];
     dressed = If[hasDressed, ntGenDressedSlotTables[distinctSubs, nSub], <|"Defs" -> {}, "ChunkDecls" -> ""|>];
     ntStageResult["ntGenTraceTables", {"Defs", "ChunkDecls"},
       <|"Defs" -> Join[sdnDefs, slnDefs, dressed["Defs"]],
@@ -501,13 +498,9 @@ ntGenDeclHeader[hasDressed_, cseDecls_String, chunkDecls_String] :=
         If[hasDressed,
           "#include \"numtracer/numeric/numeric_contract.hpp\"\n",
           ""
-        ] <> "using namespace numtracer::network;\n" <>
-        If[hasDressed,
-          "using namespace numtracer::numeric;\n",
-          ""
-        ] <> cseDecls <> "\n" <>
+        ] <> "using namespace numtracer;\n" <> cseDecls <> "\n" <>
 (* the DISTINCT-trace tables (see ntGenDedupJoin): one flat builder each, which the nets index into. *)
-        "std::vector<DiracNet> sdn0();\n" <> "std::vector<NetVal> sln0();\n" <>
+        "std::vector<DiracChain> sdn0();\n" <> "std::vector<LorentzNet> sln0();\n" <>
         If[hasDressed,
           "std::vector<std::vector<DChainTok>> chp0();\n" <> "std::vector<int> sdchR0();\n" <>
           "std::vector<DSlotOpt> optp0();\n" <> "std::vector<std::vector<int>> sdslR0();\n",
@@ -540,7 +533,7 @@ ntGenUnitSources[distinctSubs_, nSub_, hasDressed_, cseDefs_List, cseDecls_Strin
    Each function returns main()'s text for its section; those owning big tables also return the
    table definitions ("Defs"), which the driver prepends to main(). *)
 
-(* argv, the LorentzEnv, the component table and the distinct-trace tables *)
+(* argv, the Frame (symbols + component table) and the distinct-trace tables *)
 ntGenMainPrologue[ncomp_, nsInner_, hasDressed_] :=
   ntStageResult["ntGenMainPrologue", {"Text"},
     <|"Text" ->
@@ -549,28 +542,25 @@ ntGenMainPrologue[ncomp_, nsInner_, hasDressed_] :=
         If[ntSingleQ[], "  numtracer::codegen::emit_precision() = numtracer::codegen::EmitPrecision::Single;\n", ""],
         "  std::string decor = \"static inline\"; std::string hns = \"" <> nsInner <> "\";\n",
         "  for(int a=1;a<argc;++a){ std::string s=argv[a]; if(s==\"-d\"&&a+1<argc) decor=argv[++a]; else if(s==\"-n\"&&a+1<argc) hns=argv[++a]; }\n",
-        "  const int nsym = " <> ToString[ncomp["nsym"]] <> ";\n",
-(* units is emitted BEFORE the LorentzEnv because the env binds both nsym and the unit groups;
-   comp/atomDen and the trace entry points are then built through `env`. *)
-        "  std::vector<std::vector<int>> units = {" <> StringRiffle[ntIntRow /@ ncomp["units"], ","] <> "};\n",
-        "  LorentzEnv env(nsym, units);\n",
-        "  std::vector<std::array<MPoly,4>> comp(" <> ToString[ncomp["maxBase"] + 1] <> ", {env.zero(),env.zero(),env.zero(),env.zero()});\n",
-        (* component-table init: comp[base][mu] = <MPoly builder>, skipping structural zeros. *)
+(* The Frame binds the symbol names (rendered into the fill formulas), the unit-vector groups and the
+   component table; every polynomial, contraction and denominator below goes through it. *)
+        "  Frame frame({" <> StringRiffle[("\"" <> # <> "\"")& /@ ncomp["symNamesCpp"], ","] <> "},\n" <>
+        "              {" <> StringRiffle[ntIntRow /@ ncomp["units"], ","] <> "}, " <> ToString[ncomp["maxBase"] + 1] <> ");\n",
+        (* component-table init: set_component(base, mu, <Poly builder>), skipping structural zeros. *)
         KeyValueMap[
           Function[{base, comps},
             MapIndexed[
               Function[{s, mu},
-                If[s === "env.zero()",
+                If[s === "frame.zero()",
                   "",
-                  "  comp[" <> ToString[base] <> "][" <> ToString[mu[[1]] - 1] <> "] = " <> s <> ";\n"]],
+                  "  frame.set_component(" <> ToString[base] <> ", " <> ToString[mu[[1]] - 1] <> ", " <> s <> ");\n"]],
               comps]],
           ncomp["compCpp"]],
-        "  std::vector<std::string> symNames = {" <> StringRiffle[("\"" <> # <> "\"")& /@ ncomp["symNamesCpp"], ","] <> "};\n",
 (* the DISTINCT-trace tables (see ntGenDedupJoin). Flat, indexed by trace id: a plain trace has an
    empty chain (contract via sdn[k]), a dressed (structural) one uses sdch[k]/sdsl[k] via
-   numeric_value_dressed_netval_mp. sdch/sdsl are emitted only when the kernel has dressed nets. *)
-        "  std::vector<DiracNet> sdn = sdn0();\n",
-        "  std::vector<NetVal> sln = sln0();\n",
+   Frame::trace_structural. sdch/sdsl are emitted only when the kernel has dressed nets. *)
+        "  std::vector<DiracChain> sdn = sdn0();\n",
+        "  std::vector<LorentzNet> sln = sln0();\n",
         If[hasDressed,
 (* rebuild the per-sub-term chain/slot tables from the interned pools (chp/optp) + index arrays
    (sdchR/sdslR) — O(nSub), reproduces the full sdch/sdsl exactly, so the trace lambda is untouched. *)
@@ -621,7 +611,7 @@ ntGenMainTables[netTraceRows_, netDressRows_, netScalarRows_, hasDressed_] :=
             "  std::vector<std::vector<Cx>> dsc(NNET);\n",
             "  for(size_t i=0;i<NNET;++i){ const auto& r=dscU[dscR[i]]; dsc[i].reserve(r.size());\n",
             "    for(int k: r) dsc[i].push_back(dscV[k]); }\n",
-(* the dressed phase-B fold routes each sub-term's scaled MPoly trace into its DPoly channel
+(* the dressed phase-B fold routes each sub-term's scaled Poly trace into its DPoly channel
    sdr[i][j] (empty monomial = undressed); sdrV and sdrU are small, so they stay inline. *)
             If[hasDressed,
               "  std::vector<DMono> sdrV = {" <>
@@ -639,11 +629,11 @@ ntGenMainPhaseA[nSub_, nReused_, hasDressed_, mIdx_] :=
   ntStageResult["ntGenMainPhaseA", {"Text"},
     <|"Text" ->
       StringJoin[
-(* the projector atom denominators are keyed by ATOM ID (e.inv/e.invS), not by position, and each
+(* the projector atom denominators are keyed by ATOM ID (atom/atomS), not by position, and each
    id is filled idempotently — and the distinct traces cover every lnet that occurs. So scanning
-   the deduped table gives the same atomDen as scanning every occurrence did. *)
-        "  auto atomDen = env.collect_atom_denoms(sln, comp);\n",
-        "  for(auto &a: atomDen) a = reduce_units(a, units);  // bare-loop k^2 -> monomial l1^2 -> cancels\n",
+   the deduped table gives the same denominators as scanning every occurrence did. add_denominators
+   also applies the unit-vector reduction (bare-loop k^2 -> the monomial l1^2, so it cancels). *)
+        "  frame.add_denominators(sln);\n",
 (* MATSUBARA EVENNESS, proven while contracting. If every trace and every atom denominator carries
    only EVEN powers of the Matsubara frequency, kernel(+w) == kernel(-w), and DiFfRG may collapse
    `kernel(+w) + kernel(-w)` to `2*kernel(w)`, halving the Matsubara-sum work.
@@ -651,12 +641,12 @@ ntGenMainPhaseA[nSub_, nReused_, hasDressed_, mIdx_] :=
    `body = 0.` (DiFfRG_compat.m), so it is trivially True for every flow and would silently drop the
    odd half of a non-even kernel. The test is SUFFICIENT only (cancelling odd terms read as odd),
    which is the safe direction: a false "odd" costs an optimisation, a false "even" is wrong physics.
-   mIdx is the MPoly var index (0-based) of the Matsubara frequency, or -1 for "not finite-T". *)
+   mIdx is the Poly var index (0-based) of the Matsubara frequency, or -1 for "not finite-T". *)
         If[mIdx >= 0,
           "  // Matsubara evenness (see poly_even_in): every trace and every atom denominator must\n" <>
           "  // carry only even powers of var(" <> ToString[mIdx] <> "), the Matsubara frequency.\n" <>
           "  std::atomic<bool> ntMEven{true};\n" <>
-          "  for(const auto &a: atomDen) if(!poly_even_in(a, " <> ToString[mIdx] <> ")) ntMEven.store(false, std::memory_order_relaxed);\n",
+          "  for(const auto &a: frame.denominators()) if(!poly_even_in(a, " <> ToString[mIdx] <> ")) ntMEven.store(false, std::memory_order_relaxed);\n",
           ""],
         "  const bool ntprof = numtracer::env_flag(\"NT_GEN_PROFILE\");\n",
         "  unsigned workersA=std::thread::hardware_concurrency(); if(!workersA)workersA=4u;\n",
@@ -675,26 +665,29 @@ ntGenMainPhaseA[nSub_, nReused_, hasDressed_, mIdx_] :=
    it to put the singletons in phase A's balanced work list. *)
         "  long nCache = " <> ToString[If[hasDressed, nSub, nReused]] <> ";\n",
         "  if(const long v=numtracer::env_int(\"NT_GEN_MEMO_MAX\",-1); v>=0) nCache=std::min<long>(v,NSUB);\n",
-(* Traces are dressing-stripped, so phase A caches plain MPoly on both paths; the DPoly is assembled
+(* Traces are dressing-stripped, so phase A caches plain Poly on both paths; the DPoly is assembled
    only in the phase-B fold. *)
-        "  auto trace=[&](int k)->MPoly{\n",
+(* The parallel phases contract through a CONST view: every atom is registered above, so a
+   contraction only reads the frame. *)
+        "  const Frame &cframe = frame;\n",
+        "  auto trace=[&](int k)->Poly{\n",
 (* The parity probe sits on the trace lambda, not the trace table: with nCache == 0 the table is
    EMPTY and phase B recomputes through this lambda, so every distinct trace passes through here.
    DRESSED flows are excluded: their dressing monomials (sdr) are multiplied back in by the group fold
    and not seen here, and a dressing could carry an odd power. *)
         If[mIdx >= 0 && !hasDressed,
-          "    MPoly tracePoly = env.numeric_value_netval(sdn[k], sln[k], comp, atomDen);\n" <>
+          "    Poly tracePoly = cframe.trace(sdn[k], sln[k]);\n" <>
           "    if(!poly_even_in(tracePoly, " <> ToString[mIdx] <> ")) ntMEven.store(false, std::memory_order_relaxed);\n" <>
           "    return tracePoly;\n",
           If[hasDressed,
-            (* structural trace → plain MPoly: a non-slot sub-term contracts via sdn[k]/sln[k],
-               a collected one via the dressing-free _mp variant (dressing stripped at codegen). *)
-            "    return sdch[k].empty()\n" <> "      ? env.numeric_value_netval(sdn[k], sln[k], comp, atomDen)\n" <> "      : env.numeric_value_dressed_netval_mp(sdch[k], sdsl[k], sln[k], comp, atomDen);\n",
-            "    return env.numeric_value_netval(sdn[k], sln[k], comp, atomDen);\n"]],
+            (* structural trace → plain Poly: a non-slot sub-term contracts via sdn[k]/sln[k],
+               a collected one via the dressing-free trace_structural (dressing stripped at codegen). *)
+            "    return sdch[k].empty()\n" <> "      ? cframe.trace(sdn[k], sln[k])\n" <> "      : cframe.trace_structural(sdch[k], sdsl[k], sln[k]);\n",
+            "    return cframe.trace(sdn[k], sln[k]);\n"]],
         "  };\n",
         (* PHASE A — contract each distinct trace once, parallel over a FLAT work list (numeric/trace_fold.hpp). *)
         "  auto tA=std::chrono::steady_clock::now();\n",
-        "  std::vector<MPoly> traceTable = env.contract_traces<MPoly>(nCache, workersA, trace);\n",
+        "  std::vector<Poly> traceTable = frame.contract_traces<Poly>(nCache, workersA, trace);\n",
         "  if(ntprof){ std::size_t tb=0; for(auto &p: traceTable) tb+=poly_bytes(p);\n",
         "    std::fprintf(stderr,\"[num] phase A: %ld distinct traces, %ld cached, table %.1f MB, %.1f s (W=%u)\\n\",\n",
         "      NSUB, nCache, tb/1048576.0, std::chrono::duration<double>(std::chrono::steady_clock::now()-tA).count(), workersA); }\n",
@@ -725,10 +718,7 @@ ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_] :=
         "Text" ->
           StringJoin[
             grp[[2]],
-            "  // `genv`, not `env`: `env` above is the LorentzEnv (nsym + unit groups) that mints and\n" <>
-            "  // contracts polynomials. This is the GLOBAL SYMBOL environment the lowering interns\n" <>
-            "  // fundamental symbols into. Naming it `env` would shadow the other and silently rebind\n" <>
-            "  // every env.contract_traces / env.fold_groups_streaming call below.\n" <>
+            "  // The GLOBAL SYMBOL environment the lowering interns fundamental symbols into.\n" <>
             "  GlobalEnv genv;\n",
             "  std::vector<GenProg> progs;\n",
 (* realOnly[gi]: this group's dressing coeff is real, so only Re(trace) is consumed -> emit a
@@ -745,16 +735,16 @@ ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_] :=
    PARTITION the nets: a duplicate folds a net in twice, a gap silently drops one, and either is a
    wrong kernel with no other symptom. O(nNet), once per generation, so never gate it on a flag. *)
             "  numtracer::numeric::check_group_partition(groups, " <> ToString[nNet] <> ");\n",
-(* The dressed fold reads the plain-MPoly trace table + the per-sub-term dressing monomials sdr and
+(* The dressed fold reads the plain-Poly trace table + the per-sub-term dressing monomials sdr and
    builds the per-net DPoly channel by channel (fold_groups_streaming_dressed). *)
             If[hasDressed,
-                "  env.fold_groups_streaming_dressed(sidx, dsc, sdr, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "    [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },\n" <> "    [&](size_t gi, DPoly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });\n",
-                "  env.fold_groups_streaming<MPoly>(sidx, dsc, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "    [&](int d, MPoly &&m){ return m*env.constant(colv[d]); },\n" <> "    [&](size_t gi, MPoly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });\n"
+                "  frame.fold_groups_streaming_dressed(sidx, dsc, sdr, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "    [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },\n" <> "    [&](size_t gi, DPoly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });\n",
+                "  frame.fold_groups_streaming<Poly>(sidx, dsc, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "    [&](int d, Poly &&m){ return m*frame.constant(colv[d]); },\n" <> "    [&](size_t gi, Poly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });\n"
             ],
             "  if(ntprof) std::fprintf(stderr,\"[num] phase B+lower: %d nets in %d groups, window %ld, %.1f s (W=%u)\\n\", " <> ToString[nNet] <> ", " <> ToString[nGrp] <> ", netWindow, std::chrono::duration<double>(std::chrono::steady_clock::now()-tB).count(), workersB);\n",
 (* the trace table is dead once every group has folded; emission below only needs the lowered
    instruction streams, which are orders of magnitude smaller. *)
-            "  { std::vector<MPoly> dead; traceTable.swap(dead); }\n"]|>]];
+            "  { std::vector<Poly> dead; traceTable.swap(dead); }\n"]|>]];
 
 (* the fill formulas, the header preamble, the Matsubara verdict, and the trace bodies *)
 ntGenMainEmission[varFill_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDressed_, mIdx_, nGrp_] :=
@@ -768,7 +758,7 @@ ntGenMainEmission[varFill_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDres
         "  fm.var = [](int id)->std::string{\n",
         Table["    if(id==" <> ToString[i - 1] <> ") return \"" <> varFill[[i]] <> "\";\n", {i, 1, Length[varFill]}],
         "    return \"" <> ntZeroLit[] <> "\"; };\n",
-        "  fm.inv = [&](int id)->std::string{ return \"" <> If[ntSingleQ[], "1.f", "1.0"] <> "/(\" + mpoly_to_cpp(atomDen[(size_t)id], symNames) + \")\"; };\n",
+        "  fm.inv = [&](int id)->std::string{ return \"" <> If[ntSingleQ[], "1.f", "1.0"] <> "/(\" + frame.denominator_cpp(id) + \")\"; };\n",
 (* dressing fill (kind-2 `dress` leaves): the kernel BODY evaluates each dressing atom (where the
    regulators REG::* and the interpolator parameters are in scope) into `dr_<id>` and passes the
    VALUE to fill(); fill just stores it. So fm.dress returns the passed-in argument name. *)
@@ -831,7 +821,7 @@ ntGenMainEmission[varFill_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDres
         "  return 0;\n}\n"]|>];
 
 (* ---- the driver --------------------------------------------------------------------------------
-   `mIdx` is the MPoly var index (0-based) of the Matsubara frequency, or -1 for "not a finite-T
+   `mIdx` is the Poly var index (0-based) of the Matsubara frequency, or -1 for "not a finite-T
    flow / unknown"; when >= 0 the generator proves Matsubara evenness while it contracts.
    NT_GEN_NO_DEDUP=1 turns the dedup join off (I4): every occurrence is its own trace, nothing is
    merged, dropped or cached. It is the escape hatch and the control for the equivalence test, which

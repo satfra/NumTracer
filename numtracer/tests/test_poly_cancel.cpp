@@ -20,7 +20,9 @@
 //      1.5-2.5x MORE emitted SSA on 8/8 flows, precisely because it splits one group into two. It
 //      passed value preservation the whole time. Term count is the invariant that catches it.
 //   4. IDEMPOTENCE. Both passes are documented as running to a fixed point.
-#include "numtracer/numeric/env.hpp"
+#include "numtracer/numeric/frame.hpp"
+#include "engine_test_util.hpp"
+using namespace numtracer; // the typed builders (LorentzIndex, Momentum, …) the tests spell unqualified
 #include "numtracer/numeric/mpoly.hpp"
 
 #include <cmath>
@@ -42,7 +44,7 @@ static void check(bool ok, const char *what)
 }
 
 /// Count monomials still carrying at least one inverse atom.
-static std::size_t termsWithAtoms(const nm::MPoly &p)
+static std::size_t termsWithAtoms(const nm::Poly &p)
 {
   std::size_t n = 0;
   for (const auto &[m, c] : p.terms) {
@@ -54,15 +56,15 @@ static std::size_t termsWithAtoms(const nm::MPoly &p)
 
 /// Evaluate `p` at `x`, with atom `aid` standing for 1/atomDen[aid](x) — the semantics the passes
 /// must preserve. Returns false if any denominator is (near) zero at this point.
-static bool evalAt(const nm::MPoly &p, const std::vector<double> &x, const std::vector<nm::MPoly> &atomDen, Cx &out)
+static bool evalAt(const nm::Poly &p, const std::vector<double> &x, const std::vector<nm::Poly> &atomDen, Cx &out)
 {
   std::vector<double> inv(atomDen.size(), 0.0);
   for (std::size_t a = 0; a < atomDen.size(); ++a) {
-    const Cx d = nm::eval(atomDen[a], x, {});
+    const Cx d = nm::ndetail::eval(atomDen[a], x, {});
     if (std::fabs(d.re) < 1e-3 || std::fabs(d.im) > 1e-12) return false;
     inv[a] = 1.0 / d.re;
   }
-  out = nm::eval(p, x, inv);
+  out = nm::ndetail::eval(p, x, inv);
   return true;
 }
 
@@ -73,8 +75,8 @@ static double relerr(Cx a, Cx b)
 }
 
 /// Assert value preservation of `red` vs `orig` over many random points.
-static void checkSameValue(const char *what, const nm::MPoly &orig, const nm::MPoly &red,
-                           const std::vector<nm::MPoly> &atomDen, int nsym, std::mt19937 &rng)
+static void checkSameValue(const char *what, const nm::Poly &orig, const nm::Poly &red,
+                           const std::vector<nm::Poly> &atomDen, int nsym, std::mt19937 &rng)
 {
   std::uniform_real_distribution<double> U(-1.0, 1.0);
   double worst = 0.0;
@@ -99,30 +101,30 @@ int main()
   std::mt19937 rng(20260808);
   std::uniform_real_distribution<double> U(-1.0, 1.0);
   const int nsym = 4;
-  nm::LorentzEnv env(nsym);
+  nm::Frame env(ntest::names(nsym));
 
   auto x0 = env.var(0), x1 = env.var(1), x2 = env.var(2), x3 = env.var(3);
 
   // A multi-term, atom-free denominator: the shifted-line k² case divThroughPolyAtoms exists for.
-  const nm::MPoly D = x0 * x0 + x1 * x1 + env.constant(Cx{2.0, 0.0}) * x0 * x1 + env.constant(Cx{3.0, 0.0});
+  const nm::Poly D = x0 * x0 + x1 * x1 + env.constant(Cx{2.0, 0.0}) * x0 * x1 + env.constant(Cx{3.0, 0.0});
   // A single-monomial denominator: the bare-loop case divThroughMonomialAtoms exists for.
-  const nm::MPoly Dm = x2 * x2;
+  const nm::Poly Dm = x2 * x2;
 
   // ---- 1) divThroughPolyAtoms FIRES on an exactly divisible numerator -------------------------
   {
     std::printf("== divThroughPolyAtoms: exact division cancels the atom ==\n");
-    const std::vector<nm::MPoly> aden{D};
-    const nm::MPoly Q = x0 * x1 + x3 * x3 + env.constant(Cx{-1.5, 0.0});
-    const nm::MPoly p = (Q * D) * env.atom(0); // (Q·D)·(1/D)
+    const std::vector<nm::Poly> aden{D};
+    const nm::Poly Q = x0 * x1 + x3 * x3 + env.constant(Cx{-1.5, 0.0});
+    const nm::Poly p = (Q * D) * env.atom(0); // (Q·D)·(1/D)
     check(termsWithAtoms(p) == p.terms.size() && !p.terms.empty(), "input carries the atom on every term");
 
-    const nm::MPoly r = nm::divThroughPolyAtoms(p, aden);
+    const nm::Poly r = nm::divThroughPolyAtoms(p, aden);
     check(termsWithAtoms(r) == 0, "atom fully cancelled on exact division");
     check(r.terms.size() == Q.terms.size(), "reduced to the quotient's term count");
     checkSameValue("exact-division value preserved", p, r, aden, nsym, rng);
     check(r.terms.size() <= p.terms.size(), "no term-count growth");
 
-    const nm::MPoly r2 = nm::divThroughPolyAtoms(r, aden);
+    const nm::Poly r2 = nm::divThroughPolyAtoms(r, aden);
     check(r2.terms.size() == r.terms.size(), "idempotent");
   }
 
@@ -131,11 +133,11 @@ int main()
   // relaxation would silently change the shape; invariant 3 is what rejects it.
   {
     std::printf("== divThroughPolyAtoms: non-divisible numerator is value-preserved ==\n");
-    const std::vector<nm::MPoly> aden{D};
-    const nm::MPoly N = x0 * x2 + x3 + env.constant(Cx{0.7, 0.0}); // deliberately not a multiple of D
-    const nm::MPoly p = N * env.atom(0);
+    const std::vector<nm::Poly> aden{D};
+    const nm::Poly N = x0 * x2 + x3 + env.constant(Cx{0.7, 0.0}); // deliberately not a multiple of D
+    const nm::Poly p = N * env.atom(0);
 
-    const nm::MPoly r = nm::divThroughPolyAtoms(p, aden);
+    const nm::Poly r = nm::divThroughPolyAtoms(p, aden);
     checkSameValue("non-divisible value preserved", p, r, aden, nsym, rng);
     check(r.terms.size() <= p.terms.size(), "no term-count growth on a failed division");
     check(termsWithAtoms(r) > 0, "the atom survives (it does not divide out)");
@@ -144,15 +146,15 @@ int main()
   // ---- 3) divThroughMonomialAtoms: term-by-term cancellation ----------------------------------
   {
     std::printf("== divThroughMonomialAtoms: monomial denominator ==\n");
-    const std::vector<nm::MPoly> aden{Dm};
+    const std::vector<nm::Poly> aden{Dm};
     // x2^2 · (1/x2^2) must cancel exactly; the x3 term cannot and must keep its atom.
-    const nm::MPoly p = (x2 * x2 * x0) * env.atom(0) + (x3 * x1) * env.atom(0);
-    const nm::MPoly r = nm::divThroughMonomialAtoms(p, aden);
+    const nm::Poly p = (x2 * x2 * x0) * env.atom(0) + (x3 * x1) * env.atom(0);
+    const nm::Poly r = nm::divThroughMonomialAtoms(p, aden);
     checkSameValue("monomial-cancellation value preserved", p, r, aden, nsym, rng);
     check(r.terms.size() <= p.terms.size(), "no term-count growth");
     check(termsWithAtoms(r) < termsWithAtoms(p), "at least one atom cancelled");
 
-    const nm::MPoly r2 = nm::divThroughMonomialAtoms(r, aden);
+    const nm::Poly r2 = nm::divThroughMonomialAtoms(r, aden);
     check(r2.terms.size() == r.terms.size(), "idempotent");
   }
 
@@ -160,10 +162,10 @@ int main()
   // Both passes composed, on numerators that are sometimes divisible and usually not.
   {
     std::printf("== randomised: composed passes preserve value ==\n");
-    const std::vector<nm::MPoly> aden{D, Dm};
+    const std::vector<nm::Poly> aden{D, Dm};
     int cases = 0;
     for (int it = 0; it < 40; ++it) {
-      nm::MPoly N = env.constant(Cx{U(rng), 0.0});
+      nm::Poly N = env.constant(Cx{U(rng), 0.0});
       for (int k = 0; k < 3; ++k) {
         const int i = static_cast<int>((rng() % 4));
         const int j = static_cast<int>((rng() % 4));
@@ -171,9 +173,9 @@ int main()
       }
       if (it % 3 == 0) N = N * D; // make a third of them exactly divisible
       const int aid = static_cast<int>(it % 2);
-      const nm::MPoly p = N * env.atom(aid);
+      const nm::Poly p = N * env.atom(aid);
 
-      nm::MPoly r = nm::divThroughMonomialAtoms(p, aden);
+      nm::Poly r = nm::divThroughMonomialAtoms(p, aden);
       r = nm::divThroughPolyAtoms(r, aden);
       checkSameValue("composed value preserved", p, r, aden, nsym, rng);
       check(r.terms.size() <= p.terms.size(), "no term-count growth (composed)");

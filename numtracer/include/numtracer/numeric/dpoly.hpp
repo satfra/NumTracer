@@ -1,14 +1,14 @@
 /// @file dpoly.hpp
-/// @brief A **dressing polynomial**: a sum `Σ_m (dressing-monomial_m) · (kinematic MPoly_m)` carrying
+/// @brief A **dressing polynomial**: a sum `Σ_m (dressing-monomial_m) · (kinematic Poly_m)` carrying
 ///        runtime dressing/regulator calls as *symbolic atoms*, so a Feynman diagram whose propagator
 ///        numerators are dressed structure sums (e.g. `Mq·δ + Z(p)·γ·p`) collapses to **one** trace
 ///        instead of distributing into `2^D` separate diagrams (one per dressing combination).
 ///
-/// This is the exact analogue of how @ref MPoly already carries `1/k²` inverse atoms in its monomial
+/// This is the exact analogue of how @ref Poly already carries `1/k²` inverse atoms in its monomial
 /// key: a dressing monomial (@ref DMono) is a sorted multiset of *dressing-atom ids*, and a `DPoly`
-/// maps each distinct dressing monomial to the (collected) kinematic @ref MPoly it multiplies. The
-/// `MPoly` type itself is **unchanged** — `DPoly` is a thin wrapper whose arithmetic reuses
-/// `MPoly::operator*`/`operator+` verbatim, so the numeric backend's hot path is untouched and only
+/// maps each distinct dressing monomial to the (collected) kinematic @ref Poly it multiplies. The
+/// `Poly` type itself is **unchanged** — `DPoly` is a thin wrapper whose arithmetic reuses
+/// `Poly::operator*`/`operator+` verbatim, so the numeric backend's hot path is untouched and only
 /// diagrams that genuinely carry a dressed structure sum pay for the dressing layer.
 ///
 /// At lowering (@ref numtracer::numeric::to_genprog) each dressing atom becomes a `SymKind::dress`
@@ -38,7 +38,7 @@ namespace numtracer::inline numeric
   }
 
   /// @brief Merge two sorted dressing monomials (multiset union) — the dressing analogue of the
-  ///        atom-multiset merge in `MPoly::operator*` (`mpoly.hpp`).
+  ///        atom-multiset merge in `Poly::operator*` (`mpoly.hpp`).
   inline DMono dmono_merge(const DMono &a, const DMono &b)
   {
     DMono r;
@@ -53,20 +53,20 @@ namespace numtracer::inline numeric
     return r;
   }
 
-  // The `nsym`-carrying construction API is closed behind these friends, exactly as for @ref MPoly:
-  // @ref LorentzEnv is the sole user-facing path and @ref DPolyFactory the internal attorney for the
+  // The `nsym`-carrying construction API is closed behind these friends, exactly as for @ref Poly:
+  // @ref Frame is the sole user-facing path and @ref DPolyFactory the internal attorney for the
   // trusted contraction/trace-fold code. (`mpoly.hpp`, included above, already forward-declares
-  // @ref LorentzEnv; declare the DPoly attorney here.)
+  // @ref Frame; declare the DPoly attorney here.)
   struct DPolyFactory;
 
-  /// @brief A dressing polynomial: sorted-by-@ref DMono, like terms combined, no empty `MPoly` coeffs.
+  /// @brief A dressing polynomial: sorted-by-@ref DMono, like terms combined, no empty `Poly` coeffs.
   struct DPoly {
     int nsym = 0;
-    std::vector<std::pair<DMono, MPoly>> terms; ///< sorted by DMono; each MPoly is non-empty
+    std::vector<std::pair<DMono, Poly>> terms; ///< sorted by DMono; each Poly is non-empty
 
-    // Sanctioned construction paths (see @ref MPoly). The in-header DPoly arithmetic constructs its
+    // Sanctioned construction paths (see @ref Poly). The in-header DPoly arithmetic constructs its
     // results directly.
-    friend class LorentzEnv;
+    friend class Frame;
     friend struct DPolyFactory;
     friend DPoly operator+(const DPoly &a, const DPoly &b);
     friend DPoly operator*(const DPoly &a, const DPoly &b);
@@ -75,13 +75,13 @@ namespace numtracer::inline numeric
     DPoly() = default;
 
   private:
-    // Bare-`nsym` construction — reachable only through @ref LorentzEnv / @ref DPolyFactory (friends);
-    // see @ref MPoly. The empty default ctor above stays public.
+    // Bare-`nsym` construction — reachable only through @ref Frame / @ref DPolyFactory (friends);
+    // see @ref Poly. The empty default ctor above stays public.
     explicit DPoly(int ns) : nsym(ns) {}
 
     /// A `DPoly` that is just a single un-dressed kinematic polynomial (empty dressing monomial).
-    /// The no-dressing case: lowering this is byte-for-byte the plain-`MPoly` path.
-    static DPoly fromMPoly(const MPoly &p)
+    /// The no-dressing case: lowering this is byte-for-byte the plain-`Poly` path.
+    static DPoly fromPoly(const Poly &p)
     {
       DPoly d(p.nsym);
       if (!p.empty()) d.terms.push_back({DMono{}, p});
@@ -93,12 +93,12 @@ namespace numtracer::inline numeric
     int size() const { return static_cast<int>(terms.size()); }
 
     /// Accumulate `p` into the coefficient of dressing monomial `d` (kept sorted; `d` already sorted).
-    /// Drops the term if the resulting `MPoly` is empty (full cancellation).
-    void add(const DMono &d, const MPoly &p)
+    /// Drops the term if the resulting `Poly` is empty (full cancellation).
+    void add(const DMono &d, const Poly &p)
     {
       if (p.empty()) return;
       auto it = std::lower_bound(terms.begin(), terms.end(), d,
-                                 [](const std::pair<DMono, MPoly> &a, const DMono &k) { return a.first < k; });
+                                 [](const std::pair<DMono, Poly> &a, const DMono &k) { return a.first < k; });
       if (it != terms.end() && it->first == d) {
         it->second = it->second + p;
         if (it->second.empty()) terms.erase(it);
@@ -109,10 +109,10 @@ namespace numtracer::inline numeric
   };
 
   /// @brief Internal attorney re-exposing the private @ref DPoly factories to the trusted engine code
-  ///        (the dressed contraction / trace-fold), mirroring @ref MPolyFactory. Not public API.
+  ///        (the dressed contraction / trace-fold), mirroring @ref PolyFactory. Not public API.
   struct DPolyFactory {
     static DPoly zero(int ns) { return DPoly(ns); }
-    static DPoly fromMPoly(const MPoly &p) { return DPoly::fromMPoly(p); }
+    static DPoly fromPoly(const Poly &p) { return DPoly::fromPoly(p); }
   };
 
   inline DPoly operator+(const DPoly &a, const DPoly &b)
@@ -128,7 +128,7 @@ namespace numtracer::inline numeric
       else if (b.terms[j].first < a.terms[i].first)
         r.terms.push_back(b.terms[j++]);
       else {
-        MPoly s = a.terms[i].second + b.terms[j].second;
+        Poly s = a.terms[i].second + b.terms[j].second;
         if (!s.empty()) r.terms.push_back({a.terms[i].first, std::move(s)});
         ++i;
         ++j;
@@ -141,8 +141,8 @@ namespace numtracer::inline numeric
     return r;
   }
 
-  /// Product: merge dressing monomials, multiply the kinematic `MPoly` coefficients (reusing
-  /// `MPoly::operator*` verbatim), and collect. Provided for composability/testing; the contraction
+  /// Product: merge dressing monomials, multiply the kinematic `Poly` coefficients (reusing
+  /// `Poly::operator*` verbatim), and collect. Provided for composability/testing; the contraction
   /// path builds a `DPoly` by accumulation (@ref DPoly::add) rather than multiplying two `DPoly`s.
   inline DPoly operator*(const DPoly &a, const DPoly &b)
   {
@@ -163,29 +163,37 @@ namespace numtracer::inline numeric
     if (c.re == 0 && c.im == 0) return r;
     r.terms.reserve(a.terms.size());
     for (const auto &[d, mp] : a.terms) {
-      // Direct coefficient scaling instead of `mp * constant(c)`: bit-identical (see MPoly::scaled),
+      // Direct coefficient scaling instead of `mp * constant(c)`: bit-identical (see Poly::scaled),
       // without the scratch and sort. The emptiness guard is defensive: `mp` is non-empty and `c != 0`.
-      MPoly s = MPolyFactory::scaled(a.nsym, mp, c);
+      Poly s = PolyFactory::scaled(a.nsym, mp, c);
       if (!s.empty()) r.terms.push_back({d, std::move(s)});
     }
     return r;
   }
 
-  /// @brief Numeric evaluation (validation only): `x[i]` = user symbol i; `atomVal[aid]` = value of
-  ///        `1/D_aid`; `drVal[id]` = value of dressing atom `id`. Equals the distributed sum
-  ///        `Σ_combos (∏ dressings) · (kinematic value)`.
-  inline Cx eval(const DPoly &p, const std::vector<double> &x, const std::vector<double> &atomVal,
-                 const std::vector<double> &drVal)
+  namespace ndetail
   {
-    Cx s{0, 0};
-    for (const auto &[d, mp] : p.terms) {
-      double dm = 1.0;
-      for (int id : d)
-        dm *= drVal[id];
-      const Cx kv = eval(mp, x, atomVal);
-      s = s + Cx{kv.re * dm, kv.im * dm};
+    /// @brief Raw numeric evaluation of a dressed polynomial: `x[i]` = user symbol i; `atomVal[aid]` =
+    ///        value of `1/D_aid`; `drVal[id]` = value of dressing atom `id`. Equals the distributed sum
+    ///        `Σ_combos (∏ dressings) · (kinematic value)`. Prefer @ref Frame::eval.
+    inline Cx eval(const DPoly &p, const std::vector<double> &x, const std::vector<double> &atomVal,
+                   const std::vector<double> &drVal)
+    {
+      Cx s{0, 0};
+      for (const auto &[d, mp] : p.terms) {
+        double dm = 1.0;
+        for (int id : d) {
+          if (id < 0 || static_cast<std::size_t>(id) >= drVal.size())
+            NT_THROW(std::invalid_argument, ("eval: the polynomial carries dressing " + std::to_string(id) +
+                                             " but only " + std::to_string(drVal.size()) + " dressing values were given")
+                                                .c_str());
+          dm *= drVal[id];
+        }
+        const Cx kv = eval(mp, x, atomVal);
+        s = s + Cx{kv.re * dm, kv.im * dm};
+      }
+      return s;
     }
-    return s;
-  }
+  } // namespace ndetail
 
 } // namespace numtracer::numeric

@@ -1,5 +1,5 @@
 /// @file numeric_driver.hpp
-/// @brief Render an @ref MPoly (a projector denominator `k²`, or any component expression) as a C++
+/// @brief Render an @ref Poly (a projector denominator `k²`, or any component expression) as a C++
 ///        expression in the user symbol names, for the generator's `FillFormulas` — the
 ///        `inv(atom) = 1/k²` and `var(k) = <name>` slots.
 ///
@@ -19,13 +19,13 @@
 
 namespace numtracer::inline numeric {
 
-/// @brief Render an @ref MPoly as a C++ expression in @p symNames (real coefficients only — used
+/// @brief Render an @ref Poly as a C++ expression in @p symNames (real coefficients only — used
 ///        for projector denominators `k²` and component expressions, which carry no imaginary part
 ///        and no inverse atoms). Powers are emitted as repeated multiplication.
-inline std::string mpoly_to_cpp(const MPoly &p, const std::vector<std::string> &symNames) {
+inline std::string poly_to_cpp(const Poly &p, const std::vector<std::string> &symNames) {
   if (p.terms.empty()) return codegen::emit_single() ? "0.f" : "0.0";
   if ((int)symNames.size() < p.nsym)
-    NT_THROW(std::runtime_error, "mpoly_to_cpp: symNames shorter than the polynomial's symbol count");
+    NT_THROW(std::runtime_error, "poly_to_cpp: symNames shorter than the polynomial's symbol count");
   std::ostringstream os;
   os.setf(std::ios::scientific);
   os.precision(17);
@@ -35,9 +35,9 @@ inline std::string mpoly_to_cpp(const MPoly &p, const std::vector<std::string> &
   bool first = true;
   for (const auto &[m, c] : p.terms) {
     if (std::abs(c.im) > kRealCoeffTol)
-      NT_THROW(std::runtime_error, "mpoly_to_cpp: complex coefficient where a real expression was expected");
+      NT_THROW(std::runtime_error, "poly_to_cpp: complex coefficient where a real expression was expected");
     if (!m.atoms.empty())
-      NT_THROW(std::runtime_error, "mpoly_to_cpp: monomial carries an inverse atom (not a plain expression)");
+      NT_THROW(std::runtime_error, "poly_to_cpp: monomial carries an inverse atom (not a plain expression)");
     const double v = c.re;
     if (!first) os << (v < 0 ? " - " : " + ");
     else if (v < 0) os << "-";

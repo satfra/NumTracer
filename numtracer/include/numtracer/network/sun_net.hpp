@@ -1,5 +1,5 @@
 /// @file sun_net.hpp
-/// @brief Numeric SU(N) colour/flavour-factor contraction for the **build-time generator** —
+/// @brief Numeric SU(N) factor contraction (any SU(N): colour, flavour, …) —
 ///        contracts a fully-contracted network of structure constants `f^{abc}`, adjoint deltas
 ///        `δ^{ab}`, fundamental generators `T^a` and fundamental deltas `δ^{ij}` to a single
 ///        (complex) number, at codegen time, so the kernel never instantiates an SU(N) tensor.
@@ -17,9 +17,10 @@
 /// to the typed path; for any other `N` it is built from the generalized-Gell-Mann construction
 /// (@ref sun_net_detail::build_oracle, also the oracle the tables are tested against).
 ///
-/// A network may carry **two independent groups at once** (e.g. colour SU(3) ⊗ flavour SU(2)).
-/// Each @ref SUNFac is tagged with its group's rank `g`; the two groups have disjoint label spaces,
-/// so the value factorises — @ref sun_value_cx contracts each group separately and multiplies.
+/// A network may carry several independent groups at once (e.g. colour SU(3) ⊗ flavour SU(2)).
+/// Each @ref SUNFac is tagged with its group's rank `g` and the @ref SUN object that built it; groups
+/// have disjoint label spaces, so the value factorises — @ref sun_value contracts each group
+/// separately and multiplies.
 #pragma once
 
 #include "numtracer/core/export.hpp" // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
@@ -29,6 +30,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <complex>
 #include <map>
@@ -36,6 +38,7 @@
 #include <set>
 #include <stdexcept>
 #include <string> // the open-leg guard's diagnostic (assert_no_open_labels)
+#include <utility>
 #include <vector>
 
 namespace numtracer::inline network {
@@ -51,7 +54,7 @@ enum class SUNFacKind : int {
   DiagAdj = 5,   ///< `diag_adj(a,b;dr)` (adjoint group-diagonal dressing)
 };
 
-/// @brief An SU(N) colour/flavour-network factor.
+/// @brief One factor of an SU(N) network.
 ///
 /// `kind` selects the structure; `g` is the group rank (e.g. 3 = SU(3) colour, 2 = SU(2) flavour),
 /// so one network can mix groups. The index fields carry adjoint (extent `N²−1`) or fundamental
@@ -76,11 +79,12 @@ struct SUNFac {
   int g;        ///< group rank `N` (3 colour, 2 flavour, …)
   int a, b, c;  ///< adjoint/fundamental index labels (see the kind table above; `c` only for `F` and `T`)
   std::vector<int> comp2dr; ///< `DiagFund`/`DiagAdj` only: per-component dressing-id (`-1` = drop); empty otherwise
+  int group = 0; ///< the @ref SUN object that made it: factors of different groups never contract
 
   /// Whether `c` is a label: only `f^{abc}` and `T^a_{ij}` carry a third one; every other kind leaves it at -1.
   bool has_c() const { return kind == SUNFacKind::F || kind == SUNFacKind::T; }
 };
-/// @brief A fully-contracted SU(N) colour/flavour network (every label appears exactly twice).
+/// @brief A fully-contracted SU(N) network (every label appears exactly twice).
 using SUNNet = std::vector<SUNFac>;
 
 /// @brief One monomial of a dressed SU(N) value: a constant times a product of named dressing symbols.
@@ -97,44 +101,116 @@ struct SUNTerm {
 ///        dressing symbols). With no `DiagFund`/`DiagAdj` factor it is a single constant term.
 using SUNPoly = std::vector<SUNTerm>;
 
-/// @brief Builders for SU(N) colour/flavour-network factors.
-///
-/// Each returns one @ref SUNFac tagged with its group rank `g` (e.g. `3` colour, `2` flavour);
-/// assemble them into a @ref SUNNet and contract with @ref sun_value_cx. The names mirror the
-/// algebra: `f` (structure constant), `deltaAdj`/`deltaFund` (adjoint/fundamental Kronecker),
-/// `T` (fundamental generator).
-namespace SUN {
-inline SUNFac f(int g, int a, int b, int c) { return {SUNFacKind::F, g, a, b, c, {}}; }   ///< structure constant `f^{abc}`
-inline SUNFac deltaAdj(int g, int a, int b) { return {SUNFacKind::DeltaAdj, g, a, b, -1, {}}; }  ///< adjoint Kronecker `δ^{ab}`
-inline SUNFac T(int g, int a, int i, int j) { return {SUNFacKind::T, g, a, i, j, {}}; }   ///< fundamental generator `(T^a)_{ij}`
-inline SUNFac deltaFund(int g, int i, int j) { return {SUNFacKind::DeltaFund, g, i, j, -1, {}}; } ///< fundamental Kronecker `δ^{ij}`
-/// fundamental diagonal dressing: `δ^{ij}` carrying a per-component dressing map (component → id, `-1` = drop).
-inline SUNFac diagFund(int g, int i, int j, std::vector<int> comp2dr) { return {SUNFacKind::DiagFund, g, i, j, -1, std::move(comp2dr)}; }
-/// adjoint diagonal dressing: `δ^{ab}` carrying a per-component dressing map (component → id, `-1` = drop).
-inline SUNFac diagAdj(int g, int a, int b, std::vector<int> comp2dr) { return {SUNFacKind::DiagAdj, g, a, b, -1, std::move(comp2dr)}; }
-} // namespace SUN
+/// @brief An adjoint SU(N) index label (`a` in `f^{abc}`, `T^a`). Get fresh ones from
+///        @ref SUN::adjoint; the `explicit` integer constructor is for generated code.
+struct AdjIndex {
+  int id;
+  int group = 0; ///< the @ref SUN that issued it (0: unchecked)
+  constexpr explicit AdjIndex(int i, int grp = 0) : id(i), group(grp) {}
+};
+/// @brief A fundamental SU(N) index label (`i`, `j` in `T^a_{ij}`). Get fresh ones from
+///        @ref SUN::fundamental. A distinct type from @ref AdjIndex, so the two cannot be swapped.
+struct FundIndex {
+  int id;
+  int group = 0; ///< the @ref SUN that issued it (0: unchecked)
+  constexpr explicit FundIndex(int i, int grp = 0) : id(i), group(grp) {}
+};
 
-/// @brief A factory that binds the SU(N) group rank `g` once and mints @ref SUNFac factors without
-///        repeating it at every call — the colour/flavour analogue of @ref numtracer::numeric::LorentzEnv
-///        (which binds `nsym`). Named `SUNEnv` rather than "ColourEnv" because SU(N) also carries flavour;
-///        a single kernel may mix ranks (e.g. colour SU(3) ⊗ flavour SU(2)), so instantiate one `SUNEnv`
-///        per rank. Thin ergonomic wrapper over the `SUN::` builders (which stay public), so it needs no
-///        friendship. `sun_value_cx`/`sun_value_dressed` take a fully-built @ref SUNNet and are unchanged.
-class SUNEnv {
+/// @brief An SU(N) group — colour, flavour, or any other — that hands out its index labels and
+///        builds its factors.
+///
+/// ```cpp
+/// nt::SUN su3(3);
+/// auto [a, b, c] = su3.adjoint<3>();
+/// auto [i, j]    = su3.fundamental<2>();
+/// Cx CFN = su3.value(su3.T(a, i, j) * su3.T(a, j, i));   // tr(T^a T^a) = (N^2 - 1)/2 = 4
+/// ```
+///
+/// Labels are typed: an adjoint label in a fundamental slot does not compile. Each `SUN` object is
+/// its own group, so a net may mix several (colour SU(3) ⊗ flavour SU(2), or even two SU(3)s); their
+/// labels never contract with each other, and using one group's label in another's factor throws.
+/// The value of such a net is the product of the per-group values (@ref sun_value).
+class SUN {
 public:
-  explicit SUNEnv(int g) : g_(g) {}
+  explicit SUN(int rank) : g_(rank), uid_(next_uid()) {}
+  SUN(const SUN &) = delete; // a copy would hand out the same labels twice
+  SUN &operator=(const SUN &) = delete;
   int rank() const { return g_; }
 
-  SUNFac f(int a, int b, int c) const { return SUN::f(g_, a, b, c); }
-  SUNFac deltaAdj(int a, int b) const { return SUN::deltaAdj(g_, a, b); }
-  SUNFac T(int a, int i, int j) const { return SUN::T(g_, a, i, j); }
-  SUNFac deltaFund(int i, int j) const { return SUN::deltaFund(g_, i, j); }
-  SUNFac diagFund(int i, int j, std::vector<int> comp2dr) const { return SUN::diagFund(g_, i, j, std::move(comp2dr)); }
-  SUNFac diagAdj(int a, int b, std::vector<int> comp2dr) const { return SUN::diagAdj(g_, a, b, std::move(comp2dr)); }
+  /// @p N fresh adjoint labels: `auto [a, b] = su3.adjoint<2>();`.
+  template <int N> std::array<AdjIndex, N> adjoint() { return fresh<AdjIndex, N>(); }
+  /// @p N fresh fundamental labels: `auto [i, j] = su3.fundamental<2>();`.
+  template <int N> std::array<FundIndex, N> fundamental() { return fresh<FundIndex, N>(); }
+
+  /// The structure constant `f^{abc}`.
+  SUNFac f(AdjIndex a, AdjIndex b, AdjIndex c) const { return make(SUNFacKind::F, own(a), own(b), own(c)); }
+  /// The generator `(T^a)_{ij}` (normalised `tr(T^a T^b) = δ^{ab}/2`).
+  SUNFac T(AdjIndex a, FundIndex i, FundIndex j) const { return make(SUNFacKind::T, own(a), own(i), own(j)); }
+  /// The adjoint Kronecker `δ^{ab}`.
+  SUNFac delta(AdjIndex a, AdjIndex b) const { return make(SUNFacKind::DeltaAdj, own(a), own(b), -1); }
+  /// The fundamental Kronecker `δ_{ij}`.
+  SUNFac delta(FundIndex i, FundIndex j) const { return make(SUNFacKind::DeltaFund, own(i), own(j), -1); }
+  /// A fundamental `δ_{ij}` carrying a per-component dressing (component → dressing id, `-1` = drop).
+  SUNFac diag(FundIndex i, FundIndex j, std::vector<int> comp2dr) const
+  {
+    SUNFac r = make(SUNFacKind::DiagFund, own(i), own(j), -1);
+    r.comp2dr = std::move(comp2dr);
+    return r;
+  }
+  /// An adjoint `δ^{ab}` carrying a per-component dressing (component → dressing id, `-1` = drop).
+  SUNFac diag(AdjIndex a, AdjIndex b, std::vector<int> comp2dr) const
+  {
+    SUNFac r = make(SUNFacKind::DiagAdj, own(a), own(b), -1);
+    r.comp2dr = std::move(comp2dr);
+    return r;
+  }
+
+  /// The value of a closed network of THIS group's factors (exact; complex in general).
+  Cx value(const SUNNet &net) const;
 
 private:
-  int g_; ///< group rank `N` (3 colour, 2 flavour, …)
+  int g_;   ///< group rank `N`
+  int uid_; ///< this group's identity, carried by its factors and labels
+  int next_ = 0; ///< next fresh label
+
+  static int next_uid()
+  {
+    static std::atomic<int> n{0};
+    return ++n;
+  }
+  template <class L, int N> std::array<L, N> fresh()
+  {
+    std::array<L, N> r = make_fresh<L, N>(std::make_integer_sequence<int, N>{});
+    next_ += N;
+    return r;
+  }
+  template <class L, int N, int... I> std::array<L, N> make_fresh(std::integer_sequence<int, I...>) const
+  {
+    return {L{next_ + I, uid_}...};
+  }
+  template <class L> int own(L x) const
+  {
+    if (x.group != 0 && x.group != uid_)
+      NT_THROW(std::invalid_argument, ("SUN: SU(" + std::to_string(g_) + ") factor built with a label (" +
+                                       std::to_string(x.id) + ") issued by a different SU(N) group")
+                                          .c_str());
+    return x.id;
+  }
+  SUNFac make(SUNFacKind k, int a, int b, int c) const { return {k, g_, a, b, c, {}, uid_}; }
 };
+
+/// @brief `x * y`: the product of SU(N) factors / networks (concatenation).
+inline SUNNet operator*(const SUNFac &x, const SUNFac &y) { return {x, y}; }
+inline SUNNet operator*(SUNNet x, const SUNFac &y)
+{
+  x.push_back(y);
+  return x;
+}
+inline SUNNet operator*(SUNNet x, const SUNNet &y)
+{
+  x.insert(x.end(), y.begin(), y.end());
+  return x;
+}
 
 // The whole SU(N) contraction machinery (dynamic matrices, generator/f-table build+cache, group
 // contraction) is internal to the generator: its bodies compile only in the library TU (or a
@@ -285,7 +361,8 @@ inline const SUNDyn &sun_data_for(int N) {
   return it->second;
 }
 
-/// @brief Reject an OPEN (once-occurring) colour/flavour label before it is silently closed away.
+/// @brief Reject an OPEN (once-occurring) SU(N) label, or one used in both sectors, before it is
+///        silently closed away.
 ///
 /// The adjoint sector has the same hazard as the Lorentz one (see
 /// @ref numtracer::numeric::ndetail::assert_no_open_ids), by two different mechanisms:
@@ -297,22 +374,44 @@ inline const SUNDyn &sun_data_for(int N) {
 /// fundamental `δ` line with a free end would close to `N` just like the adjoint case.
 ///
 /// Counting occurrences here — before the union-find, which is what destroys the evidence — catches all
-/// of them uniformly. Labels are counted per group (@ref sun_value_cx already partitions by rank, and
+/// of them uniformly. Labels are counted per group (@ref sun_value already partitions by rank, and
 /// each group owns a disjoint label space), a label used twice within one factor (`δ^{aa}`, a legal
 /// closed loop) counts 2 and passes, and counts ≥ 3 are left alone so no valid net changes value.
 inline void assert_no_open_labels(int N, const std::vector<const SUNFac *> &net) {
   std::map<int, int> cnt; // label -> occurrences (nets are small; the map keeps the report ordered)
+  // label -> the sector its slots put it in: 1 adjoint, 2 fundamental, 3 both (an error)
+  std::map<int, int> sector;
+  const auto use = [&](int lbl, bool adjoint) {
+    if (lbl < 0)
+      NT_THROW(std::runtime_error, ("sun_net: SU(" + std::to_string(N) + ") index label " + std::to_string(lbl) +
+                                    " is negative; labels are non-negative integers")
+                                       .c_str());
+    ++cnt[lbl];
+    sector[lbl] |= adjoint ? 1 : 2;
+  };
   for (const SUNFac *f : net) {
-    ++cnt[f->a];
-    ++cnt[f->b];
-    if (f->has_c()) ++cnt[f->c];
+    switch (f->kind) {
+    case SUNFacKind::T: use(f->a, true); use(f->b, false); use(f->c, false); break;
+    case SUNFacKind::F: use(f->a, true); use(f->b, true); use(f->c, true); break;
+    case SUNFacKind::DeltaAdj:
+    case SUNFacKind::DiagAdj: use(f->a, true); use(f->b, true); break;
+    case SUNFacKind::DeltaFund:
+    case SUNFacKind::DiagFund: use(f->a, false); use(f->b, false); break;
+    }
   }
+  for (const auto &[lbl, sec] : sector)
+    if (sec == 3)
+      NT_THROW(std::runtime_error,
+               ("sun_net: SU(" + std::to_string(N) + ") index label " + std::to_string(lbl) +
+                " is used both as an ADJOINT index (extent N^2-1) and as a FUNDAMENTAL index (extent N). "
+                "Every label belongs to one of the two.")
+                   .c_str());
   for (const auto &[lbl, n] : cnt)
     if (n == 1) {
       const std::string msg =
           "sun_net: SU(" + std::to_string(N) + ") index label " + std::to_string(lbl) +
-          " is OPEN (occurs once) — the colour/flavour net does not close to a scalar. Tie the leg off "
-          "(a δ, an f, a generator trace, or a colour projector). (Contracting an open leg would "
+          " is OPEN (occurs once) — the SU(N) net does not close to a scalar. Tie the leg off "
+          "(a δ, an f, a generator trace, or a projector). (Contracting an open leg would "
           "silently sum or δ-close it and return a meaningless number.)";
       NT_THROW(std::runtime_error, msg.c_str());
     }
@@ -684,7 +783,7 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
   // a δ OR a diagonal-dressing identifies its two indices; the dressings are recorded per class
   const GroupClasses g = classify(net, /*withDiag=*/true);
   // empty net: no factor ⇒ constant-1 polynomial. In practice unreachable — sun_value_dressed routes
-  // non-diagonal nets to sun_value_cx — but kept symmetric with contract_group.
+  // non-diagonal nets to sun_value — but kept symmetric with contract_group.
   if (g.empty) return SUNPoly{SUNTerm{Cx{1.0, 0.0}, {}}};
   // A per-component fundamental dressing on a generator line is NOT handled here: it stays on the
   // cycle and is folded by loop_poly_dressed below. The closed-loop pass just has to leave it alone
@@ -769,50 +868,61 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
 #endif // NUMTRACER_DEFINE_BODIES
 
 // Public SU(N) entry points: declared always, defined once (library TU / header-only build).
-NUMTRACER_FUNC Cx sun_value_cx(const SUNNet &net);
+NUMTRACER_FUNC Cx sun_value(const SUNNet &net);
 NUMTRACER_FUNC SUNPoly sun_value_dressed(const SUNNet &net);
 
+/// @brief The value of @p net, which must consist of this group's factors only.
+inline Cx SUN::value(const SUNNet &net) const {
+  for (const SUNFac &f : net)
+    if (f.group != uid_)
+      NT_THROW(std::invalid_argument, "SUN::value: the network contains a factor of another SU(N) group; "
+                                      "use sun_value(net) for a network mixing groups");
+  return sun_value(net);
+}
+
 #if NUMTRACER_DEFINE_BODIES
-/// @brief Contract a (possibly two-group) SU(N) colour/flavour network to its complex scalar value.
+namespace sun_net_detail {
+/// The factors of @p net split by group (rank, then issuing @ref SUN), ascending — so a net with one
+/// group per rank multiplies its per-group values in rank order, as it always has.
+inline std::vector<std::pair<int, std::vector<const SUNFac *>>> split_groups(const SUNNet &net) {
+  std::map<std::pair<int, int>, std::vector<const SUNFac *>> byGroup;
+  for (const SUNFac &f : net) byGroup[{f.g, f.group}].push_back(&f);
+  std::vector<std::pair<int, std::vector<const SUNFac *>>> out;
+  out.reserve(byGroup.size());
+  for (auto &[key, facs] : byGroup) out.push_back({key.first, std::move(facs)});
+  return out;
+}
+} // namespace sun_net_detail
+
+/// @brief Contract an SU(N) network to its complex scalar value.
 ///
-/// The factors are partitioned by their group rank `g`; each group has a disjoint label space, so
-/// the value is the product of the per-group contractions. An empty network is the identity (value 1).
-/// Works for any rank `g ≥ 1` (@ref sun_net_detail::contract_group builds the SU(g) data on demand).
-NUMTRACER_FUNC Cx sun_value_cx(const SUNNet &net) {
-  std::set<int> groups;
-  for (const SUNFac &f : net) groups.insert(f.g);
+/// The factors are partitioned by group (rank and the issuing @ref SUN); groups have disjoint label
+/// spaces, so the value is the product of the per-group contractions. An empty network is the
+/// identity (value 1). Works for any rank `N ≥ 1` (@ref sun_net_detail::contract_group builds the
+/// SU(N) data on demand).
+NUMTRACER_FUNC Cx sun_value(const SUNNet &net) {
   Cx r{1.0, 0.0};
-  for (int g : groups) {
-    std::vector<const SUNFac *> sub;
-    for (const SUNFac &f : net)
-      if (f.g == g) sub.push_back(&f);
+  for (const auto &[g, sub] : sun_net_detail::split_groups(net))
     r = r * sun_net_detail::contract_group(g, sub);
-  }
   return r;
 }
 
-/// @brief Contract a (possibly two-group) SU(N) network carrying **group-diagonal dressings** to a
+/// @brief Contract an SU(N) network carrying **group-diagonal dressings** to a
 ///        @ref SUNPoly — `Σ_t coeff_t · Π D^{dr}`.
 ///
-/// If the net carries no `DiagFund`/`DiagAdj` (diagonal-dressing) factor this returns the single constant term
-/// `{sun_value_cx(net), {}}` — *byte-identical* to the undressed fold, so existing flows are
-/// unaffected. Otherwise each group is contracted with @ref sun_net_detail::contract_group_dressed
-/// and the per-group polynomials are multiplied (disjoint label spaces, so the value factorises).
+/// If the net carries no `DiagFund`/`DiagAdj` (diagonal-dressing) factor this returns the single
+/// constant term `{sun_value(net), {}}` — *byte-identical* to the undressed fold. Otherwise each group
+/// is contracted with @ref sun_net_detail::contract_group_dressed and the per-group polynomials are
+/// multiplied (disjoint label spaces, so the value factorises).
 NUMTRACER_FUNC SUNPoly sun_value_dressed(const SUNNet &net) {
   bool hasDiag = false;
   for (const SUNFac &f : net)
     if (f.kind == SUNFacKind::DiagFund || f.kind == SUNFacKind::DiagAdj) { hasDiag = true; break; }
-  if (!hasDiag) return SUNPoly{SUNTerm{sun_value_cx(net), {}}};
+  if (!hasDiag) return SUNPoly{SUNTerm{sun_value(net), {}}};
 
-  std::set<int> groups;
-  for (const SUNFac &f : net) groups.insert(f.g);
   SUNPoly r{SUNTerm{Cx{1.0, 0.0}, {}}};
-  for (int g : groups) {
-    std::vector<const SUNFac *> sub;
-    for (const SUNFac &f : net)
-      if (f.g == g) sub.push_back(&f);
+  for (const auto &[g, sub] : sun_net_detail::split_groups(net))
     r = sun_net_detail::poly_mul(r, sun_net_detail::contract_group_dressed(g, sub));
-  }
   return r;
 }
 #endif // NUMTRACER_DEFINE_BODIES

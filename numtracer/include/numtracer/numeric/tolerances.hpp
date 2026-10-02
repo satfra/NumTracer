@@ -18,7 +18,7 @@ namespace numtracer::inline numeric
   ///        polynomial already carries round-off up to the prune threshold.
   inline constexpr double kPolyDivRelTol = kNoisePruneRelTol;
 
-  /// @brief Absolute tolerance below which an SU(N) colour/flavour factor component snaps to 0.
+  /// @brief Absolute tolerance below which an SU(N) factor component snaps to 0.
   ///        These factors are exact rationals (× generator traces), so anything this small is the
   ///        √3 round-off the generator-table arithmetic leaves behind, well below any genuine value.
   inline constexpr double kZeroSnapTol = 1e-9;

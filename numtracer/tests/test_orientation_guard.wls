@@ -58,7 +58,7 @@ check["anomalous (mixed) loop marks exactly the backward factors",
   {False, True, False, True}];
 
 (* --- D. A COLLECTED token traversed backwards is marked too. It emits `dtrslot(k)` rather than
-   `dtr(...)`: a slot is a sum of chains, and (A1..An)^T = An^T..A1^T, so the reversal happens at the
+   `transposed(...)`: a slot is a sum of chains, and (A1..An)^T = An^T..A1^T, so the reversal happens at the
    C++ dress_enumerate splice. The transpose rides the slot REFERENCE, not the slot, so the
    $dslCache key is unchanged. ------------------------------------------------------------------ *)
 (* ntDressedNum has no ::usage, so it lives in NumTracer`Private` and must be qualified — an
@@ -71,15 +71,15 @@ check["reversed collected slot is marked",
 
 (* --- D2. The EMITTED spelling of D. A dressed chain is a std::vector<DChainTok>: each fixed token is
    a DFac wrapped in dtfix(...), and dtr takes and returns a DFac, so a backward fixed token must read
-   dtfix(dtr(DFac)). The reverse nesting, dtr(dtfix(...)), does not compile. --------------------- *)
+   dtfix(transposed(DFac)). The reverse nesting, transposed(dtfix(...)), does not compile. --------------------- *)
 NumTracer`Private`$ctCache = <||>;
-check["dressed chain spells a backward fixed token dtfix(dtr(...))",
+check["dressed chain spells a backward fixed token dtfix(transposed(...))",
   CheckAbort[First @ First @ NumTracer`Private`compileDirac[
       {ntDeltaDirac[e1, e2], NumTracer`Private`ntDressedNum[{{1, {"ident"}}}, e3, e2],
        ntGamma[b1, e1, e3], ntVec[qq, b1]},
       <|b1 -> 0, e1 -> 100, e2 -> 101, e3 -> 102|>,
       <|qq -> <|"Base" -> 0, "Inv" -> None, "InvS" -> None|>|>, 15], "ABORTED"],
-  "std::vector<DChainTok>{dtrslot(0), dtfix(dtr(dslash({{1.0,0}})))}"];
+  "std::vector<DChainTok>{dtrslot(0), dtfix(transposed(slash(Momentum{{{1.0,0}}})))}"];
 
 (* --- E. The same defect one level down, in a COLLECTED Dirac slot. A slot is an OPEN chain
    din->dout whose tokens are spliced into the surrounding loop IN CHAIN ORDER, so it needs exactly

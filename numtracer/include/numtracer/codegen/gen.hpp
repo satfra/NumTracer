@@ -18,7 +18,7 @@
 #include "numtracer/core/intern_table.hpp"
 #include "numtracer/codegen/lower.hpp"
 #include "numtracer/codegen/precision.hpp" // float vs double emission
-#include "numtracer/network/network.hpp" // NetVal / Elem / GenProg
+#include "numtracer/network/network.hpp" // LorentzNet / LorentzFactor / GenProg
 
 #include <climits>
 #include <cstdint> // SIZE_MAX (the NT_GEN_NOINLINE_MIN "off" sentinel)
@@ -97,7 +97,7 @@ namespace numtracer::inline network
   };
 
   // Lowering internals (the Horner ordering sweep), ODR-used only via to_genprog (the library TU).
-  // The monomials arrive in MPoly's sorted order, so the emitted program (env-id layout, Horner pivots,
+  // The monomials arrive in Poly's sorted order, so the emitted program (env-id layout, Horner pivots,
   // op count) depends only on the polynomial as a SET, not on the order the reduction produced it in.
 #if NUMTRACER_DEFINE_BODIES
   namespace gdetail

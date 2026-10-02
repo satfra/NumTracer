@@ -11,7 +11,7 @@
    taken and `reduce_units` collapses sin^2 -> 1-cos^2 and the bare-loop denominator to l1^2. A flow
    whose externals are parametrised by shape coordinates (here S0,S1,SPhi — the with_mesons
    lambda1L3D class) falls off that path, and before this fixture NOTHING in the suite covered what
-   happens there: minted radical symbols (ntSin$/ntRad$), a wider MPoly symbol space, momentum bases
+   happens there: minted radical symbols (ntSin$/ntRad$), a wider Poly symbol space, momentum bases
    appearing in exact +/- pairs, and dressed+complex traces of real size. Those are exactly the
    mechanisms the frame/sign levers work on, so they need a guard.
 

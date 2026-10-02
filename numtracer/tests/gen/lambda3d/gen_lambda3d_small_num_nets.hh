@@ -4,15 +4,14 @@
 #include "numtracer/network/dirac.hpp"
 #include <vector>
 #include "numtracer/numeric/numeric_contract.hpp"
-using namespace numtracer::network;
-using namespace numtracer::numeric;
-const NetVal& lc0();
-const NetVal& lc1();
-const NetVal& lc2();
-const NetVal& lc3();
-const NetVal& lc4();
-std::vector<DiracNet> sdn0();
-std::vector<NetVal> sln0();
+using namespace numtracer;
+const LorentzNet& lc0();
+const LorentzNet& lc1();
+const LorentzNet& lc2();
+const LorentzNet& lc3();
+const LorentzNet& lc4();
+std::vector<DiracChain> sdn0();
+std::vector<LorentzNet> sln0();
 std::vector<std::vector<DChainTok>> chp0();
 std::vector<int> sdchR0();
 std::vector<DSlotOpt> optp0();

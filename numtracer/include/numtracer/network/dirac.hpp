@@ -1,22 +1,22 @@
 /// @file dirac.hpp
-/// @brief The closed gamma-chain tokens (@ref DFac / @ref DiracNet) the generator builds, plus
+/// @brief The closed gamma-chain tokens (@ref DFac / @ref DiracChain) the generator builds, plus
 ///        `dirac_value`, a Wick-pairing trace used as a TEST ORACLE.
 ///
 /// The production trace is `numeric_dirac` (numeric/numeric_contract.hpp): it multiplies the chain
 /// as 4×4 Weyl-block matrices of polynomials and handles every token kind. `dirac_value` instead
-/// folds a FREE/SLASH-only chain into a Lorentz @ref NetVal (metrics / vectors over the free legs)
+/// folds a FREE/SLASH-only chain into a Lorentz @ref LorentzNet (metrics / vectors over the free legs)
 /// by the Wick pairing recursion — an independent algorithm that tests/test_numeric_contract.cpp
 /// grades `numeric_dirac` against. It refuses every token kind it cannot trace.
 ///
 /// A chain is a list of trace-ordered tokens (already cyclically closed by the front-end's
 /// `orderDiracFacs`, mathematica/CodegenNets.m): each is either a FREE gluon leg `γ^μ` (an open
 /// Lorentz id `mu`, contracts the projector later), a SLASHED propagator `γ·p` (the momentum
-/// `p = Σ coeff·fund(vid)` as a `vlc`, mirroring @ref Elem's vector linear combination), or a γ5
+/// `p = Σ coeff·fund(vid)` as a `vlc`, mirroring @ref LorentzFactor's vector linear combination), or a γ5
 /// marker.
 ///
 /// The trace is the standard Wick pairing recursion
 ///   tr(t1 … t_{2n}) = Σ_{j≥2} (−1)^j  g(t1,t_j)  tr(t1 … t̂_j … t_{2n}),
-/// with `g(free μa, free μb)=δ` → @ref met, `g(free μ, slash p)=p^μ` → @ref vec, and
+/// with `g(free μa, free μb)=δ` → @ref metric, `g(free μ, slash p)=p^μ` → @ref vec, and
 /// `g(slash p, slash q)=p·q` emitted as two @ref vec leaves on a **fresh** internal Lorentz label so
 /// the numeric contraction sums the two-vector index class into one scalar product. The overall `tr(1)=4` is
 /// folded into the coefficient. An odd number of gammas traces to 0.
@@ -30,17 +30,18 @@
 namespace numtracer::inline network
 {
 
-  /// @brief One token of a closed, trace-ordered gamma chain.
-  ///   - `dgamma(mu)`  : free gluon leg γ^μ — `mu` is the OPEN Lorentz id (contracts the projector)
-  ///   - `dslash(vlc)`: slashed/dressed propagator γ·p, `p = Σ coeff·fund(vid)` (mirrors @ref Elem::vlc)
-  ///   - `dg5()`      : γ5 marker (chiral trace → Levi-Civita; staged separately)
-  ///   - `dcomm(...)` : the BARE commutator `[A,B] = A·B − B·A` of two gammas as ONE chain token.
-  ///                           Each leg A,B is independently a FREE leg (open Lorentz id) or a SLASH
-  ///                           (momentum lin. comb.). This is the quark-gluon-vertex struct-7 tensor: it
-  ///                           keeps the antisymmetric γ-pair folded so the commutator is never
-  ///                           distributed into two separate traces. The σ^{μν}=(i/2)[γ^μ,γ^ν]
-  ///                           normalization (the i/2 and any sign) lives in the emitted SCALAR, not the
-  ///                           token — the front-end's Plus is already a bare bracket.
+  /// @brief One token of a closed, trace-ordered gamma chain (a @ref DiracChain).
+  ///   - `gamma(mu)`  : a free γ^μ — `mu` is an OPEN Lorentz index, contracted by the Lorentz network
+  ///   - `slash(k)`   : a slashed momentum γ·k
+  ///   - `gamma5()`   : γ5 (chiral trace → Levi-Civita)
+  ///   - `chargeC()`  : the charge-conjugation matrix C
+  ///   - `comm(A, B)` : the BARE commutator `[A,B] = A·B − B·A` of two gammas as ONE chain token.
+  ///                    Each leg is a free γ (open index) or a slashed momentum. It keeps the
+  ///                    antisymmetric γ-pair folded so the commutator is never distributed into two
+  ///                    separate traces. The σ^{μν}=(i/2)[γ^μ,γ^ν] normalization (the i/2 and any
+  ///                    sign) lives in the scalar coefficient, not the token.
+  ///   - `loop_sep()` : separates two independent spinor loops in one chain
+  ///   - `transposed(t)` : the transpose of token `t`
   // Members are non-const so DFac stays movable in the std::vector chains it lives in (const members
   // would delete move-assignment and force the vlc vectors to be copied on every reallocation). The
   // builder functions below are the only constructors, so the values are still effectively immutable.
@@ -49,8 +50,7 @@ namespace numtracer::inline network
     Kind kind = Gamma;
     // Field docs name the VARIANT, never its enum ordinal: ordinals shift whenever `Kind` grows.
     int mu = -1; ///< Gamma: open Lorentz id. Comm: leg-A FREE id (-1 ⇒ leg-A is a slash, use `vlc`)
-    std::vector<std::pair<double, int>>
-        vlc;     ///< Slash: the momentum lin. comb. Comm: leg-A slash momentum (when mu < 0)
+    Vlc vlc;     ///< Slash: the momentum lin. comb. Comm: leg-A slash momentum (when mu < 0)
     int nu = -1; ///< Comm: leg-B FREE id (-1 ⇒ leg-B is a slash, use `vlc2`)
     /// @brief Multiply this factor's TRANSPOSE instead of the factor itself.
     ///
@@ -64,19 +64,22 @@ namespace numtracer::inline network
     /// Placed HERE, between `nu` and `vlc2`, so it lands in existing padding: sizeof(DFac) stays 64
     /// (72 at the end cost +1.4% instructions in the fold).
     bool transposed = false;
-    std::vector<std::pair<double, int>> vlc2; ///< Comm: leg-B slash momentum (when nu < 0)
+    Vlc vlc2; ///< Comm: leg-B slash momentum (when nu < 0)
   };
   /// @brief A closed gamma chain in trace order (loop closes implicitly).
-  using DiracNet = std::vector<DFac>;
+  using DiracChain = std::vector<DFac>;
 
-  inline DFac dgamma(int muId) { return {DFac::Gamma, muId, {}, -1, false, {}}; } ///< free gluon leg γ^μ
-  /// @brief Boundary between two INDEPENDENT closed spinor loops in one component (e.g. a quark loop
-  ///        and the projection-closed external line, tied together only by gluon propagators). The
-  ///        contraction traces each loop separately and multiplies the resulting Lorentz tensors,
-  ///        contracting their shared gluon legs via the Lorentz net — NOT a Wick pairing across loops.
-  inline DFac dloopsep() { return {DFac::LoopSep, -1, {}, -1, false, {}}; }
-  inline DFac dslash(std::vector<std::pair<double, int>> vlc) { return {DFac::Slash, -1, std::move(vlc), -1, false, {}}; } ///< γ·p
-  inline DFac dg5() { return {DFac::Gamma5, -1, {}, -1, false, {}}; }                                                      ///< γ5
+  /// @brief A free γ^μ: its Lorentz index stays open until the Lorentz network contracts it.
+  inline DFac gamma(LorentzIndex mu) { return {DFac::Gamma, mu.id, {}, -1, false, {}}; }
+  /// @brief Boundary between two INDEPENDENT closed spinor loops in one chain (e.g. a quark loop
+  ///        and the projection-closed external line, tied together only by gluon propagators). Each
+  ///        loop is traced separately and the resulting Lorentz tensors are contracted through the
+  ///        Lorentz network — NOT a Wick pairing across loops.
+  inline DFac loop_sep() { return {DFac::LoopSep, -1, {}, -1, false, {}}; }
+  /// @brief A slashed momentum `k̸ = γ·k`.
+  inline DFac slash(Momentum k) { return {DFac::Slash, -1, std::move(k.lc), -1, false, {}}; }
+  /// @brief γ5 (chiral trace → Levi-Civita).
+  inline DFac gamma5() { return {DFac::Gamma5, -1, {}, -1, false, {}}; }
   /// @brief The charge-conjugation matrix @f$C=\gamma^2\gamma^4@f$ as a chain token.
   ///
   /// Like γ5 it is block-DIAGONAL in the Weyl split, so it does NOT flip the antidiagonal trace
@@ -87,57 +90,47 @@ namespace numtracer::inline network
   /// A `C` reaching the engine means the front end chose to KEEP it rather than fold it away; see
   /// the charge-conjugation rewrite in `CodegenNets.m`. Both are legal — the folded form is production,
   /// the token form is the oracle they are graded against.
-  inline DFac dc() { return {DFac::C, -1, {}, -1, false, {}}; }
+  inline DFac chargeC() { return {DFac::C, -1, {}, -1, false, {}}; }
 
-  /// @brief The transpose of a chain token: `dtr(dgamma(3))`, `dtr(dslash(...))`, …
+  /// @brief The transpose of a chain token: `transposed(gamma(mu))`, `transposed(slash(k))`, …
   ///
   /// Composes with every builder above rather than doubling them. In the Weyl block split a
   /// transpose is cheap and exact: a block-ANTIdiagonal factor (γ, slash) transposes by swapping its
   /// P and Q blocks and transposing each 2×2; a block-DIAGONAL one (γ5, C, σ) transposes its two
   /// diagonal blocks in place. Special cases the engine exploits: @f$\gamma_5^T=\gamma_5@f$ is a
   /// no-op and @f$C^T=-C@f$ is a sign flip.
-  inline DFac dtr(DFac d)
+  inline DFac transposed(DFac d)
   {
     d.transposed = !d.transposed;
     return d;
   }
-  /// @brief bare commutator `[γ^μ, γ^ν] = γ^μγ^ν − γ^νγ^μ`, both legs FREE (open Lorentz ids μ,ν).
-  inline DFac dcomm(int muId, int nuId) { return {DFac::Comm, muId, {}, nuId, false, {}}; }
-  /// @brief bare commutator `[A̸, B̸]`, both legs SLASHED with momenta A,B (struct-7 external projector).
-  inline DFac dcomm_ss(std::vector<std::pair<double, int>> a, std::vector<std::pair<double, int>> b)
-  {
-    return {DFac::Comm, -1, std::move(a), -1, false, std::move(b)};
-  }
-  /// @brief bare commutator `[γ^μ, B̸]`, leg-A FREE (gluon id μ), leg-B SLASHED with momentum B (loop vertex σ^{μν}B_ν).
-  inline DFac dcomm_fs(int muId, std::vector<std::pair<double, int>> b)
-  {
-    return {DFac::Comm, muId, {}, -1, false, std::move(b)};
-  }
-  /// @brief bare commutator `[A̸, γ^ν]`, leg-A SLASHED with momentum A, leg-B FREE (gluon id ν).
-  inline DFac dcomm_sf(std::vector<std::pair<double, int>> a, int nuId)
-  {
-    return {DFac::Comm, -1, std::move(a), nuId, false, {}};
-  }
+  /// @brief The bare commutator `[A, B] = AB − BA` of two gammas, kept as ONE token. Each leg is a
+  ///        free `γ^μ` (a @ref LorentzIndex) or a slashed momentum (a @ref Momentum). The
+  ///        σ^{μν} = (i/2)[γ^μ,γ^ν] normalisation is NOT included.
+  inline DFac comm(LorentzIndex mu, LorentzIndex nu) { return {DFac::Comm, mu.id, {}, nu.id, false, {}}; }
+  inline DFac comm(Momentum a, Momentum b) { return {DFac::Comm, -1, std::move(a.lc), -1, false, std::move(b.lc)}; }
+  inline DFac comm(LorentzIndex mu, Momentum b) { return {DFac::Comm, mu.id, {}, -1, false, std::move(b.lc)}; }
+  inline DFac comm(Momentum a, LorentzIndex nu) { return {DFac::Comm, -1, std::move(a.lc), nu.id, false, {}}; }
 
   namespace dirac_detail
   {
 
     /// @brief A vector leg carrying a full momentum linear combination `vlc` on Lorentz index `lbl`.
-    inline NetVal vec_lc(int lbl, const std::vector<std::pair<double, int>> &vlc)
+    inline LorentzNet vec_lc(int lbl, const std::vector<std::pair<double, int>> &vlc)
     {
-      return {PTerm{Cx{1, 0}, {Elem{.kind = Elem::Vector, .a = lbl, .b = -1, .vid = -1, .inv = -1, .vlc = vlc}}}};
+      return {LorentzTerm{Cx{1, 0}, {LorentzFactor{.kind = LorentzFactor::Vector, .a = lbl, .b = -1, .vlc = vlc}}}};
     }
 
     /// @brief The pairing factor `g(a,b)` between two gamma tokens. Slash–slash uses a fresh shared
     ///        Lorentz label so the numeric contraction extracts the scalar product.
-    inline NetVal pair_factor(const DFac &a, const DFac &b, int &fresh)
+    inline LorentzNet pair_factor(const DFac &a, const DFac &b, int &fresh)
     {
       const bool af = (a.kind == DFac::Gamma), bf = (b.kind == DFac::Gamma);
-      if (af && bf) return met(a.mu, b.mu);    // δ^{μa μb}
+      if (af && bf) return metric(LorentzIndex{a.mu}, LorentzIndex{b.mu});    // δ^{μa μb}
       if (af && !bf) return vec_lc(a.mu, b.vlc); // p_b^{μa}
       if (!af && bf) return vec_lc(b.mu, a.vlc); // p_a^{μb}
       const int sharedLbl = fresh++;             // slash–slash → p_a · p_b (sum over a fresh shared index)
-      return contract(vec_lc(sharedLbl, a.vlc), vec_lc(sharedLbl, b.vlc));
+      return mul(vec_lc(sharedLbl, a.vlc), vec_lc(sharedLbl, b.vlc));
     }
 
     /// @brief Wick pairing recursion for a token list of FREE/SLASH gammas (no γ5). Returns the trace
@@ -146,31 +139,31 @@ namespace numtracer::inline network
     /// Pin the first token and pair it with each later token j: tr = Σ_{j≥1} (−1)^{j+1} g(t0,tj)·tr(rest),
     /// where `rest` is the chain with t0 and tj removed and g(·,·) is @ref pair_factor. Base case: the
     /// empty chain traces to 1 (= tr(1)/4).
-    inline NetVal trace_rec(const std::vector<DFac> &tokens, int &fresh)
+    inline LorentzNet trace_rec(const std::vector<DFac> &tokens, int &fresh)
     {
-      if (tokens.empty()) return {PTerm{Cx{1, 0}, {}}}; // empty trace: tr(1)/4 = 1 (tr(1)=4 applied by dirac_value)
-      NetVal acc;                                       // empty == 0
+      if (tokens.empty()) return {LorentzTerm{Cx{1, 0}, {}}}; // empty trace: tr(1)/4 = 1 (tr(1)=4 applied by dirac_value)
+      LorentzNet acc;                                       // empty == 0
       for (std::size_t j = 1; j < tokens.size(); ++j) {
         std::vector<DFac> rest;
         rest.reserve(tokens.size() - 2);
         for (std::size_t k = 1; k < tokens.size(); ++k)
           if (k != j) rest.push_back(tokens[k]);
         const double sgn = (j % 2 == 1) ? 1.0 : -1.0; // (−1)^{j+1}, 0-indexed (matches gammaTraceSum)
-        NetVal pairFac = pair_factor(tokens[0], tokens[j], fresh);
-        NetVal subTrace = trace_rec(rest, fresh);
-        acc = add(std::move(acc), scale(sgn, contract(pairFac, subTrace)));
+        LorentzNet pairFac = pair_factor(tokens[0], tokens[j], fresh);
+        LorentzNet subTrace = trace_rec(rest, fresh);
+        acc = add(std::move(acc), scale(sgn, mul(pairFac, subTrace)));
       }
       return acc;
     }
 
   } // namespace dirac_detail
 
-  /// @brief Contract a closed gamma chain into a Lorentz @ref NetVal over its free legs.
+  /// @brief Contract a closed gamma chain into a Lorentz @ref LorentzNet over its free legs.
   /// @param chain          the trace-ordered tokens (free legs / slashes only; anything else throws).
   /// @param firstFreeLabel a Lorentz id strictly above every label the surrounding component uses, so
   ///                       the fresh slash–slash labels never collide with the free legs / projector.
-  /// @return the trace as a `NetVal` (empty == structural zero, e.g. an odd gamma count).
-  inline NetVal dirac_value(const DiracNet &chain, int firstFreeLabel)
+  /// @return the trace as a `LorentzNet` (empty == structural zero, e.g. an odd gamma count).
+  inline LorentzNet dirac_value(const DiracChain &chain, int firstFreeLabel)
   {
     // trace_rec implements the Wick pairing for FREE/SLASH tokens only: pair_factor treats any
     // non-Gamma token as a slash and reads its `vlc`, which for a Comm (σ) built from two FREE legs
@@ -212,7 +205,7 @@ namespace numtracer::inline network
       if (d.kind == DFac::Gamma || d.kind == DFac::Slash) ++nAntidiag;
     if (nAntidiag % 2 == 1) return {}; // odd chain → 0
     int fresh = firstFreeLabel;
-    NetVal r = dirac_detail::trace_rec(chain, fresh); // no γ5 tokens (refused above)
+    LorentzNet r = dirac_detail::trace_rec(chain, fresh); // no γ5 tokens (refused above)
     return scale(Cx{4.0, 0}, std::move(r));               // tr(1) = 4
   }
 

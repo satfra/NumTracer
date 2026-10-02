@@ -1,7 +1,7 @@
 // Correctness gate for the longitudinal projector in the numeric contraction backend.
 //
 // The transverse projector P_T(k)_{μν} = δ_{μν} − k_μ k_ν/k² and the new longitudinal projector
-// P_L(k)_{μν} = k_μ k_ν/k² are built as numeric NElem factors (nprojT / nprojL) and contracted with
+// P_L(k)_{μν} = k_μ k_ν/k² are built as numeric LorentzFactor factors (nprojT / nprojL) and contracted with
 // the pure-Lorentz path (empty DiracNet, every index closed by a test vector or a metric so the net
 // collapses to a scalar). Each projector identity is checked two ways at ~200 random kinematic points:
 //
@@ -20,10 +20,11 @@
 //   decomposition P_E+P_M=P_T, traces (tr P_E=1, tr P_M=2), idempotency, orthogonality P_E·P_M=0,
 //   and temporal nullity u·P_M=0 with u=(1,0,0,0).
 //
-// k, a, b carry symbolic MPoly components; each net is contracted once and evaluated at many points.
+// k, a, b carry symbolic Poly components; each net is contracted once and evaluated at many points.
 // Build via the test CMake (adds -I include). Prints ALL TESTS PASSED / exits non-zero on failure.
 #include "numtracer/numeric/numeric_contract.hpp"
-#include "numtracer/numeric/env.hpp"
+#include "numtracer/numeric/frame.hpp"
+#include "engine_test_util.hpp"
 
 #include <array>
 #include <cmath>
@@ -32,6 +33,7 @@
 #include <vector>
 
 using numtracer::Cx;
+using namespace numtracer;
 namespace nm = numtracer::numeric;
 namespace network = numtracer::network;
 
@@ -41,22 +43,22 @@ constexpr int kVid = 0, aVid = 1, bVid = 2;
 
 // net builders (single product term, coefficient 1). The projector's momentum is k (vid 0),
 // its full 1/k² atom is id 0; the finite-T spatial 1/|k⃗|² atom is id 1.
-static nm::NElem vecLeg(int id, int vid) { return nm::nvec(id, {{1.0, vid}}); }
-static nm::NElem projT(int a, int b) { return nm::nprojT(a, b, {{1.0, kVid}}, 0); }
-static nm::NElem projL(int a, int b) { return nm::nprojL(a, b, {{1.0, kVid}}, 0); }
-static nm::NElem projE(int a, int b) { return nm::nprojE(a, b, {{1.0, kVid}}, 0, 1); }
-static nm::NElem projM(int a, int b) { return nm::nprojM(a, b, {{1.0, kVid}}, 1); }
-static nm::NNet net(std::initializer_list<nm::NElem> e)
+static LorentzFactor vecLeg(int id, int vid) { return ntest::fvec(id, {{1.0, vid}}); }
+static LorentzFactor projT(int a, int b) { return ntest::fprojT(a, b, {{1.0, kVid}}, 0); }
+static LorentzFactor projL(int a, int b) { return ntest::fprojL(a, b, {{1.0, kVid}}, 0); }
+static LorentzFactor projE(int a, int b) { return ntest::fprojE(a, b, {{1.0, kVid}}, 0, 1); }
+static LorentzFactor projM(int a, int b) { return ntest::fprojM(a, b, {{1.0, kVid}}, 1); }
+static LorentzNet net(std::initializer_list<LorentzFactor> e)
 {
-  return nm::NNet{nm::NTerm{Cx{1, 0}, std::vector<nm::NElem>(e)}};
+  return LorentzNet{LorentzTerm{Cx{1, 0}, std::vector<LorentzFactor>(e)}};
 }
 
 int main()
 {
   // a 4th momentum u = (1,0,0,0) (the heat-bath / temporal unit vector) to probe P_M's temporal rows.
   constexpr int uVid = 3;
-  nm::LorentzEnv env(nsym);
-  std::vector<std::array<nm::MPoly, 4>> comp(4);
+  nm::Frame env(ntest::names(nsym));
+  std::vector<std::array<nm::Poly, 4>> comp(4);
   for (int mu = 0; mu < 4; ++mu) {
     comp[kVid][static_cast<std::size_t>(mu)] = env.var(0 + mu);
     comp[aVid][static_cast<std::size_t>(mu)] = env.var(4 + mu);
@@ -65,43 +67,43 @@ int main()
   }
   // full 1/k² atom (id 0): atomDen[0] = k² = Σ_μ comp[k][μ]²;
   // spatial 1/|k⃗|² atom (id 1): atomDen[1] = |k⃗|² = Σ_{μ=1..3} comp[k][μ]² (component 0 = temporal).
-  nm::MPoly k2 = env.zero(), ks2 = env.zero();
+  nm::Poly k2 = env.zero(), ks2 = env.zero();
   for (int mu = 0; mu < 4; ++mu)
     k2 = k2 + comp[kVid][static_cast<std::size_t>(mu)] * comp[kVid][static_cast<std::size_t>(mu)];
   for (int mu = 1; mu < 4; ++mu)
     ks2 = ks2 + comp[kVid][static_cast<std::size_t>(mu)] * comp[kVid][static_cast<std::size_t>(mu)];
-  const std::vector<nm::MPoly> atomDen = {k2, ks2};
+  const std::vector<nm::Poly> atomDen = {k2, ks2};
 
   // contract each identity's net ONCE (symbolic in k/a/b); evaluate at many points below.
   // index convention: 10/11 are the outer (closed) legs, 12 the inner contracted leg.
-  const nm::MPoly aPTb = env.numeric_value({},net({vecLeg(10, aVid), projT(10, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly aPLb = env.numeric_value({},net({vecLeg(10, aVid), projL(10, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly adotb = env.numeric_value({},net({vecLeg(10, aVid), vecLeg(10, bVid)}), comp, atomDen);
-  const nm::MPoly trPT = env.numeric_value({},net({projT(10, 11), nm::nmet(10, 11)}), comp, atomDen);
-  const nm::MPoly trPL = env.numeric_value({},net({projL(10, 11), nm::nmet(10, 11)}), comp, atomDen);
-  const nm::MPoly aPTPTb =
-      env.numeric_value({},net({vecLeg(10, aVid), projT(10, 12), projT(12, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly aPLPLb =
-      env.numeric_value({},net({vecLeg(10, aVid), projL(10, 12), projL(12, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly aPTPLb =
-      env.numeric_value({},net({vecLeg(10, aVid), projT(10, 12), projL(12, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly kPTb = env.numeric_value({},net({vecLeg(10, kVid), projT(10, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly kPLb = env.numeric_value({},net({vecLeg(10, kVid), projL(10, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly kdotb = env.numeric_value({},net({vecLeg(10, kVid), vecLeg(10, bVid)}), comp, atomDen);
-  const nm::MPoly bPTa = env.numeric_value({},net({vecLeg(10, bVid), projT(10, 11), vecLeg(11, aVid)}), comp, atomDen);
+  const nm::Poly aPTb = ntest::contract(env, {},net({vecLeg(10, aVid), projT(10, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::Poly aPLb = ntest::contract(env, {},net({vecLeg(10, aVid), projL(10, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::Poly adotb = ntest::contract(env, {},net({vecLeg(10, aVid), vecLeg(10, bVid)}), comp, atomDen);
+  const nm::Poly trPT = ntest::contract(env, {},net({projT(10, 11), ntest::fmet(10, 11)}), comp, atomDen);
+  const nm::Poly trPL = ntest::contract(env, {},net({projL(10, 11), ntest::fmet(10, 11)}), comp, atomDen);
+  const nm::Poly aPTPTb =
+      ntest::contract(env, {},net({vecLeg(10, aVid), projT(10, 12), projT(12, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::Poly aPLPLb =
+      ntest::contract(env, {},net({vecLeg(10, aVid), projL(10, 12), projL(12, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::Poly aPTPLb =
+      ntest::contract(env, {},net({vecLeg(10, aVid), projT(10, 12), projL(12, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::Poly kPTb = ntest::contract(env, {},net({vecLeg(10, kVid), projT(10, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::Poly kPLb = ntest::contract(env, {},net({vecLeg(10, kVid), projL(10, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::Poly kdotb = ntest::contract(env, {},net({vecLeg(10, kVid), vecLeg(10, bVid)}), comp, atomDen);
+  const nm::Poly bPTa = ntest::contract(env, {},net({vecLeg(10, bVid), projT(10, 11), vecLeg(11, aVid)}), comp, atomDen);
 
   // finite-T electric / magnetic projectors
-  const nm::MPoly aPEb = env.numeric_value({},net({vecLeg(10, aVid), projE(10, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly aPMb = env.numeric_value({},net({vecLeg(10, aVid), projM(10, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly trPE = env.numeric_value({},net({projE(10, 11), nm::nmet(10, 11)}), comp, atomDen);
-  const nm::MPoly trPM = env.numeric_value({},net({projM(10, 11), nm::nmet(10, 11)}), comp, atomDen);
-  const nm::MPoly aPEPEb =
-      env.numeric_value({},net({vecLeg(10, aVid), projE(10, 12), projE(12, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly aPMPMb =
-      env.numeric_value({},net({vecLeg(10, aVid), projM(10, 12), projM(12, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly aPEPMb =
-      env.numeric_value({},net({vecLeg(10, aVid), projE(10, 12), projM(12, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly uPMb = env.numeric_value({},net({vecLeg(10, uVid), projM(10, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::Poly aPEb = ntest::contract(env, {},net({vecLeg(10, aVid), projE(10, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::Poly aPMb = ntest::contract(env, {},net({vecLeg(10, aVid), projM(10, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::Poly trPE = ntest::contract(env, {},net({projE(10, 11), ntest::fmet(10, 11)}), comp, atomDen);
+  const nm::Poly trPM = ntest::contract(env, {},net({projM(10, 11), ntest::fmet(10, 11)}), comp, atomDen);
+  const nm::Poly aPEPEb =
+      ntest::contract(env, {},net({vecLeg(10, aVid), projE(10, 12), projE(12, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::Poly aPMPMb =
+      ntest::contract(env, {},net({vecLeg(10, aVid), projM(10, 12), projM(12, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::Poly aPEPMb =
+      ntest::contract(env, {},net({vecLeg(10, aVid), projE(10, 12), projM(12, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::Poly uPMb = ntest::contract(env, {},net({vecLeg(10, uVid), projM(10, 11), vecLeg(11, bVid)}), comp, atomDen);
 
   std::mt19937 rng(2024);
   std::uniform_real_distribution<double> U(-1.0, 1.0);
@@ -143,7 +145,7 @@ int main()
       if (mu > 0) ks2v += kk[mu] * kk[mu]; // |k⃗|² (spatial atom)
     }
     const std::vector<double> atomVal = {1.0 / k2v, 1.0 / ks2v};
-    auto E = [&](const nm::MPoly &p) { return re(nm::eval(p, x, atomVal)); };
+    auto E = [&](const nm::Poly &p) { return re(nm::ndetail::eval(p, x, atomVal)); };
 
     // oracle 4×4 projector matrices and double contractions (ks2v = |k⃗|² computed above)
     double PT[4][4], PL[4][4], PM[4][4], PE[4][4];

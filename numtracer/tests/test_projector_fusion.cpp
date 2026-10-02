@@ -15,21 +15,23 @@
 #include <vector>
 
 #include "numtracer/numeric/numeric_contract.hpp"
-#include "numtracer/numeric/env.hpp"
+#include "numtracer/numeric/frame.hpp"
+#include "engine_test_util.hpp"
 
 using numtracer::Cx;
+using namespace numtracer;
 namespace nm = numtracer::numeric;
 namespace nd = numtracer::numeric::ndetail;
 
 // momenta: k = vid 0, a = vid 1, b = vid 2, q = vid 3 (a second projector momentum)
 constexpr int kVid = 0, aVid = 1, bVid = 2, qVid = 3;
 // atoms: 0 = 1/k², 1 = 1/q², 2 = 1/|k⃗|² (spatial, for E/M)
-static nm::NElem PT(int a, int b) { return nm::nprojT(a, b, {{1.0, kVid}}, 0); }
-static nm::NElem PL(int a, int b) { return nm::nprojL(a, b, {{1.0, kVid}}, 0); }
-static nm::NElem PE(int a, int b) { return nm::nprojE(a, b, {{1.0, kVid}}, 0, 2); }
-static nm::NElem PM(int a, int b) { return nm::nprojM(a, b, {{1.0, kVid}}, 2); }
-static nm::NElem PTq(int a, int b) { return nm::nprojT(a, b, {{1.0, qVid}}, 1); }
-static nm::NElem vec(int id, int vid) { return nm::nvec(id, {{1.0, vid}}); }
+static LorentzFactor PT(int a, int b) { return ntest::fprojT(a, b, {{1.0, kVid}}, 0); }
+static LorentzFactor PL(int a, int b) { return ntest::fprojL(a, b, {{1.0, kVid}}, 0); }
+static LorentzFactor PE(int a, int b) { return ntest::fprojE(a, b, {{1.0, kVid}}, 0, 2); }
+static LorentzFactor PM(int a, int b) { return ntest::fprojM(a, b, {{1.0, kVid}}, 2); }
+static LorentzFactor PTq(int a, int b) { return ntest::fprojT(a, b, {{1.0, qVid}}, 1); }
+static LorentzFactor vec(int id, int vid) { return ntest::fvec(id, {{1.0, vid}}); }
 
 static int fails = 0;
 static void check(bool ok, const char *name)
@@ -40,16 +42,16 @@ static void check(bool ok, const char *name)
 
 // run fuse_projectors on a copy and report the folded list + coeff
 struct Fold {
-  std::vector<nm::NElem> e;
+  std::vector<LorentzFactor> e;
   Cx c;
 };
-static Fold fold(std::vector<nm::NElem> e, Cx c = {1, 0})
+static Fold fold(std::vector<LorentzFactor> e, Cx c = {1, 0})
 {
   nd::fuse_projectors(e, c);
   return {std::move(e), c};
 }
 // does the folded list hold exactly one projector of `kind` with the index set {x,y}?
-static bool oneProj(const Fold &f, nm::NElem::Kind kind, int x, int y)
+static bool oneProj(const Fold &f, LorentzFactor::Kind kind, int x, int y)
 {
   if (f.e.size() != 1 || f.e[0].kind != kind) return false;
   const int a = f.e[0].a, b = f.e[0].b;
@@ -61,18 +63,18 @@ int main()
   std::printf("== projector fusion: structural ==\n");
 
   // ---- idempotency, single shared inner index 12, ALL four symmetric slot variants -> P(10,11) ----
-  check(oneProj(fold({PT(10, 12), PT(12, 11)}), nm::NElem::ProjT, 10, 11), "PT(10,12).PT(12,11) -> PT(10,11)");
-  check(oneProj(fold({PT(12, 10), PT(12, 11)}), nm::NElem::ProjT, 10, 11), "PT(12,10).PT(12,11) -> PT(10,11)");
-  check(oneProj(fold({PT(10, 12), PT(11, 12)}), nm::NElem::ProjT, 10, 11), "PT(10,12).PT(11,12) -> PT(10,11)");
-  check(oneProj(fold({PT(12, 10), PT(11, 12)}), nm::NElem::ProjT, 10, 11), "PT(12,10).PT(11,12) -> PT(10,11)");
+  check(oneProj(fold({PT(10, 12), PT(12, 11)}), LorentzFactor::ProjT, 10, 11), "PT(10,12).PT(12,11) -> PT(10,11)");
+  check(oneProj(fold({PT(12, 10), PT(12, 11)}), LorentzFactor::ProjT, 10, 11), "PT(12,10).PT(12,11) -> PT(10,11)");
+  check(oneProj(fold({PT(10, 12), PT(11, 12)}), LorentzFactor::ProjT, 10, 11), "PT(10,12).PT(11,12) -> PT(10,11)");
+  check(oneProj(fold({PT(12, 10), PT(11, 12)}), LorentzFactor::ProjT, 10, 11), "PT(12,10).PT(11,12) -> PT(10,11)");
 
   // ---- idempotency for L / E / M ----
-  check(oneProj(fold({PL(10, 12), PL(12, 11)}), nm::NElem::ProjL, 10, 11), "PL.PL -> PL");
-  check(oneProj(fold({PE(10, 12), PE(12, 11)}), nm::NElem::ProjE, 10, 11), "PE.PE -> PE");
-  check(oneProj(fold({PM(10, 12), PM(12, 11)}), nm::NElem::ProjM, 10, 11), "PM.PM -> PM");
+  check(oneProj(fold({PL(10, 12), PL(12, 11)}), LorentzFactor::ProjL, 10, 11), "PL.PL -> PL");
+  check(oneProj(fold({PE(10, 12), PE(12, 11)}), LorentzFactor::ProjE, 10, 11), "PE.PE -> PE");
+  check(oneProj(fold({PM(10, 12), PM(12, 11)}), LorentzFactor::ProjM, 10, 11), "PM.PM -> PM");
 
   // ---- a chain of three collapses to one (inner 12,13 are dummies; 10,11 survive) ----
-  check(oneProj(fold({PT(10, 12), PT(12, 13), PT(13, 11)}), nm::NElem::ProjT, 10, 11), "PT chain x3 -> PT(10,11)");
+  check(oneProj(fold({PT(10, 12), PT(12, 13), PT(13, 11)}), LorentzFactor::ProjT, 10, 11), "PT chain x3 -> PT(10,11)");
 
   // ---- full contraction (both indices shared) -> scalar trace; element list emptied ----
   {
@@ -108,30 +110,30 @@ int main()
   // ───────────────────────── (B) value-preserving end-to-end via numeric_value ─────────────────────────
   std::printf("== projector fusion: value-preserving ==\n");
   constexpr int nsym = 16;
-  nm::LorentzEnv env(nsym);
-  std::vector<std::array<nm::MPoly, 4>> comp(4);
+  nm::Frame env(ntest::names(nsym));
+  std::vector<std::array<nm::Poly, 4>> comp(4);
   for (int mu = 0; mu < 4; ++mu) {
     comp[kVid][(std::size_t)mu] = env.var(0 + mu);
     comp[aVid][(std::size_t)mu] = env.var(4 + mu);
     comp[bVid][(std::size_t)mu] = env.var(8 + mu);
     comp[qVid][(std::size_t)mu] = env.var(12 + mu);
   }
-  nm::MPoly k2 = env.zero(), ks2 = env.zero();
+  nm::Poly k2 = env.zero(), ks2 = env.zero();
   for (int mu = 0; mu < 4; ++mu)
     k2 = k2 + comp[kVid][(std::size_t)mu] * comp[kVid][(std::size_t)mu];
   for (int mu = 1; mu < 4; ++mu)
     ks2 = ks2 + comp[kVid][(std::size_t)mu] * comp[kVid][(std::size_t)mu];
-  const std::vector<nm::MPoly> atomDen = {k2, env.zero(), ks2}; // atom 1 (q²) unused here
+  const std::vector<nm::Poly> atomDen = {k2, env.zero(), ks2}; // atom 1 (q²) unused here
 
-  auto NV = [&](std::initializer_list<nm::NElem> e) {
-    return env.numeric_value({}, nm::NNet{nm::NTerm{Cx{1, 0}, std::vector<nm::NElem>(e)}}, comp, atomDen);
+  auto NV = [&](std::initializer_list<LorentzFactor> e) {
+    return ntest::contract(env, {}, LorentzNet{LorentzTerm{Cx{1, 0}, std::vector<LorentzFactor>(e)}}, comp, atomDen);
   };
   // redundant (fused internally) vs hand-simplified — must be equal MPolys
-  const nm::MPoly redT = NV({vec(10, aVid), PT(10, 12), PT(12, 11), vec(11, bVid)});
-  const nm::MPoly simT = NV({vec(10, aVid), PT(10, 11), vec(11, bVid)});
-  const nm::MPoly redChain = NV({vec(10, aVid), PT(10, 12), PT(12, 13), PT(13, 11), vec(11, bVid)});
-  const nm::MPoly orthoLT = NV({vec(10, aVid), PL(10, 12), PT(12, 11), vec(11, bVid)});
-  const nm::MPoly trClosed = NV({PT(10, 11), PT(10, 11)});
+  const nm::Poly redT = NV({vec(10, aVid), PT(10, 12), PT(12, 11), vec(11, bVid)});
+  const nm::Poly simT = NV({vec(10, aVid), PT(10, 11), vec(11, bVid)});
+  const nm::Poly redChain = NV({vec(10, aVid), PT(10, 12), PT(12, 13), PT(13, 11), vec(11, bVid)});
+  const nm::Poly orthoLT = NV({vec(10, aVid), PL(10, 12), PT(12, 11), vec(11, bVid)});
+  const nm::Poly trClosed = NV({PT(10, 11), PT(10, 11)});
 
   std::mt19937 rng(7);
   std::uniform_real_distribution<double> U(-1.0, 1.0);
@@ -139,10 +141,10 @@ int main()
   for (int it = 0; it < 200; ++it) {
     std::vector<double> x(nsym);
     for (double &v : x) v = U(rng);
-    const double kk = nm::eval(k2, x, {}).re;
-    const double kss = nm::eval(ks2, x, {}).re;
+    const double kk = nm::ndetail::eval(k2, x, {}).re;
+    const double kss = nm::ndetail::eval(ks2, x, {}).re;
     const std::vector<double> av = {1.0 / kk, 0.0, 1.0 / kss};
-    auto e = [&](const nm::MPoly &p) { return nm::eval(p, x, av).re; };
+    auto e = [&](const nm::Poly &p) { return nm::ndetail::eval(p, x, av).re; };
     wEq = std::max(wEq, std::fabs(e(redT) - e(simT)));
     wChain = std::max(wChain, std::fabs(e(redChain) - e(simT)));
     wOrtho = std::max(wOrtho, std::fabs(e(orthoLT)));

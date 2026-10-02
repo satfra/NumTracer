@@ -8,7 +8,7 @@
 // uniform normalisation error shows up as an exact multiple (see below).
 //
 // This is a harder gate than the AqbqDirect ones: FOUR external legs and TWO independent spinor
-// lines (so the multi-loop dloopsep path runs), a basis written in the finite-T 3+1 split (so every
+// lines (so the multi-loop loop_sep path runs), a basis written in the finite-T 3+1 split (so every
 // structure carries gamma^0, the fixed-Lorentz-component path), and structures 3,4,6,8,9,10 built
 // from SU(N) Levi-Civita tensors in BOTH colour and flavour (the epsilon-pair contraction, including
 // a pair straddling an eager Plus in the diquark vertex).

@@ -8,11 +8,13 @@
 //      loop → the 1/k² atom CANCELS, no surviving atom) and the non-monomial-k² case (shifted line →
 //      the atom SURVIVES) — value-checked vs a direct numeric contraction.
 //
-// Symbolic momentum components are MPoly variables; the engine result is evaluated at random points
+// Symbolic momentum components are Poly variables; the engine result is evaluated at random points
 // and compared to the numeric truth to ≤ 1e-12. Build via the test CMake (adds -I include).
 #include "oracle/dense_trace.hpp"          // chiral_gamma_trace<K> (test-only γ-trace oracle)
 #include "numtracer/dirac/dirac_data.hpp"  // kGamma, kGamma5, kC
-#include "numtracer/numeric/env.hpp"
+#include "engine_test_util.hpp"
+using namespace numtracer; // the typed builders (LorentzIndex, Momentum, …) the tests spell unqualified
+#include "numtracer/numeric/frame.hpp"
 #include "numtracer/numeric/numeric_contract.hpp"
 
 #include <cmath>
@@ -86,7 +88,7 @@ static Cx nTrace(const NM &A)
     s = s + A.a[i][i];
   return s;
 }
-// bare commutator [X,Y] = X·Y − Y·X of two explicit 4×4 matrices — the reference for the dcomm fold
+// bare commutator [X,Y] = X·Y − Y·X of two explicit 4×4 matrices — the reference for the comm fold
 // (the engine token carries NO i/2; the σ^{μν}=(i/2)[γ^μ,γ^ν] normalization lives in the scalar).
 static NM nCommM(const NM &X, const NM &Y)
 {
@@ -109,20 +111,20 @@ int main()
   std::printf("== A: all-slash chains tr(p1..pK) vs chiral_gamma_trace ==\n");
   for (int K : {2, 3, 4, 5, 6, 7, 8, 9, 10}) {
     const int nsym = 4 * K;
-    nm::LorentzEnv env(nsym);
-    std::vector<std::array<nm::MPoly, 4>> comp(static_cast<std::size_t>(K));
+    nm::Frame env(ntest::names(nsym));
+    std::vector<std::array<nm::Poly, 4>> comp(static_cast<std::size_t>(K));
     for (int m = 0; m < K; ++m)
       for (int mu = 0; mu < 4; ++mu)
         comp[static_cast<std::size_t>(m)][static_cast<std::size_t>(mu)] = env.var(4 * m + mu);
-    network::DiracNet chain;
+    network::DiracChain chain;
     for (int m = 0; m < K; ++m)
-      chain.push_back(network::dslash({{1.0, m}}));
-    nm::MPoly tr = env.numeric_value(chain, /*lorentz*/ {}, comp, /*atomDen*/ {});
+      chain.push_back(network::slash(Momentum{{{1.0, m}}}));
+    nm::Poly tr = ntest::contract(env, chain, /*lorentz*/ {}, comp, /*atomDen*/ {});
     // random point
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
-    Cx sym = nm::eval(tr, x, {});
+    Cx sym = nm::ndetail::eval(tr, x, {});
     // ground truth
     double P[12][4];
     for (int m = 0; m < K; ++m)
@@ -168,19 +170,19 @@ int main()
   std::printf("\n== B: tr(g^mu p g_mu q) via metric closure ==\n");
   {
     const int nsym = 8; // p:0..3, q:4..7
-    nm::LorentzEnv env(nsym);
-    std::vector<std::array<nm::MPoly, 4>> comp(2);
+    nm::Frame env(ntest::names(nsym));
+    std::vector<std::array<nm::Poly, 4>> comp(2);
     for (int mu = 0; mu < 4; ++mu) {
       comp[0][static_cast<std::size_t>(mu)] = env.var(mu);
       comp[1][static_cast<std::size_t>(mu)] = env.var(4 + mu);
     }
-    network::DiracNet chain = {network::dgamma(100), network::dslash({{1.0, 0}}), network::dgamma(101), network::dslash({{1.0, 1}})};
-    nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 101)}}};
-    nm::MPoly tr = env.numeric_value(chain, lor, comp, {});
+    network::DiracChain chain = {network::gamma(LorentzIndex{100}), network::slash(Momentum{{{1.0, 0}}}), network::gamma(LorentzIndex{101}), network::slash(Momentum{{{1.0, 1}}})};
+    LorentzNet lor = {LorentzTerm{Cx{1, 0}, {ntest::fmet(100, 101)}}};
+    nm::Poly tr = ntest::contract(env, chain, lor, comp, {});
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
-    Cx sym = nm::eval(tr, x, {});
+    Cx sym = nm::ndetail::eval(tr, x, {});
     double p[4], q[4];
     for (int mu = 0; mu < 4; ++mu) {
       p[mu] = x[static_cast<std::size_t>(mu)];
@@ -198,8 +200,8 @@ int main()
   std::printf("\n== C: P(k) contracting tr(g^mu p g^nu q) ==\n");
   auto runProj = [&](bool monomial) {
     const int nsym = 10; // p:0..3, q:4..7, l1:8, l2:9
-    nm::LorentzEnv env(nsym);
-    std::vector<std::array<nm::MPoly, 4>> comp(3);
+    nm::Frame env(ntest::names(nsym));
+    std::vector<std::array<nm::Poly, 4>> comp(3);
     for (int mu = 0; mu < 4; ++mu) {
       comp[0][static_cast<std::size_t>(mu)] = env.var(mu);
       comp[1][static_cast<std::size_t>(mu)] = env.var(4 + mu);
@@ -207,13 +209,13 @@ int main()
     comp[2][0] = env.var(8);                // k_0 = l1
     if (!monomial) comp[2][1] = env.var(9); // k_1 = l2 (shifted-like → non-monomial k²)
     // atomDen[0] = k² = Σ comp[2][μ]²
-    nm::MPoly k2 = env.zero();
+    nm::Poly k2 = env.zero();
     for (int mu = 0; mu < 4; ++mu)
       k2 = k2 + comp[2][static_cast<std::size_t>(mu)] * comp[2][static_cast<std::size_t>(mu)];
-    std::vector<nm::MPoly> atomDen = {k2};
-    network::DiracNet chain = {network::dgamma(100), network::dslash({{1.0, 0}}), network::dgamma(101), network::dslash({{1.0, 1}})};
-    nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nprojT(100, 101, {{1.0, 2}}, 0)}}};
-    nm::MPoly tr = env.numeric_value(chain, lor, comp, atomDen);
+    std::vector<nm::Poly> atomDen = {k2};
+    network::DiracChain chain = {network::gamma(LorentzIndex{100}), network::slash(Momentum{{{1.0, 0}}}), network::gamma(LorentzIndex{101}), network::slash(Momentum{{{1.0, 1}}})};
+    LorentzNet lor = {LorentzTerm{Cx{1, 0}, {ntest::fprojT(100, 101, {{1.0, 2}}, 0)}}};
+    nm::Poly tr = ntest::contract(env, chain, lor, comp, atomDen);
     // does any monomial still carry the atom?
     bool hasAtom = false;
     for (const auto &[m, c] : tr.terms)
@@ -232,7 +234,7 @@ int main()
         k2v += kc[mu] * kc[mu];
     }
     std::vector<double> atomVal = {1.0 / k2v};
-    Cx sym = nm::eval(tr, x, atomVal);
+    Cx sym = nm::ndetail::eval(tr, x, atomVal);
     // ground truth
     double p[4], q[4], kc[4] = {x[8], monomial ? 0.0 : x[9], 0, 0};
     for (int mu = 0; mu < 4; ++mu) {
@@ -255,30 +257,30 @@ int main()
   runProj(true);
   runProj(false);
 
-  // ---- D) the network::NetVal adapter path (what the generator uses): proj/met builders ----
-  std::printf("\n== D: numeric_value_netval over network::NetVal (generator path) ==\n");
+  // ---- D) the network::LorentzNet adapter path (what the generator uses): proj/met builders ----
+  std::printf("\n== D: numeric_value_netval over network::LorentzNet (generator path) ==\n");
   {
     const int nsym = 10;
-    nm::LorentzEnv env(nsym);
-    std::vector<std::array<nm::MPoly, 4>> comp(3);
+    nm::Frame env(ntest::names(nsym));
+    std::vector<std::array<nm::Poly, 4>> comp(3);
     for (int mu = 0; mu < 4; ++mu) {
       comp[0][static_cast<std::size_t>(mu)] = env.var(mu);
       comp[1][static_cast<std::size_t>(mu)] = env.var(4 + mu);
     }
     comp[2][0] = env.var(8);
     comp[2][1] = env.var(9); // non-monomial k² → atom survives
-    network::DiracNet chain = {network::dgamma(100), network::dslash({{1.0, 0}}), network::dgamma(101), network::dslash({{1.0, 1}})};
+    network::DiracChain chain = {network::gamma(LorentzIndex{100}), network::slash(Momentum{{{1.0, 0}}}), network::gamma(LorentzIndex{101}), network::slash(Momentum{{{1.0, 1}}})};
     // Lorentz net via the SAME inv builders the generator emits: P(k)_{100,101}, k = vec id 2, 1/k² env id 7.
-    network::NetVal lor = network::projT(100, 101, 2, 7);
-    std::vector<nm::MPoly> atomDen = env.collect_atom_denoms({lor}, comp);
-    nm::MPoly tr = env.numeric_value_netval(chain, lor, comp, atomDen);
+    network::LorentzNet lor = ntest::iprojT(100, 101, 2, 7);
+    std::vector<nm::Poly> atomDen = ntest::collect_atom_denoms(env, {lor}, comp);
+    nm::Poly tr = ntest::contract(env, chain, lor, comp, atomDen);
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
     double k2v = x[8] * x[8] + x[9] * x[9];
     std::vector<double> atomVal(8, 0.0);
     atomVal[7] = 1.0 / k2v;
-    Cx sym = nm::eval(tr, x, atomVal);
+    Cx sym = nm::ndetail::eval(tr, x, atomVal);
     double p[4], q[4], kc[4] = {x[8], x[9], 0, 0};
     for (int mu = 0; mu < 4; ++mu) {
       p[mu] = x[static_cast<std::size_t>(mu)];
@@ -301,31 +303,31 @@ int main()
   std::printf("\n== E: 3-free-leg chain vs dirac_value reference (asymmetric intermediate) ==\n");
   {
     const int nsym = 12; // p0:0-3, p1:4-7, k:8 (loop dir), m:9..11 spare
-    nm::LorentzEnv env(nsym);
-    std::vector<std::array<nm::MPoly, 4>> comp(3);
+    nm::Frame env(ntest::names(nsym));
+    std::vector<std::array<nm::Poly, 4>> comp(3);
     for (int mu = 0; mu < 4; ++mu) {
       comp[0][static_cast<std::size_t>(mu)] = env.var(mu);
       comp[1][static_cast<std::size_t>(mu)] = env.var(4 + mu);
     }
     comp[2][0] = env.var(8);
     comp[2][1] = env.var(9); // non-monomial k
-    network::DiracNet chain = {network::dgamma(50),         network::dslash({{1.0, 0}}), network::dgamma(51),
-                           network::dslash({{1.0, 1}}), network::dgamma(52),         network::dslash({{1.0, 0}})};
+    network::DiracChain chain = {network::gamma(LorentzIndex{50}),         network::slash(Momentum{{{1.0, 0}}}), network::gamma(LorentzIndex{51}),
+                           network::slash(Momentum{{{1.0, 1}}}), network::gamma(LorentzIndex{52}),         network::slash(Momentum{{{1.0, 0}}})};
     // net contracting legs 50,51 (one projector) and 52 (projector to an aux leg closed by a vector).
-    network::NetVal net = network::contract(network::projT(50, 51, 2, 90), network::projT(52, 60, 2, 91), network::vec(60, 0));
-    std::vector<nm::MPoly> atomDen = env.collect_atom_denoms({net}, comp);
-    nm::MPoly mine = env.numeric_value_netval(chain, net, comp, atomDen);
-    network::NetVal full = network::contract(network::dirac_value(chain, 900000), net);
-    nm::MPoly ref = env.numeric_value_netval(network::DiracNet{}, full, comp, atomDen);
+    network::LorentzNet net = mul(ntest::iprojT(50, 51, 2, 90), ntest::iprojT(52, 60, 2, 91), ntest::ivec(60, 0));
+    std::vector<nm::Poly> atomDen = ntest::collect_atom_denoms(env, {net}, comp);
+    nm::Poly mine = ntest::contract(env, chain, net, comp, atomDen);
+    network::LorentzNet full = mul(network::dirac_value(chain, 900000), net);
+    nm::Poly ref = ntest::contract(env, network::DiracChain{}, full, comp, atomDen);
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
     std::vector<double> av(92, 0.0);
     for (int a : {90, 91}) {
-      double dv = nm::eval(atomDen[static_cast<std::size_t>(a)], x, {}).re;
+      double dv = nm::ndetail::eval(atomDen[static_cast<std::size_t>(a)], x, {}).re;
       av[static_cast<std::size_t>(a)] = dv != 0 ? 1.0 / dv : 0.0;
     }
-    double err = cdiff(nm::eval(mine, x, av), nm::eval(ref, x, av));
+    double err = cdiff(nm::ndetail::eval(mine, x, av), nm::ndetail::eval(ref, x, av));
     std::printf("  monomials mine=%d ref=%d  |mine-ref|=%.2e  %s\n", mine.size(), ref.size(), err,
                 err < 1e-10 ? "ok" : "FAIL");
     if (!(err < 1e-10)) ++fails;
@@ -337,18 +339,18 @@ int main()
   std::printf("\n== F: gamma5 chains vs direct 4x4 (nGamma5) ==\n");
   // Generic "trace this closed chain and compare with an explicit 4x4 product at random momenta".
   // Not gamma5-specific — section H reuses it for the charge-conjugation token.
-  auto closedChain = [&](const char *tag, const network::DiracNet &chain, int K, auto buildTruth) {
+  auto closedChain = [&](const char *tag, const network::DiracChain &chain, int K, auto buildTruth) {
     const int nsym = 4 * K;
-    nm::LorentzEnv env(nsym);
-    std::vector<std::array<nm::MPoly, 4>> comp(static_cast<std::size_t>(K));
+    nm::Frame env(ntest::names(nsym));
+    std::vector<std::array<nm::Poly, 4>> comp(static_cast<std::size_t>(K));
     for (int m = 0; m < K; ++m)
       for (int mu = 0; mu < 4; ++mu)
         comp[static_cast<std::size_t>(m)][static_cast<std::size_t>(mu)] = env.var(4 * m + mu);
-    nm::MPoly tr = env.numeric_value(chain, {}, comp, {});
+    nm::Poly tr = ntest::contract(env, chain, {}, comp, {});
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
-    Cx sym = nm::eval(tr, x, {});
+    Cx sym = nm::ndetail::eval(tr, x, {});
     double P[8][4];
     for (int m = 0; m < K; ++m)
       for (int mu = 0; mu < 4; ++mu)
@@ -362,35 +364,35 @@ int main()
   // F1: tr(γ5 p̸ q̸ r̸ s̸) — leading γ5, the nonzero axial (ε) structure.
   closedChain(
       "g5 p q r s",
-      {network::dg5(), network::dslash({{1.0, 0}}), network::dslash({{1.0, 1}}), network::dslash({{1.0, 2}}), network::dslash({{1.0, 3}})},
+      {network::gamma5(), network::slash(Momentum{{{1.0, 0}}}), network::slash(Momentum{{{1.0, 1}}}), network::slash(Momentum{{{1.0, 2}}}), network::slash(Momentum{{{1.0, 3}}})},
       4, [&](double P[8][4]) {
         return nTrace(nMul(nMul(nMul(nMul(nGamma5(), nSlash(P[0])), nSlash(P[1])), nSlash(P[2])), nSlash(P[3])));
       });
   // F2: tr(p̸ γ5 q̸) — mid-chain γ5, two slashes → traces to 0.
-  closedChain("p g5 q (=0)", {network::dslash({{1.0, 0}}), network::dg5(), network::dslash({{1.0, 1}})}, 2,
+  closedChain("p g5 q (=0)", {network::slash(Momentum{{{1.0, 0}}}), network::gamma5(), network::slash(Momentum{{{1.0, 1}}})}, 2,
            [&](double P[8][4]) { return nTrace(nMul(nMul(nSlash(P[0]), nGamma5()), nSlash(P[1]))); });
   // F3: free legs + γ5 closed by a metric, with enough slashes to stay NONZERO:
   //     tr(γ5 γ^μ p̸ γ_μ q̸ r̸ s̸) = Σ_μ tr(γ5 γ^μ p̸ γ^μ q̸ r̸ s̸)  (= −2 tr(γ5 p̸ q̸ r̸ s̸) ≠ 0).
   {
     const int nsym = 16; // p:0-3 q:4-7 r:8-11 s:12-15
-    nm::LorentzEnv env(nsym);
-    std::vector<std::array<nm::MPoly, 4>> comp(4);
+    nm::Frame env(ntest::names(nsym));
+    std::vector<std::array<nm::Poly, 4>> comp(4);
     for (int m = 0; m < 4; ++m)
       for (int mu = 0; mu < 4; ++mu)
         comp[static_cast<std::size_t>(m)][static_cast<std::size_t>(mu)] = env.var(4 * m + mu);
-    network::DiracNet chain = {network::dg5(),
-                           network::dgamma(100),
-                           network::dslash({{1.0, 0}}),
-                           network::dgamma(101),
-                           network::dslash({{1.0, 1}}),
-                           network::dslash({{1.0, 2}}),
-                           network::dslash({{1.0, 3}})};
-    nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 101)}}};
-    nm::MPoly tr = env.numeric_value(chain, lor, comp, {});
+    network::DiracChain chain = {network::gamma5(),
+                           network::gamma(LorentzIndex{100}),
+                           network::slash(Momentum{{{1.0, 0}}}),
+                           network::gamma(LorentzIndex{101}),
+                           network::slash(Momentum{{{1.0, 1}}}),
+                           network::slash(Momentum{{{1.0, 2}}}),
+                           network::slash(Momentum{{{1.0, 3}}})};
+    LorentzNet lor = {LorentzTerm{Cx{1, 0}, {ntest::fmet(100, 101)}}};
+    nm::Poly tr = ntest::contract(env, chain, lor, comp, {});
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
-    Cx sym = nm::eval(tr, x, {});
+    Cx sym = nm::ndetail::eval(tr, x, {});
     double P[4][4];
     for (int m = 0; m < 4; ++m)
       for (int mu = 0; mu < 4; ++mu)
@@ -407,15 +409,15 @@ int main()
     if (!(err < 1e-12)) ++fails;
   }
 
-  // ---- G) the BARE commutator token `dcomm` vs an explicit `[X,Y]` 4×4, in all three leg modes the
-  //         front-end emits: both-free (`dcomm`, σ^{μν} with two open legs), both-slash (`dcomm_ss`,
-  //         the struct-7 external projector [B̸,Q̸]), and free-slash (`dcomm_fs`, a loop vertex
+  // ---- G) the BARE commutator token `comm` vs an explicit `[X,Y]` 4×4, in all three leg modes the
+  //         front-end emits: both-free (`comm`, σ^{μν} with two open legs), both-slash (`comm`,
+  //         the struct-7 external projector [B̸,Q̸]), and free-slash (`comm`, a loop vertex
   //         σ^{μν}k_ν). Each is ONE chain token (no commutator split). Reference: tr(comm · p̸ q̸). ----
-  std::printf("\n== G: commutator token dcomm vs explicit [X,Y] 4x4 (free/free, slash/slash, free/slash) ==\n");
+  std::printf("\n== G: commutator token comm vs explicit [X,Y] 4x4 (free/free, slash/slash, free/slash) ==\n");
   {
     const int nsym = 12; // p:0-3, q:4-7, r:8-11  (p,q close the chain; r is leg-B's slash momentum)
-    nm::LorentzEnv env(nsym);
-    std::vector<std::array<nm::MPoly, 4>> comp(3);
+    nm::Frame env(ntest::names(nsym));
+    std::vector<std::array<nm::Poly, 4>> comp(3);
     for (int mu = 0; mu < 4; ++mu)
       for (int m = 0; m < 3; ++m)
         comp[static_cast<std::size_t>(m)][static_cast<std::size_t>(mu)] = env.var(4 * m + mu);
@@ -431,12 +433,12 @@ int main()
 
     // G1) both-free [γ^a, γ^b]: rank-2 tensor T^{ab} = tr([γ^a,γ^b] p̸ q̸), 16 entries.
     {
-      network::DiracNet chain = {network::dcomm(100, 101), network::dslash({{1.0, 0}}), network::dslash({{1.0, 1}})};
+      network::DiracChain chain = {network::comm(LorentzIndex{100}, LorentzIndex{101}), network::slash(Momentum{{{1.0, 0}}}), network::slash(Momentum{{{1.0, 1}}})};
       auto T = nm::numeric_dirac(nsym, chain, comp);
       double err = 0, maxabs = 0;
       for (int a = 0; a < 4; ++a)
         for (int b = 0; b < 4; ++b) {
-          Cx sym = nm::eval(T.entries[static_cast<std::size_t>(a * 4 + b)], x, {});
+          Cx sym = nm::ndetail::eval(T.entries[static_cast<std::size_t>(a * 4 + b)], x, {});
           Cx num = nTrace(nMul(nMul(nCommM(nGamma(a), nGamma(b)), nSlash(p)), nSlash(q)));
           maxabs = std::max(maxabs, std::abs(num.re) + std::abs(num.im));
           err = std::max(err, cdiff(sym, num));
@@ -447,9 +449,9 @@ int main()
     }
     // G2) both-slash [r̸, p̸]: scalar T = tr([r̸,p̸] p̸ q̸) (no open legs).
     {
-      network::DiracNet chain = {network::dcomm_ss({{1.0, 2}}, {{1.0, 0}}), network::dslash({{1.0, 0}}), network::dslash({{1.0, 1}})};
+      network::DiracChain chain = {network::comm(Momentum{{{1.0, 2}}}, Momentum{{{1.0, 0}}}), network::slash(Momentum{{{1.0, 0}}}), network::slash(Momentum{{{1.0, 1}}})};
       auto T = nm::numeric_dirac(nsym, chain, comp);
-      Cx sym = nm::eval(T.entries[0], x, {});
+      Cx sym = nm::ndetail::eval(T.entries[0], x, {});
       Cx num = nTrace(nMul(nMul(nCommM(nSlash(r), nSlash(p)), nSlash(p)), nSlash(q)));
       double err = cdiff(sym, num);
       std::printf("  G2 slash/slash tr([r,p] p q): |num|=%.2e |sym-num|=%.2e %s\n", std::abs(num.re) + std::abs(num.im),
@@ -458,11 +460,11 @@ int main()
     }
     // G3) free-slash [γ^a, r̸]: rank-1 tensor T^{a} = tr([γ^a,r̸] p̸ q̸), 4 entries.
     {
-      network::DiracNet chain = {network::dcomm_fs(100, {{1.0, 2}}), network::dslash({{1.0, 0}}), network::dslash({{1.0, 1}})};
+      network::DiracChain chain = {network::comm(LorentzIndex{100}, Momentum{{{1.0, 2}}}), network::slash(Momentum{{{1.0, 0}}}), network::slash(Momentum{{{1.0, 1}}})};
       auto T = nm::numeric_dirac(nsym, chain, comp);
       double err = 0, maxabs = 0;
       for (int a = 0; a < 4; ++a) {
-        Cx sym = nm::eval(T.entries[static_cast<std::size_t>(a)], x, {});
+        Cx sym = nm::ndetail::eval(T.entries[static_cast<std::size_t>(a)], x, {});
         Cx num = nTrace(nMul(nMul(nCommM(nGamma(a), nSlash(r)), nSlash(p)), nSlash(q)));
         maxabs = std::max(maxabs, std::abs(num.re) + std::abs(num.im));
         err = std::max(err, cdiff(sym, num));
@@ -576,12 +578,12 @@ int main()
   //         check that it does not (an odd gamma/slash count still traces to 0 with a C present). ---
   std::printf("\n== I: DFac::C engine token vs direct 4x4 ==\n");
   // I1: tr(C p q) — leading C.
-  closedChain("C p q", {network::dc(), network::dslash({{1.0, 0}}), network::dslash({{1.0, 1}})}, 2,
+  closedChain("C p q", {network::chargeC(), network::slash(Momentum{{{1.0, 0}}}), network::slash(Momentum{{{1.0, 1}}})}, 2,
               [&](double P[8][4]) { return nTrace(nMul(nMul(nCmat(), nSlash(P[0])), nSlash(P[1]))); });
   // I2: tr(p C q C r s) — two mid-chain C's, so the running product visits both Weyl blocks.
   closedChain("p C q C r s",
-              {network::dslash({{1.0, 0}}), network::dc(), network::dslash({{1.0, 1}}), network::dc(),
-               network::dslash({{1.0, 2}}), network::dslash({{1.0, 3}})},
+              {network::slash(Momentum{{{1.0, 0}}}), network::chargeC(), network::slash(Momentum{{{1.0, 1}}}), network::chargeC(),
+               network::slash(Momentum{{{1.0, 2}}}), network::slash(Momentum{{{1.0, 3}}})},
               4, [&](double P[8][4]) {
                 return nTrace(nMul(nMul(nMul(nMul(nMul(nSlash(P[0]), nCmat()), nSlash(P[1])), nCmat()),
                                         nSlash(P[2])),
@@ -590,13 +592,13 @@ int main()
   // I3: tr(C g5 p q) — the X = C.gamma5 combination a diquark vertex actually supplies; both
   //     block-diagonal tokens adjacent, exercising the gamma5 sign flip on top of the C multiply.
   closedChain("C g5 p q",
-              {network::dc(), network::dg5(), network::dslash({{1.0, 0}}), network::dslash({{1.0, 1}})}, 2,
+              {network::chargeC(), network::gamma5(), network::slash(Momentum{{{1.0, 0}}}), network::slash(Momentum{{{1.0, 1}}})}, 2,
               [&](double P[8][4]) {
                 return nTrace(nMul(nMul(nMul(nCmat(), nGamma5()), nSlash(P[0])), nSlash(P[1])));
               });
   // I4: tr(C p) — ONE antidiagonal factor, so the parity rule must still zero it. If C were
   //     miscounted as antidiagonal this would come back nonzero (and every even chain would vanish).
-  closedChain("C p (=0)", {network::dc(), network::dslash({{1.0, 0}})}, 1,
+  closedChain("C p (=0)", {network::chargeC(), network::slash(Momentum{{{1.0, 0}}})}, 1,
               [&](double P[8][4]) { return nTrace(nMul(nCmat(), nSlash(P[0]))); });
 
   // ---- J) TRANSPOSED tokens: the engine vs an independent INDEX-NETWORK contractor ---------------
@@ -624,7 +626,7 @@ int main()
       // factor, randomly decide which of those two labels is its DECLARED din.
       std::vector<NM> mats(static_cast<std::size_t>(n));
       std::vector<std::array<int, 2>> labs(static_cast<std::size_t>(n));
-      network::DiracNet chain;
+      network::DiracChain chain;
       bool anyTransposed = false;
       for (int k = 0; k < n; ++k) {
         const int a = k, b = (k + 1) % n;
@@ -637,13 +639,13 @@ int main()
           // instead, whose components comp[mu] are the unit vector e_mu, so it IS gamma^mu.
           const int mu = pick4();
           mats[static_cast<std::size_t>(k)] = nGamma(mu);
-          tok = network::dslash({{1.0, mu}});
+          tok = network::slash(Momentum{{{1.0, mu}}});
         } else if (kind == 1) {
           mats[static_cast<std::size_t>(k)] = nGamma5();
-          tok = network::dg5();
+          tok = network::gamma5();
         } else if (kind == 2) {
           mats[static_cast<std::size_t>(k)] = nCmat();
-          tok = network::dc();
+          tok = network::chargeC();
         } else if (kind == 3) {
           double comp[4];
           for (int mu = 0; mu < 4; ++mu)
@@ -658,19 +660,19 @@ int main()
           for (const auto &pr : vlc)
             c2[pr.second] += pr.first;
           mats[static_cast<std::size_t>(k)] = nSlash(c2);
-          tok = network::dslash(vlc);
+          tok = network::slash(Momentum{vlc});
         } else {
           const int ma = pick4(), mb = pick4();
           double ca[4] = {0, 0, 0, 0}, cb[4] = {0, 0, 0, 0};
           ca[ma] = 1.0;
           cb[mb] = 1.0;
           mats[static_cast<std::size_t>(k)] = nCommM(nSlash(ca), nSlash(cb));
-          tok = network::dcomm_ss({{1.0, ma}}, {{1.0, mb}});
+          tok = network::comm(Momentum{{{1.0, ma}}}, Momentum{{{1.0, mb}}});
         }
         // The traversal below always walks a -> b, so the factor is transposed exactly when its
         // declared order was flipped.
         if (flip) {
-          tok = network::dtr(tok);
+          tok = network::transposed(tok);
           anyTransposed = true;
         }
         chain.push_back(tok);
@@ -699,15 +701,15 @@ int main()
       }
       // --- engine: the same chain in traversal order, with the transpose flags ------------------
       const int nsym = 4;
-      nm::LorentzEnv env(nsym);
-      std::vector<std::array<nm::MPoly, 4>> comp(4);
+      nm::Frame env(ntest::names(nsym));
+      std::vector<std::array<nm::Poly, 4>> comp(4);
       for (int m = 0; m < 4; ++m)
         for (int mu = 0; mu < 4; ++mu)
           comp[static_cast<std::size_t>(m)][static_cast<std::size_t>(mu)] =
-              (m == mu) ? nm::MPolyFactory::constant(nsym, Cx{1, 0}) : nm::MPolyFactory::zero(nsym);
-      nm::MPoly tr = env.numeric_value(chain, {}, comp, {});
+              (m == mu) ? nm::PolyFactory::constant(nsym, Cx{1, 0}) : nm::PolyFactory::zero(nsym);
+      nm::Poly tr = ntest::contract(env, chain, {}, comp, {});
       const std::vector<double> x(static_cast<std::size_t>(nsym), 0.0);
-      const Cx got = nm::eval(tr, x, {});
+      const Cx got = nm::ndetail::eval(tr, x, {});
       ++tested;
       if (std::abs(truth.re) + std::abs(truth.im) > 1e-9) ++nonzero;
       if (cdiff(got, truth) > 1e-9) {
@@ -736,31 +738,31 @@ int main()
   std::printf("\n== K: transposed slot splice vs an explicit reversed chain ==\n");
   {
     const int nsym = 16; // four momenta, 0-3
-    nm::LorentzEnv env(nsym);
-    std::vector<std::array<nm::MPoly, 4>> comp(4);
+    nm::Frame env(ntest::names(nsym));
+    std::vector<std::array<nm::Poly, 4>> comp(4);
     for (int m = 0; m < 4; ++m)
       for (int mu = 0; mu < 4; ++mu)
         comp[static_cast<std::size_t>(m)][static_cast<std::size_t>(mu)] = env.var(4 * m + mu);
     // A slot holding a TWO-token chain, spliced into a loop with two more slashes. Four slashes in
     // total, so the trace is non-zero (a gamma5 with only two would vanish and prove nothing), and
     // reversing the slot genuinely reorders the product.
-    nm::DSlot slot{nm::DSlotOpt{Cx{1, 0}, {}, {network::dslash({{1.0, 0}}), network::dslash({{1.0, 1}})}, {}}};
-    const std::vector<nm::DChainTok> chainT = {nm::dtrslot(0), nm::dtfix(network::dslash({{1.0, 2}})),
-                                               nm::dtfix(network::dslash({{1.0, 3}}))};
-    const nm::MPoly viaSlot = env.numeric_value_dressed_netval_mp(chainT, {slot}, {}, comp, {});
+    nm::DSlot slot{nm::DSlotOpt{Cx{1, 0}, {}, {network::slash(Momentum{{{1.0, 0}}}), network::slash(Momentum{{{1.0, 1}}})}, {}}};
+    const std::vector<nm::DChainTok> chainT = {nm::dtrslot(0), nm::dtfix(network::slash(Momentum{{{1.0, 2}}})),
+                                               nm::dtfix(network::slash(Momentum{{{1.0, 3}}}))};
+    const nm::Poly viaSlot = ntest::contract_structural(env, chainT, {slot}, {}, comp, {});
     // by hand: (p0 p1)^T = p1^T p0^T -- reversed, every token transposed.
-    const network::DiracNet explicitChain = {network::dtr(network::dslash({{1.0, 1}})),
-                                             network::dtr(network::dslash({{1.0, 0}})),
-                                             network::dslash({{1.0, 2}}), network::dslash({{1.0, 3}})};
-    const nm::MPoly viaExplicit = env.numeric_value(explicitChain, {}, comp, {});
+    const network::DiracChain explicitChain = {network::transposed(network::slash(Momentum{{{1.0, 1}}})),
+                                             network::transposed(network::slash(Momentum{{{1.0, 0}}})),
+                                             network::slash(Momentum{{{1.0, 2}}}), network::slash(Momentum{{{1.0, 3}}})};
+    const nm::Poly viaExplicit = ntest::contract(env, explicitChain, {}, comp, {});
     // the UNtransposed slot, as a control that the two spellings are not trivially equal
-    const std::vector<nm::DChainTok> chainU = {nm::dtslot(0), nm::dtfix(network::dslash({{1.0, 2}})),
-                                               nm::dtfix(network::dslash({{1.0, 3}}))};
-    const nm::MPoly viaPlain = env.numeric_value_dressed_netval_mp(chainU, {slot}, {}, comp, {});
+    const std::vector<nm::DChainTok> chainU = {nm::dtslot(0), nm::dtfix(network::slash(Momentum{{{1.0, 2}}})),
+                                               nm::dtfix(network::slash(Momentum{{{1.0, 3}}}))};
+    const nm::Poly viaPlain = ntest::contract_structural(env, chainU, {slot}, {}, comp, {});
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
-    const Cx a = nm::eval(viaSlot, x, {}), b = nm::eval(viaExplicit, x, {}), c = nm::eval(viaPlain, x, {});
+    const Cx a = nm::ndetail::eval(viaSlot, x, {}), b = nm::ndetail::eval(viaExplicit, x, {}), c = nm::ndetail::eval(viaPlain, x, {});
     const double err = cdiff(a, b);
     std::printf("  dtrslot vs explicit reversed chain: |a|=%.3e |a-b|=%.3e %s\n",
                 std::abs(a.re) + std::abs(a.im), err, err < 1e-12 ? "ok" : "FAIL");

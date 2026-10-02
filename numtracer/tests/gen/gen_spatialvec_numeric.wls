@@ -5,7 +5,7 @@
    WHAT IS UNDER TEST. `vecs` becomes ntVec[ntSpatialVec[q], mu]: a momentum LEAF whose frame
    components are the parent's with the temporal slot zeroed (DSL.m expandSpatialVecs /
    spatialVecFrame). Nothing downstream knows about it — a spatial slash is emitted as an ordinary
-   dslash, and frameMask prunes the zero temporal component. That is the claim this gate has to be
+   slash, and frameMask prunes the zero temporal component. That is the claim this gate has to be
    able to falsify, so the nets below are chosen to separate "spatial" from "full" everywhere:
 
      spat2  tr( p̸̄ (p-l)̸̄ )              = 4 [ pS.pS - pS.lS ]
@@ -22,7 +22,7 @@
               of the other two kernels in compare_spatialvec_num.cpp — never pointwise-relative.
      leg    l̄ . P_T(p) . l̄                    = lS.lS - (lS.p)^2/(p.p)
             — the spatial vector as a PLAIN TENSOR LEG rather than a slash. This is not redundant
-              with the three above: a slash is emitted as dslash({{1.0, base}}), which carries NO
+              with the three above: a slash is emitted as slash(Momentum{{{1.0, base}}}), which carries NO
               frameMask and reads all four components out of the env, whereas an open leg is emitted
               as lvec<id, base, MASK> and the mask comes from the FRAME while the components come
               from the frame SPEC. Only this net makes those two agree in anger — and it uses the
@@ -114,11 +114,11 @@ emit["leg",   "SpatialVec_leg_kernel",   "spatialvec_leg"];
    this the gate would still pass on some future implementation that routed them elsewhere. *)
 gsrc = StringJoin[(Import[#, "Text"] &) /@
    Select[FileNames["gen_spatialvec_*.cpp", $gen], FileExistsQ]];
-If[! StringContainsQ[gsrc, "dslash("],
-  Print["FAIL: emitted generator source has no dslash(...) — the spatial vectors did not go down ",
+If[! StringContainsQ[gsrc, "slash(Momentum{"],
+  Print["FAIL: emitted generator source has no slash(...) — the spatial vectors did not go down ",
         "the slash path."]; Exit[1]];
 If[! StringContainsQ[gsrc, "lvec<"],
   Print["FAIL: emitted generator source has no lvec<...>() — the `leg` net's spatial vector did ",
         "not go down the open-leg path, so frameMask is still untested."]; Exit[1]];
-Print["[spatialvec] ok: spatial vectors emitted as dslash and lvec leaves."];
+Print["[spatialvec] ok: spatial vectors emitted as slash and lvec leaves."];
 Print["Finite-T spatial-vector codegen kernels generated."];

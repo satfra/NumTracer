@@ -23,21 +23,20 @@ static double ntRssMB(){ long pages=0; if(FILE* f=std::fopen("/proc/self/statm",
 #include <sstream>
 #include <unordered_map>
 using numtracer::Cx;
-namespace numtracer::network {
-template<int Mu,int Nu,int Lb,int Mask,int Inv> NetVal tproj(){ return projT(Mu,Nu,Lb,Inv); }
-template<int Mu,int Nu,int Lb,int Mask,int Inv> NetVal lproj(){ return projL(Mu,Nu,Lb,Inv); }
-template<int Mu,int Nu,int Lb,int Mask,int InvS> NetVal mproj(){ return projM(Mu,Nu,Lb,InvS); }
-template<int Mu,int Nu,int Lb,int Mask,int Inv,int InvS> NetVal eproj(){ return projE(Mu,Nu,Lb,Inv,InvS); }
-template<int Mu,int Nu> NetVal lmetric(){ return met(Mu,Nu); }
-template<int Lbl,int Base,int Mask> NetVal lvec(){ return vec(Lbl,Base); }
-template<int A,int B,int C,int D> NetVal leps(){ return epsilon(A,B,C,D); }
-inline NetVal konst(double c){ return NetVal{PTerm{Cx{c,0}, {}}}; }
+namespace numtracer {
+template<int Mu,int Nu,int Lb,int Mask,int Inv> LorentzNet tproj(){ return leaf({.kind=LorentzFactor::ProjT,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv}); }
+template<int Mu,int Nu,int Lb,int Mask,int Inv> LorentzNet lproj(){ return leaf({.kind=LorentzFactor::ProjL,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv}); }
+template<int Mu,int Nu,int Lb,int Mask,int InvS> LorentzNet mproj(){ return leaf({.kind=LorentzFactor::ProjM,.a=Mu,.b=Nu,.vid=Lb,.atomS=InvS}); }
+template<int Mu,int Nu,int Lb,int Mask,int Inv,int InvS> LorentzNet eproj(){ return leaf({.kind=LorentzFactor::ProjE,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv,.atomS=InvS}); }
+template<int Mu,int Nu> LorentzNet lmetric(){ return metric(LorentzIndex{Mu},LorentzIndex{Nu}); }
+template<int Lbl,int Base,int Mask> LorentzNet lvec(){ return leaf({.kind=LorentzFactor::Vector,.a=Lbl,.b=-1,.vlc={{1.0,Base}}}); }
+template<int A,int B,int C,int D> LorentzNet leps(){ return epsilon(LorentzIndex{A},LorentzIndex{B},LorentzIndex{C},LorentzIndex{D}); }
+inline LorentzNet konst(double c){ return LorentzNet{LorentzTerm{Cx{c,0}, {}}}; }
 template<class L> struct litco;
 template<numtracer::Cx C> struct litco<numtracer::Lit<C>>{ static constexpr numtracer::Cx v=C; };
-template<class L> NetVal sc(NetVal x){ return scale(litco<L>::v, std::move(x)); }
+template<class L> LorentzNet sc(LorentzNet x){ return scale(litco<L>::v, std::move(x)); }
 }
-using namespace numtracer::network;
-using namespace numtracer::numeric;
+using namespace numtracer;
 void ntColNets_c0(std::vector<SUNNet>& o);
 static std::vector<SUNNet> ntColNets(){ std::vector<SUNNet> o; o.reserve(66); ntColNets_c0(o); return o; }
 
@@ -53,41 +52,38 @@ static std::vector<std::vector<int>> ntGroups(){ return {{0,1,2,3,4,5,6,7,8,9,10
 int main(int argc, char** argv){
   std::string decor = "static inline"; std::string hns = "lambda3d_small_ref";
   for(int a=1;a<argc;++a){ std::string s=argv[a]; if(s=="-d"&&a+1<argc) decor=argv[++a]; else if(s=="-n"&&a+1<argc) hns=argv[++a]; }
-  const int nsym = 12;
-  std::vector<std::vector<int>> units = {};
-  LorentzEnv env(nsym, units);
-  std::vector<std::array<MPoly,4>> comp(37, {env.zero(),env.zero(),env.zero(),env.zero()});
-  comp[0][0] = (env.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{1.,0}) + env.mono({0,0,0,1,0,1,1,0,0,0,1,1},Cx{0.86602540378443865,0}) + env.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{0.5,0}));
-  comp[0][1] = (env.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{1.,0}) + env.mono({0,0,0,0,0,1,0,1,0,0,1,0},Cx{0.86602540378443865,0}));
-  comp[0][2] = (env.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{1.,0}));
-  comp[4][0] = (env.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{-1.,0}) + env.mono({0,0,0,1,0,1,1,0,0,0,1,1},Cx{-0.86602540378443865,0}) + env.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{-0.5,0}));
-  comp[4][1] = (env.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{-1.,0}) + env.mono({0,0,0,0,0,1,0,1,0,0,1,0},Cx{-0.86602540378443865,0}));
-  comp[4][2] = (env.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{-1.,0}));
-  comp[8][0] = (env.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{-1.,0}) + env.mono({0,0,0,1,0,1,1,0,0,0,1,1},Cx{-0.86602540378443865,0}) + env.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{0.5,0}));
-  comp[8][1] = (env.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{-1.,0}) + env.mono({0,0,0,0,0,1,0,1,0,0,1,0},Cx{-0.86602540378443865,0}));
-  comp[8][2] = (env.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{-1.,0}));
-  comp[12][0] = (env.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{1.,0}) + env.mono({0,0,0,1,0,1,1,0,0,0,1,1},Cx{0.86602540378443865,0}) + env.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{-0.5,0}));
-  comp[12][1] = (env.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{1.,0}) + env.mono({0,0,0,0,0,1,0,1,0,0,1,0},Cx{0.86602540378443865,0}));
-  comp[12][2] = (env.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{1.,0}));
-  comp[16][0] = (env.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{1.,0}));
-  comp[16][1] = (env.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{1.,0}));
-  comp[16][2] = (env.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{1.,0}));
-  comp[20][0] = (env.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{-1.,0}));
-  comp[20][1] = (env.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{-1.,0}));
-  comp[20][2] = (env.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{-1.,0}));
-  comp[24][0] = (env.mono({0,0,0,1,0,1,1,0,0,0,1,1},Cx{0.86602540378443865,0}) + env.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{-0.5,0}));
-  comp[24][1] = (env.mono({0,0,0,0,0,1,0,1,0,0,1,0},Cx{0.86602540378443865,0}));
-  comp[28][0] = (env.mono({0,0,0,1,0,1,1,0,0,0,1,1},Cx{-0.86602540378443865,0}) + env.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{-0.5,0}));
-  comp[28][1] = (env.mono({0,0,0,0,0,1,0,1,0,0,1,0},Cx{-0.86602540378443865,0}));
-  comp[32][0] = (env.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{1.,0}) + env.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{1.,0}));
-  comp[32][1] = (env.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{1.,0}));
-  comp[32][2] = (env.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{1.,0}));
-  comp[36][0] = (env.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{-1.,0}) + env.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{-1.,0}));
-  comp[36][1] = (env.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{-1.,0}));
-  comp[36][2] = (env.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{-1.,0}));
-  std::vector<std::string> symNames = {"(cos1)","(cos2)","(l1)","(cos(SPhi))","(sqrt(1. - S1 * sin(SPhi)))","(sqrt(1. + S1 * sin(SPhi)))","(sqrt(powr<-1>(1. - powr<2>(S1) * powr<2>(sin(SPhi)))))","(sqrt(1. - powr<2>(S1) * powr<2>(cos(SPhi)) * powr<-1>(1. - powr<2>(S1) * powr<2>(sin(SPhi)))))","(sqrt(1. - powr<2>(cos1)))","(sqrt(1. - powr<2>(cos2)))","(S0)","(S1)"};
-  std::vector<DiracNet> sdn = sdn0();
-  std::vector<NetVal> sln = sln0();
+  Frame frame({"(cos1)","(cos2)","(l1)","(cos(SPhi))","(sqrt(1. - S1 * sin(SPhi)))","(sqrt(1. + S1 * sin(SPhi)))","(sqrt(powr<-1>(1. - powr<2>(S1) * powr<2>(sin(SPhi)))))","(sqrt(1. - powr<2>(S1) * powr<2>(cos(SPhi)) * powr<-1>(1. - powr<2>(S1) * powr<2>(sin(SPhi)))))","(sqrt(1. - powr<2>(cos1)))","(sqrt(1. - powr<2>(cos2)))","(S0)","(S1)"},
+              {}, 37);
+  frame.set_component(0, 0, (frame.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{1.,0}) + frame.mono({0,0,0,1,0,1,1,0,0,0,1,1},Cx{0.86602540378443865,0}) + frame.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{0.5,0})));
+  frame.set_component(0, 1, (frame.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{1.,0}) + frame.mono({0,0,0,0,0,1,0,1,0,0,1,0},Cx{0.86602540378443865,0})));
+  frame.set_component(0, 2, (frame.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{1.,0})));
+  frame.set_component(4, 0, (frame.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{-1.,0}) + frame.mono({0,0,0,1,0,1,1,0,0,0,1,1},Cx{-0.86602540378443865,0}) + frame.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{-0.5,0})));
+  frame.set_component(4, 1, (frame.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{-1.,0}) + frame.mono({0,0,0,0,0,1,0,1,0,0,1,0},Cx{-0.86602540378443865,0})));
+  frame.set_component(4, 2, (frame.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{-1.,0})));
+  frame.set_component(8, 0, (frame.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{-1.,0}) + frame.mono({0,0,0,1,0,1,1,0,0,0,1,1},Cx{-0.86602540378443865,0}) + frame.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{0.5,0})));
+  frame.set_component(8, 1, (frame.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{-1.,0}) + frame.mono({0,0,0,0,0,1,0,1,0,0,1,0},Cx{-0.86602540378443865,0})));
+  frame.set_component(8, 2, (frame.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{-1.,0})));
+  frame.set_component(12, 0, (frame.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{1.,0}) + frame.mono({0,0,0,1,0,1,1,0,0,0,1,1},Cx{0.86602540378443865,0}) + frame.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{-0.5,0})));
+  frame.set_component(12, 1, (frame.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{1.,0}) + frame.mono({0,0,0,0,0,1,0,1,0,0,1,0},Cx{0.86602540378443865,0})));
+  frame.set_component(12, 2, (frame.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{1.,0})));
+  frame.set_component(16, 0, (frame.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{1.,0})));
+  frame.set_component(16, 1, (frame.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{1.,0})));
+  frame.set_component(16, 2, (frame.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{1.,0})));
+  frame.set_component(20, 0, (frame.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{-1.,0})));
+  frame.set_component(20, 1, (frame.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{-1.,0})));
+  frame.set_component(20, 2, (frame.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{-1.,0})));
+  frame.set_component(24, 0, (frame.mono({0,0,0,1,0,1,1,0,0,0,1,1},Cx{0.86602540378443865,0}) + frame.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{-0.5,0})));
+  frame.set_component(24, 1, (frame.mono({0,0,0,0,0,1,0,1,0,0,1,0},Cx{0.86602540378443865,0})));
+  frame.set_component(28, 0, (frame.mono({0,0,0,1,0,1,1,0,0,0,1,1},Cx{-0.86602540378443865,0}) + frame.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{-0.5,0})));
+  frame.set_component(28, 1, (frame.mono({0,0,0,0,0,1,0,1,0,0,1,0},Cx{-0.86602540378443865,0})));
+  frame.set_component(32, 0, (frame.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{1.,0}) + frame.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{1.,0})));
+  frame.set_component(32, 1, (frame.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{1.,0})));
+  frame.set_component(32, 2, (frame.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{1.,0})));
+  frame.set_component(36, 0, (frame.mono({1,0,1,0,0,0,0,0,0,0,0,0},Cx{-1.,0}) + frame.mono({0,0,0,0,1,0,0,0,0,0,1,0},Cx{-1.,0})));
+  frame.set_component(36, 1, (frame.mono({0,1,1,0,0,0,0,0,1,0,0,0},Cx{-1.,0})));
+  frame.set_component(36, 2, (frame.mono({0,0,1,0,0,0,0,0,1,1,0,0},Cx{-1.,0})));
+  std::vector<DiracChain> sdn = sdn0();
+  std::vector<LorentzNet> sln = sln0();
   std::vector<std::vector<DChainTok>> chp = chp0(); std::vector<int> sdchR = sdchR0();
   std::vector<DSlotOpt> optp = optp0(); std::vector<std::vector<int>> sdslR = sdslR0();
   const size_t NSD = sdchR.size();
@@ -111,8 +107,7 @@ int main(int argc, char** argv){
   std::vector<std::vector<DMono>> sdr(NNET);
   for(size_t i=0;i<NNET;++i){ const auto& r=sdrU[sdrR[i]]; sdr[i].reserve(r.size());
     for(int k: r) sdr[i].push_back(sdrV[k]); }
-  auto atomDen = env.collect_atom_denoms(sln, comp);
-  for(auto &a: atomDen) a = reduce_units(a, units);  // bare-loop k^2 -> monomial l1^2 -> cancels
+  frame.add_denominators(sln);
   const bool ntprof = numtracer::env_flag("NT_GEN_PROFILE");
   unsigned workersA=std::thread::hardware_concurrency(); if(!workersA)workersA=4u;
   if(const long v=numtracer::env_int("NT_GEN_MAXW",0); v>0&&(unsigned long)v<workersA) workersA=(unsigned)v;
@@ -120,13 +115,14 @@ int main(int argc, char** argv){
   const long NSUB = 1320;
   long nCache = 1320;
   if(const long v=numtracer::env_int("NT_GEN_MEMO_MAX",-1); v>=0) nCache=std::min<long>(v,NSUB);
-  auto trace=[&](int k)->MPoly{
+  const Frame &cframe = frame;
+  auto trace=[&](int k)->Poly{
     return sdch[k].empty()
-      ? env.numeric_value_netval(sdn[k], sln[k], comp, atomDen)
-      : env.numeric_value_dressed_netval_mp(sdch[k], sdsl[k], sln[k], comp, atomDen);
+      ? cframe.trace(sdn[k], sln[k])
+      : cframe.trace_structural(sdch[k], sdsl[k], sln[k]);
   };
   auto tA=std::chrono::steady_clock::now();
-  std::vector<MPoly> traceTable = env.contract_traces<MPoly>(nCache, workersA, trace);
+  std::vector<Poly> traceTable = frame.contract_traces<Poly>(nCache, workersA, trace);
   if(ntprof){ std::size_t tb=0; for(auto &p: traceTable) tb+=poly_bytes(p);
     std::fprintf(stderr,"[num] phase A: %ld distinct traces, %ld cached, table %.1f MB, %.1f s (W=%u)\n",
       NSUB, nCache, tb/1048576.0, std::chrono::duration<double>(std::chrono::steady_clock::now()-tA).count(), workersA); }
@@ -138,24 +134,21 @@ int main(int argc, char** argv){
   std::vector<SUNNet> colnetsU = ntColNets();
   std::vector<int> colR = ntColR();
   std::vector<numtracer::Cx> colvU(colnetsU.size());
-  for(size_t i=0;i<colnetsU.size();++i) colvU[i]=sun_value_cx(colnetsU[i]);
+  for(size_t i=0;i<colnetsU.size();++i) colvU[i]=sun_value(colnetsU[i]);
   std::vector<numtracer::Cx> colv(66);
   for(int i=0;i<66;++i) colv[i]=colvU[colR[i]];
   std::vector<std::vector<int>> groups = ntGroups();
-  // `genv`, not `env`: `env` above is the LorentzEnv (nsym + unit groups) that mints and
-  // contracts polynomials. This is the GLOBAL SYMBOL environment the lowering interns
-  // fundamental symbols into. Naming it `env` would shadow the other and silently rebind
-  // every env.contract_traces / env.fold_groups_streaming call below.
+  // The GLOBAL SYMBOL environment the lowering interns fundamental symbols into.
   GlobalEnv genv;
   std::vector<GenProg> progs;
   std::vector<int> realOnly = {0,0,0,0,0,0};
   long netWindow = numtracer::numeric::net_window((long)sidx.size(), workersB);
   numtracer::numeric::check_group_partition(groups, 66);
-  env.fold_groups_streaming_dressed(sidx, dsc, sdr, groups, traceTable, nCache, workersB, netWindow, trace,
+  frame.fold_groups_streaming_dressed(sidx, dsc, sdr, groups, traceTable, nCache, workersB, netWindow, trace,
     [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },
     [&](size_t gi, DPoly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });
   if(ntprof) std::fprintf(stderr,"[num] phase B+lower: %d nets in %d groups, window %ld, %.1f s (W=%u)\n", 66, 6, netWindow, std::chrono::duration<double>(std::chrono::steady_clock::now()-tB).count(), workersB);
-  { std::vector<MPoly> dead; traceTable.swap(dead); }
+  { std::vector<Poly> dead; traceTable.swap(dead); }
   const auto tEmit = std::chrono::steady_clock::now();
   FillFormulas fm;
   fm.var = [](int id)->std::string{
@@ -172,7 +165,7 @@ int main(int argc, char** argv){
     if(id==10) return "S0";
     if(id==11) return "S1";
     return "0.0"; };
-  fm.inv = [&](int id)->std::string{ return "1.0/(" + mpoly_to_cpp(atomDen[(size_t)id], symNames) + ")"; };
+  fm.inv = [&](int id)->std::string{ return "1.0/(" + frame.denominator_cpp(id) + ")"; };
   fm.dress = [](int id)->std::string{ return "dr_" + std::to_string(id); };
   std::cout << "// GENERATED by gen_lambda3d_small_ref.cpp — do not edit.\n";
   std::cout << "#pragma once\n#include <cmath>\n#include <complex>\nnamespace DiFfRG { namespace " << hns << " {\n";
