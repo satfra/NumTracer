@@ -22,7 +22,7 @@
 #include <utility>
 #include <vector>
 
-namespace numtracer::numeric
+namespace numtracer::inline numeric
 {
 
   // Forward declarations of the host-only trace-fold templates (`numeric/trace_fold.hpp`). That header

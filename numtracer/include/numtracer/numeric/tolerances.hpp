@@ -5,7 +5,7 @@
 /// against the INTEGRATED numeric-vs-FORM error, not a pointwise round-off floor.
 #pragma once
 
-namespace numtracer::numeric
+namespace numtracer::inline numeric
 {
   /// @brief Relative noise-prune tolerance: a monomial whose |coefficient| is below this fraction of
   ///        the largest coefficient is round-off from the numeric frame (a ~10-order gap separates it

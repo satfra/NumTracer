@@ -39,7 +39,7 @@
 #include <string> // the open-index guard's diagnostic (assert_no_open_ids)
 #include <vector>
 
-namespace numtracer::numeric
+namespace numtracer::inline numeric
 {
 
 

@@ -31,7 +31,7 @@
 #include <tuple>
 #include <vector>
 
-namespace numtracer::network
+namespace numtracer::inline network
 {
 
   /// @brief What an env slot holds. The integer values are hashed (@ref GlobalEnv::SymHash); keep them.

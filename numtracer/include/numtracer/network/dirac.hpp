@@ -27,7 +27,7 @@
 #include <utility>
 #include <vector>
 
-namespace numtracer::network
+namespace numtracer::inline network
 {
 
   /// @brief One token of a closed, trace-ordered gamma chain.

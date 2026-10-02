@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-namespace numtracer::network
+namespace numtracer::inline network
 {
 
   /// @brief A flattened network factor, tagged by @ref Elem::Kind:

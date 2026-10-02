@@ -58,10 +58,11 @@ chain or SU($N$) factors and nothing else changes — the sectors compose (see t
 
 Two things are worth stating plainly, because it is easy to assume otherwise:
 
-- **FunKit is optional.** `FromFunKit` is a convenience importer for flows *already derived* in the
-  FunKit/DiFfRG toolchain. You do **not** need it: derive your equations however you like and hand
-  the DSL network to `NumTrace` directly — the minimal driver in
-  [step-06](../tutorials/step-06.md) does exactly that.
+- **What FunKit is needed for.** `FromFunKit` is a convenience importer for flows *already derived*
+  in the FunKit/DiFfRG toolchain; you do not need it — hand-build the DSL network and give it to
+  `NumTrace` directly, as [step-06](../tutorials/step-06.md) does. `MakeNTKernel`, however, writes the
+  kernel through FunKit's C++ emitter, so the Mathematica code generator needs FunKit installed
+  either way. The C++ API needs neither.
 - **FORM is not needed** to use NumTracer or to generate your own kernels. It appears only when
   *regenerating the project's own reference-test oracles*, never on your path.
 

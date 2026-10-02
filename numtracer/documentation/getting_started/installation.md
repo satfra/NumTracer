@@ -1,17 +1,23 @@
 # Installation
 
-NumTracer builds as a small static C++20 library you can install with CMake support. 
-It also installs the Mathematica front-end on Wolfram's application path.
+NumTracer builds as a small static C++20 library with a CMake package. It also installs the
+Mathematica front-end on Wolfram's application path.
 
 ## Requirements
 
 * A C++20 compiler (GCC or Clang).
 * CMake ≥ 3.20.
-* Optional, only for the Mathematica code generator: a Wolfram installation (`wolframscript`). [FunKit](https://github.com/satfra/FunKit) is an *optional*  importer — you can hand-build networks also without it.
+* Optional, only for the Mathematica code generator: a Wolfram installation (`wolframscript`) and
+  [FunKit](https://github.com/satfra/FunKit).
+
 ```{admonition} Two usage paths — what each needs
 :class: tip
-- **C++ API**: needs *nothing but a C++20 compiler*
-- **Mathematica interface** (the code generator): needs only a Wolfram kernel and the C++ API. 
+- **C++ API** (trace and contract networks, evaluate them, lower a polynomial to straight-line C++):
+  needs *nothing but a C++20 compiler*.
+- **Mathematica code generator** (`MakeNTKernel`, which writes a complete kernel with its `fill()`,
+  signature and dressings): needs a Wolfram kernel **and FunKit** — `MakeNTKernel` uses FunKit's C++
+  emitter, even when the network itself is hand-built. FunKit's flow importer `FromFunKit` is
+  optional on top of that.
 
 See also [Bring your own network](bring-your-own-network.md).
 ```
@@ -47,7 +53,10 @@ For convenience the whole public API is available through one umbrella header �
 `#include <numtracer.hpp>` — instead of the individual subsystem headers.
 
 The [tutorial programs](../tutorials/index.md) in the repository's `Tutorials/` folder are a standalone CMake project that consumes NumTracer the way any external project would.
-Kernels emitted by the codegen are self-contained by default — they include only `numtracer/codegen/runtime.hpp` (which supplies `numtracer::complex` and `numtracer::compute::{powr,pow,sqrt,fma}`) — so a generated kernel drops into a consumer build with no extra dependency. 
+Kernels emitted by the codegen are self-contained by default — they include only two NumTracer
+headers, `numtracer/codegen/runtime.hpp` (which supplies `numtracer::complex` and
+`numtracer::compute::{powr,pow,sqrt,fma}`) and `numtracer/sun/sun_data.hpp` — so a generated kernel
+drops into a consumer build with no other dependency.
 A consumer that provides its own support API redirects the codegen via the `"RuntimeInclude"` / `"SupportNamespace"` options (see [codegen](../internals/codegen.md)).
 
 ## Build and test (in-tree)
@@ -56,7 +65,8 @@ A consumer that provides its own support API redirects the codegen via the `"Run
 ctest --test-dir NumTracer/build
 ```
 
-This runs the unit tests through CTest. Tests are built automatically and run on istallation if `-DNUMTRACER_BUILD_TESTS=ON`, which is the default.
+This runs the unit tests through CTest. The tests are built whenever `NUMTRACER_BUILD_TESTS` is on,
+which is the default when NumTracer is the top-level project; installing does not run them.
 To run a subset by name:
 
 ```bash

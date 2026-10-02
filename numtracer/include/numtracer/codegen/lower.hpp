@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-namespace numtracer::network {
+namespace numtracer::inline network {
 
 /// @brief A monomial of the lowered polynomial: `c * prod(var(envId)^exp)`, `vp` sorted by envId.
 struct LMono {

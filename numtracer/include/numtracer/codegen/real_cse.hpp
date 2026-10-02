@@ -21,7 +21,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace numtracer::network
+namespace numtracer::inline network
 {
 
   /// @brief Opcode tag for a real-SSA instruction.

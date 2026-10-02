@@ -47,7 +47,7 @@
 #include <map>
 #include <cmath>
 
-namespace numtracer::numeric
+namespace numtracer::inline numeric
 {
 
   using numtracer::Cx;

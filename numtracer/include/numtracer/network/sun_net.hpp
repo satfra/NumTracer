@@ -38,7 +38,7 @@
 #include <string> // the open-leg guard's diagnostic (assert_no_open_labels)
 #include <vector>
 
-namespace numtracer::network {
+namespace numtracer::inline network {
 
 /// @brief The structure a @ref SUNFac selects. The explicit 0–5 values are only for self-documentation;
 ///        no code outside this header depends on the specific numbers.

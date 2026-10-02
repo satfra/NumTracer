@@ -8,15 +8,15 @@ tools — and emits a flat, straight-line real-arithmetic kernel that a consumer
 ## What it computes
 
 A loop integrand is a product of tensors — gamma matrices, momentum vectors, metrics,
-projectors, colour generators — contracted together (summed over shared indices) down to a
+projectors, SU($N$) generators — contracted together (summed over shared indices) down to a
 single number that still depends on a few runtime quantities: momentum magnitudes, angles, and
 propagator dressings. That number is fed to an integrator and evaluated at hundreds of
 thousands of grid points.
 
 NumTracer is a *general* tensor-tracing engine. The physics is entirely in the network you
 hand it; the engine only contracts indices and folds the result. The numeric path handles
-Lorentz, Dirac, and SU($N$) colour *and* flavour structure, dresses individual flavours or
-colour/flavour components differently (per-flavour split and group-diagonal dressings), and factors
+Lorentz and Dirac structure and any number of SU($N$) groups (colour, flavour, …), dresses
+individual SU($N$) components differently (per-component split and group-diagonal dressings), and factors
 a diagram that disconnects into several closed traces into a product — see
 [Key concepts](concepts.md) and the [step-17](../tutorials/step-17.md).
 
@@ -31,32 +31,23 @@ is just the authors' application. Before assuming it is (or isn't) for you, read
 dictionary that maps your objects onto the engine's.
 ```
 
-## The numeric path, end to end
+## What goes in, what comes out
 
-NumTracer generates kernels by **numeric tracing** — a build-time generator driven from a small
-Mathematica front-end:
+There are two ways in, and both end in the same contraction engine.
 
-1. **Front-end.** `NumTrace` analyses a tensor network written in DSL heads (`ntMetric`,
-   `ntVec`, `ntTransProj`, `ntSUNf`, `ntSUNDeltaAdj`, `ntDress`, …) into a list of diagrams — each a
-   scalar coefficient times a contraction — together with the loop frame that fixes every
-   momentum's components and the env-id layout. `FromFunKit` imports a FunKit flow into the
-   same DSL. Vertex structure-sums are kept eager, so no product-of-sums monomial blow-up ever
-   forms; the same holds for dressed propagator numerators, which are collected into a single
-   trace rather than distributed into `2^D` diagrams (`"DressingCollection"`, on by default).
+**From C++** (no other tools needed). You describe a network directly — a Dirac chain such as
+$\mathrm{tr}(\slashed p\,\gamma^\mu \slashed q\,\gamma^\nu)$, a Lorentz network such as a
+projector $P_T(l)_{\mu\nu}$, an SU($N$) factor such as $T^a_{ij}T^a_{ji}$ — on a *frame* that says
+what the momenta are. NumTracer contracts it and hands back a polynomial in the frame's symbols,
+which you can evaluate, or lower to a straight-line C++ function. Tutorials
+[1–5](../tutorials/step-01.md) do exactly this.
 
-2. **Numeric contraction.** `MakeNTKernel` emits a small C++ generator and runs it. The
-   generator contracts each diagram numerically over the frame: the Dirac trace as 4×4 chiral
-   matrix products (including γ5; no `(2n−1)!!` Wick blow-up), the Lorentz network by bounded
-   index elimination (no `2^np` projector-mask blow-up), and the colour factor folded to a
-   number. Each diagram becomes a small polynomial in the frame's scalar symbols.
+**From Mathematica** (needs Wolfram and FunKit). You write the network in a small DSL (or import a
+FunKit flow), and `MakeNTKernel` writes a complete, self-contained C++ kernel: one function per
+trace, a `fill()` that computes the frame symbols once per call, and the assembly of all diagrams.
+[Tutorial 6](../tutorials/step-06.md) is the first one.
 
-3. **Lowering.** Common-subexpression elimination and Horner factoring lower that polynomial
-   to a flat straight-line kernel — trace functions over the frame symbols, a `fill` that
-   computes the symbols once per call, and the per-diagram assembly. The committed kernel is
-   plain C++ that depends only on a tiny runtime-support header.
-
-The same contraction primitives are exposed directly in C++, both for hand-built traces and
-as the numeric oracle the generated kernels are validated against.
+In both cases the result does not depend on NumTracer at run time: a generated kernel is plain C++.
 
 ## Why generate, rather than evaluate symbolically
 
@@ -64,29 +55,12 @@ Doing the full tensor contraction inside the consumer's compiler is correct but 
 trace of several transverse projectors expands explosively in the frame-component basis, and the
 compiler never reclaims intermediate memory. Running the *same* contraction as a build-time step —
 numerically, over a fixed frame — sidesteps both: the generator runs in seconds and tens of
-megabytes, and the consumer only ever compiles the small, flat result.
+megabytes, and the consumer only ever compiles the small, flat result. How the engine avoids the
+combinatorial blow-ups is described in [Under the Hood](../internals/index.md).
 
-```{admonition} Relationship to symbolic tracers
-:class: note
-This is the one place we compare NumTracer to a symbolic tensor-algebra system such as FORM (used,
-via FormTracer, only as a validation oracle for the test suite). Such a tool does the tensor
-algebra symbolically ahead of time and emits a flat polynomial in the scalar products; NumTracer
-produces the *same kind* of flat scalar kernel, but does the contraction numerically in C++ over a
-fixed frame. In practice it generates a kernel **~80–175× faster**, and the generated kernel is
-**competitive with or faster than** the symbolic one: on the quark–gluon vertex `ZAqbq{1,4,7}_147`
-it runs at **0.96× / 0.99× / 0.62×** the FORM kernel's time (`tests/refshim/bench_aqbq147.cpp`),
-and on the pure-gauge `ZA3_147` at 1.01×. See [PERFORMANCE.md](../../PERFORMANCE.md) for the
-per-flow table. Nothing downstream depends on that tool: the emitted kernel is self-contained C++.
+## Where to go next
 
-A fixed-frame contraction was long assumed to be structurally unable to do the partial-fractioning
-(integration-by-parts-like) step a symbolic tracer performs on scalar products before the frame is
-substituted, and that was believed to leave an irreducible residual. It does not: the cancellation
-can be done *in* the frame, by exact polynomial division of a shifted-line propagator denominator
-into the numerator that contains it (`divThroughPolyAtoms`, see
-[the numeric engine](../internals/numeric-engine.md)). That closed the residual, and improved
-accuracy at the same time — the division and the terms that cancel against it both disappear.
-```
-
-Next, [Key concepts](concepts.md) builds the mental model the
-[tutorials](../tutorials/index.md) rely on. See the [C++ API](../doxygen/NumTracer/html/index)
-for the full reference.
+- Coming from FORM? [Coming from FORM](coming-from-form.md) maps the vocabulary in one table.
+- [Key concepts](concepts.md) builds the mental model the [tutorials](../tutorials/index.md) rely on.
+- [Scope & conventions](scope-and-conventions.md) says exactly what is supported (4D, Euclidean, SU($N$)).
+- The [C++ API](../doxygen/NumTracer/html/index) is the full reference.

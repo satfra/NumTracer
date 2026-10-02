@@ -18,7 +18,7 @@
 #include <array>
 #include <utility> // std::move
 
-namespace numtracer::numeric
+namespace numtracer::inline numeric
 {
 
   /// @brief A 4×4 spinor matrix whose entries are @ref MPoly (numeric γ, symbolic momentum data).

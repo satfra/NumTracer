@@ -36,7 +36,7 @@
 
 #include <unistd.h> // sysconf(_SC_PAGESIZE) for the RSS profile
 
-namespace numtracer::numeric
+namespace numtracer::inline numeric
 {
 
   /// @brief Construct an empty polynomial of the phase-B backend type `P` at symbol-space size `nsym`.

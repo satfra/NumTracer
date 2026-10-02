@@ -21,7 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace numtracer::numeric::stats
+namespace numtracer::inline numeric::stats
 {
 
   using nt_u64 = std::uint64_t;

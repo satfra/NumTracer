@@ -23,7 +23,7 @@
 #include <utility>
 #include <vector>
 
-namespace numtracer::numeric
+namespace numtracer::inline numeric
 {
 
   /// @brief A dressing monomial: a sorted multiset of dressing-atom ids (the product of runtime

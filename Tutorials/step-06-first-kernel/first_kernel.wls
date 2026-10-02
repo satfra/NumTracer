@@ -6,8 +6,9 @@
  *
  *     p . P(l) . p / p^2   =   1 - cos^2(theta),
  *
- * and writes it to disk as an ordinary, self-contained header. Nothing here needs FunKit,
- * TensorBases, FORM or DiFfRG — only a Wolfram kernel and NumTracer itself.
+ * and writes it to disk as an ordinary, self-contained header. The network is hand-built, so
+ * TensorBases, FORM and DiFfRG are not involved; MakeNTKernel itself writes the C++ through
+ * FunKit's emitter, so FunKit must be installed.
  *
  * Run it either through the tutorial CMake project
  *     cmake --build build --target first_kernel_gen

@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-namespace numtracer::numeric {
+namespace numtracer::inline numeric {
 
 /// @brief Render an @ref MPoly as a C++ expression in @p symNames (real coefficients only — used
 ///        for projector denominators `k²` and component expressions, which carry no imaginary part
