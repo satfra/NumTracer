@@ -12,8 +12,8 @@
 /// @f$\gamma_5 = \mathrm{diag}(1,1,-1,-1)@f$ anticommutes with all four.
 ///
 /// Index conventions: `mu = 0..3` corresponds to @f$\gamma^1..\gamma^4@f$; spinor
-/// indices `i, j = 0..3`. The values are stored as plain `constexpr` tables so the
-/// expression-matrix builders in `dirac.hpp` can read entries at compile time, and
+/// indices `i, j = 0..3`. The values are stored as plain `constexpr` tables, read by
+/// `numeric/spinor_mat.hpp` (and the test-side dense oracle, `tests/oracle/dtensor.hpp`), and
 /// are cross-checked against the Clifford algebra in `tests/test_numeric_contract.cpp`
 /// (sections A/F for the gammas, H for `kC` below) -- that test is the safety net for
 /// these tables, which nothing else would notice were wrong.

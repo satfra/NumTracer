@@ -85,7 +85,7 @@ ipSym[s1_List, s2_List] := Total[Outer[ip[#1, #2] &, symV[s1], symV[s2], 1], 2];
 allAssignments = Tuples[{"M", "E"}, 3];
 
 nets = <|
-  (* NON-ZERO control, and the numeric-vs-dense engine check *)
+  (* NON-ZERO control *)
   "diag" -> ipSym[{"M", "M", "M"}, {"M", "M", "M"}] + ipSym[{"E", "E", "M"}, {"E", "E", "M"}],
   (* (a) orthogonality — must vanish identically *)
   "off"  -> ipSym[{"M", "M", "M"}, {"E", "E", "M"}],

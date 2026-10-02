@@ -14,7 +14,7 @@
 //        trace_rec, whose pair_factor read the Comm's empty vlc and silently collapsed it. This
 //        function is the cross-validation ORACLE in test_numeric_contract.cpp, so a wrong verdict
 //        here would "confirm" a wrong engine result.
-//   (D1) core/axplan.hpp's kMaxAxisRank=16 scratch arrays were entirely unbounds-checked, though the header
+//   (D1) oracle/axplan.hpp's kMaxAxisRank=16 scratch arrays were entirely unbounds-checked, though the header
 //        itself says an overflow "silently corrupts the contraction". Checking the OPERAND ranks is
 //        not enough: the result rank is nFreeA+nFreeB, so two in-range rank-10 operands sharing no
 //        axis give RR=20>kMaxAxisRank and overrun rid/rdim. This is the dense validation ORACLE's planner, so
@@ -41,7 +41,7 @@
 //        Both cores now count occurrences up front and refuse count == 1. Counts ≥ 3 are deliberately
 //        left alone (the front-end's NumTrace::badlabel owns those), so no valid net changes value —
 //        which is what the anchors below pin down.
-#include "numtracer/core/axplan.hpp"
+#include "oracle/axplan.hpp"
 #include "numtracer/network/dirac.hpp"
 #include "numtracer/network/network.hpp"
 #include "numtracer/network/sun_net.hpp"

@@ -1,6 +1,6 @@
 // ns/eval timing of the DENSE oracle (entry-for-entry brute force) on the QCD ZA gluon
 // self-energy — fast enough (~ms/eval) to measure the effect of changes to the dense fold
-// (dense/dtensor.hpp). Also cross-checks the dense oracle against the numeric backend.
+// (tests/oracle/dtensor.hpp). Also cross-checks the dense oracle against the numeric backend.
 //
 //   cmake -S . -B build -DNUMTRACER_BUILD_ZA3_147_DENSE=ON
 //   cmake --build build --target bench_za_dense && NT_DENSE_NP=20000 ./build/bench_za_dense

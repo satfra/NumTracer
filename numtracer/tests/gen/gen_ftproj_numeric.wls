@@ -1,10 +1,10 @@
 #!/usr/bin/env wolframscript
 (* Codegen gate for FINITE-TEMPERATURE support: a hand-built DSL net (no FunKit / no FORM /
    no dressings) over the finite-T frame propFrameFT, exercising the new front-end features
-   end-to-end through BOTH the numeric matrix-product backend and the dense oracle:
+   end-to-end through the numeric matrix-product backend:
 
      - ntElectricProj / ntMagneticProj  (the finite-T electric/magnetic projectors; eproj/mproj
-       leaves + electric_projector/magnetic_projector dense, with the spatial 1/|q⃗|² env slot),
+       leaves, with the spatial 1/|q⃗|² env slot),
      - ntTransProj at finite T  (still valid with a distinct temporal component),
      - ntSPS  (the spatial scalar product, resolved by the frame as the components-1..3 dot),
      - ntVec[q, 0]  (a scalar momentum component — the temporal/Matsubara component).
@@ -14,7 +14,7 @@
    p; the loop ll carries an independent temporal l0 and a spatial 3-vector (magnitude l1, angle
    cos1). Because ll's temporal component is not ∝ l1, the numeric backend takes the general
    polyFrameSpec path automatically (unitLoopOkQ is False). compare_ftproj_num.cpp checks
-   numeric == dense over random kinematics. *)
+   the numeric kernel against a direct analytic closed form over random kinematics. *)
 $repo = AbsoluteFileName @ FileNameJoin[{DirectoryName[$InputFileName], "..", "..", ".."}];
 $gen  = FileNameJoin[{$repo, "numtracer", "tests", "gen"}];
 Get[FileNameJoin[{$repo, "numtracer", "mathematica", "NumTracer.m"}]];

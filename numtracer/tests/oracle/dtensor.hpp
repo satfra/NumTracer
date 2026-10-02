@@ -1,33 +1,22 @@
 /// @file dtensor.hpp
-/// @brief The **dense** numeric tensor backend — a brute-force baseline that contracts
-///        labelled axes entry-for-entry, the entry-for-entry oracle the generator is checked against.
+/// @brief Test-side **dense** numeric tensor: a brute-force oracle that contracts labelled axes
+///        entry-for-entry. Used by test_dense_pack, test_guards and the two frozen dense benchmarks
+///        (bench_za_dense, bench_za3_147_dense); not part of the installed library.
 ///
 /// `DTensor<AX>` carries per-axis @ref numtracer::core::Ax "Ax<Id,Dim>" labels (so one tensor
 /// can mix Lorentz(4) ⊗ Dirac-spinor(4) ⊗ SU(N) at once), with its entries runtime
-/// @ref numtracer::Cx **numbers** in a `std::array` rather than expression types. Consequently:
-///   - the *type* is only the `AxList` (independent of the entry count), so a dense
-///     kernel **compiles flat** — no per-entry template instantiation, no structural
-///     blow-up — even for the largest networks (e.g. the four-gluon colour tensor);
-///   - contraction sums **every** index combination (no structural-zero pruning), which
-///     is exactly the naive dense-matrix-multiplication baseline the generated kernels
-///     are cross-checked against.
+/// @ref numtracer::Cx **numbers** in a `std::array`. The type depends only on the `AxList`, so a
+/// dense kernel compiles flat, and contraction sums **every** index combination (no
+/// structural-zero pruning). The contraction schedule comes from the planner in `axplan.hpp`.
 ///
-/// The whole *planning* layer is reused verbatim from the symbolic engine
-/// (`core::EPlan`, `make_eplan`, `a_index`/`b_index`, `make_axlist`, the `EAddPlan` add
-/// machinery) — those operate only on the id/dim arrays and know nothing about entry
-/// representation. Only the *fold* differs: a numeric `Cx` accumulation instead of
-/// folding expression types through `expr::mul`/`expr::add`.
-///
-/// Builders parallel the `et` ones (Lorentz `metric`/`vector`/`transverse_projector`/
-/// `longitudinal_projector`, Dirac `gamma`/`gamma_axis`/`gamma5`/`identity`, colour
-/// `T`/`f`/`delta_fund`/`delta_adj`), filling numeric entries from the same data tables
-/// and the same `double renv[]` runtime environment the codegen already emits.
+/// Builders: Lorentz `metric`/`vector`/`transverse_projector`/`longitudinal_projector`, Dirac
+/// `gamma_axis`/`identity`, colour `T`/`f`/`delta_fund`/`delta_adj`, filled from the library's
+/// data tables and the `double renv[]` runtime environment.
 #pragma once
 
-#include "numtracer/core/axplan.hpp"      // Ax, AxList, EPlan + planner (reused)
-#include "numtracer/core/config.hpp"      // NT_{BEGIN,END}_NO_LOOP_VECTORIZE
+#include "axplan.hpp"                     // Ax, AxList, EPlan + planner
 #include "numtracer/core/cx.hpp"          // Cx
-#include "numtracer/dirac/dirac_data.hpp" // gamma_entry, gamma5_entry
+#include "numtracer/dirac/dirac_data.hpp" // gamma_entry
 #include "numtracer/sun/sun_data.hpp"     // SUNData<N> (generators, f_nonzeros)
 
 #include <array>
@@ -35,6 +24,16 @@
 #include <cstddef>
 #include <utility>
 #include <vector>
+
+// Region guard disabling loop auto-vectorization: GCC 16.1.1 -O3 -march=native (AVX-512VL) miscompiles
+// the complex-`Cx` std::vector fold loops below (empty result buffer -> SIGSEGV). Clang is unaffected.
+#if defined(__GNUC__) && !defined(__clang__)
+#define NT_BEGIN_NO_LOOP_VECTORIZE _Pragma("GCC push_options") _Pragma("GCC optimize(\"no-tree-loop-vectorize\")")
+#define NT_END_NO_LOOP_VECTORIZE _Pragma("GCC pop_options")
+#else
+#define NT_BEGIN_NO_LOOP_VECTORIZE
+#define NT_END_NO_LOOP_VECTORIZE
+#endif
 
 namespace numtracer::dense
 {
@@ -47,53 +46,7 @@ namespace numtracer::dense
   template <class AX> struct DTensor {
     using axes = AX;                 ///< The axis list.
     std::array<Cx, AX::size> data{}; ///< Row-major numeric entries (all of them).
-    /// @brief The single entry of a rank-0 (scalar) result.
-    constexpr Cx scalar_value() const { return data[0]; }
-    /// @brief The rank-0 scalar as a `std::complex<double>` — used when a trace is genuinely
-    ///        complex (a Dirac-vertex projector carries an `i`); the kernel takes the real part
-    ///        of the assembled (complex coefficient × complex trace) integrand.
-    std::complex<double> scalar_cplx() const { return {data[0].re, data[0].im}; }
   };
-
-  // ---- contraction (reuses the et planner; numeric fold, no pruning) ----------
-
-  /// @brief Contract two dense tensors over their shared axis identities.
-  ///
-  /// The schedule (`EPlan`) and the result axis list are computed by the **same**
-  /// compile-time planner the symbolic engine uses; the body is the brute-force numeric
-  /// accumulation — every (result, shared) index pair contributes (no structural-zero
-  /// pruning). The per-result free-axis offsets are hoisted out of the shared-index loop
-  /// so the cost reflects the multiply-adds, not redundant index arithmetic.
-  template <class A, class B> constexpr auto contract(const A &a, const B &b)
-  {
-    constexpr core::EPlan plan = core::make_eplan(A::axes::ids, A::axes::dims, A::axes::rank, //
-                                                  B::axes::ids, B::axes::dims, B::axes::rank);
-    using AX = decltype(core::make_axlist<plan>(std::make_index_sequence<plan.RR>{}));
-    DTensor<AX> out{};
-    for (std::size_t r = 0; r < plan.nResult; ++r) {
-      // free-axis base offsets into A and B for this result entry (computed once per r)
-      std::size_t cur_result_idx[core::kMaxAxisRank] = {};
-      core::unflatten_mixed(r, plan.rdim, plan.RR, cur_result_idx);
-      std::size_t baseA = 0, baseB = 0;
-      for (int t = 0; t < plan.nFreeA; ++t)
-        baseA += cur_result_idx[t] * plan.strA[plan.faAxis[t]];
-      for (int t = 0; t < plan.nFreeB; ++t)
-        baseB += cur_result_idx[plan.nFreeA + t] * plan.strB[plan.fbAxis[t]];
-      Cx acc{0, 0};
-      std::size_t cur_shared_idx[core::kMaxAxisRank] = {};
-      for (std::size_t s = 0; s < plan.nShared; ++s) {
-        core::unflatten_mixed(s, plan.sdim, plan.nSh, cur_shared_idx);
-        std::size_t offA = baseA, offB = baseB;
-        for (int kk = 0; kk < plan.nSh; ++kk) {
-          offA += cur_shared_idx[kk] * plan.strA[plan.saAxis[kk]];
-          offB += cur_shared_idx[kk] * plan.strB[plan.sbAxis[kk]];
-        }
-        acc = acc + a.data[offA] * b.data[offB];
-      }
-      out.data[r] = acc;
-    }
-    return out;
-  }
 
   // ---- allocation-lean dynamic-rank fold (the variadic contract_all/add_all/scale path) -------
   //
@@ -150,21 +103,12 @@ namespace numtracer::dense
   /// @brief View a dynamic intermediate in place.
   constexpr detail::View view_of(const DynTensor &d) { return {d.data.data(), d.rank, d.ids.data(), d.dims.data()}; }
 
-// GCC 16.1.1 at -O3 -march=native (AVX-512VL) miscompiles the complex-`Cx` std::vector fold loops below:
-// the loop vectorizer emits bad masked code, so the variadic `contract_all` returns a DynTensor with an
-// empty `data` buffer and a later `own()` dereferences null (SIGSEGV). It is a compiler bug, not UB here —
-// clang -O3 -march=native, GCC -O2, GCC -O3 without -march=native, -mno-avx512vl, -fno-tree-loop-vectorize,
-// and ASan+UBSan are all clean. We disable loop vectorization for the whole fold block: the hot loop is a
-// loop-carried complex reduction GCC won't vectorize without -ffast-math anyway (cost is within run-to-run
-// noise), a function-scoped target("no-avx512vl") breaks the std::vector instantiation, and this is the
-// validation ORACLE where a silent miscompile — masking a real numeric-vs-dense disagreement — is the worst
-// failure mode. Remove once the GCC bug is fixed; the region macros live in core/config.hpp.
+// No loop vectorization for the fold block (the GCC miscompile noted at NT_BEGIN_NO_LOOP_VECTORIZE).
 NT_BEGIN_NO_LOOP_VECTORIZE
 
   /// @brief Contract views `a`,`b` over their shared axis identities, writing the result into
   ///        `out` (its `data` vector is resized, reusing capacity across fold steps). `out` must
-  ///        not alias either operand's storage. Same schedule and serial summation order as the
-  ///        typed @ref contract.
+  ///        not alias either operand's storage.
   constexpr void contract_into(DynTensor &out, detail::View a, detail::View b)
   {
     std::array<int, core::kMaxAxisRank> a_ids{}, a_dims{}, b_ids{}, b_dims{};
@@ -280,7 +224,7 @@ NT_BEGIN_NO_LOOP_VECTORIZE
     return out;
   }
 
-  // ---- entrywise sum (reuses the et add planner; numeric add) -----------------
+  // ---- entrywise sum (EAddPlan reindexing; numeric add) ------------------------
 
   /// @brief Sum views `a`,`b` (B reindexed into A's axis order by identity, via
   ///        @ref numtracer::core::EAddPlan), writing into `out` (capacity reused; `out` must not
@@ -331,10 +275,9 @@ NT_BEGIN_NO_LOOP_VECTORIZE
 NT_END_NO_LOOP_VECTORIZE
 
   // ============================================================================
-  // Sector builders — numeric counterparts of the symbolic builders. Constant builders
-  // are constexpr/nullary (colour, gamma) so a renv-free component folds to a
-  // compile-time constant; momentum builders take the same `double renv[]` the
-  // codegen fills.
+  // Sector builders. Constant builders are constexpr/nullary (colour, gamma) so a renv-free
+  // component folds to a compile-time constant; momentum builders take the same `double renv[]`
+  // the codegen fills.
   // ============================================================================
 
   // ---- Lorentz ---------------------------------------------------------------
@@ -392,57 +335,7 @@ NT_END_NO_LOOP_VECTORIZE
     return t;
   }
 
-  /// @brief The finite-T **magnetic** (spatial-transverse) projector
-  ///        @f$P^M_{ij}(l) = \delta_{ij} - l_i l_j/|\vec l|^2@f$ for spatial @f$i,j@f$, with the
-  ///        temporal (component 0) row/column vanishing. `renv[InvS]` holds @f$1/|\vec l|^2@f$.
-  template <int Mu, int Nu, int Base, int Mask, int InvS> auto magnetic_projector(const double *renv)
-  {
-    DTensor<AxList<Ax<Mu, 4>, Ax<Nu, 4>>> t{};
-    double q[4];
-    int k = 0;
-    for (int i = 0; i < 4; ++i)
-      q[i] = ((Mask >> i) & 1) ? renv[Base + k++] : 0.0;
-    const double invS = renv[InvS];
-    for (int i = 0; i < 4; ++i)
-      for (int j = 0; j < 4; ++j) {
-        double e = (i == j && i > 0) ? 1.0 : 0.0;
-        if (i > 0 && j > 0) e -= q[i] * q[j] * invS;
-        t.data[i * 4 + j] = Cx{e, 0};
-      }
-    return t;
-  }
-
-  /// @brief The finite-T **electric** (time-like-transverse) projector @f$P^E = P_T - P^M@f$.
-  ///        `renv[Inv]` holds @f$1/l^2@f$, `renv[InvS]` holds @f$1/|\vec l|^2@f$.
-  template <int Mu, int Nu, int Base, int Mask, int Inv, int InvS> auto electric_projector(const double *renv)
-  {
-    DTensor<AxList<Ax<Mu, 4>, Ax<Nu, 4>>> t{};
-    double q[4];
-    int k = 0;
-    for (int i = 0; i < 4; ++i)
-      q[i] = ((Mask >> i) & 1) ? renv[Base + k++] : 0.0;
-    const double inv = renv[Inv], invS = renv[InvS];
-    for (int i = 0; i < 4; ++i)
-      for (int j = 0; j < 4; ++j) {
-        double full = (i == j ? 1.0 : 0.0) - q[i] * q[j] * inv; // P_T
-        double mag = (i == j && i > 0) ? 1.0 : 0.0;             // P_M
-        if (i > 0 && j > 0) mag -= q[i] * q[j] * invS;
-        t.data[i * 4 + j] = Cx{full - mag, 0};
-      }
-    return t;
-  }
-
   // ---- Dirac (constant) ------------------------------------------------------
-
-  /// @brief The fixed-index gamma matrix @f$\gamma^{Mu}@f$ (two spinor axes).
-  template <int Mu, int Din, int Dout> constexpr auto gamma()
-  {
-    DTensor<AxList<Ax<Din, 4>, Ax<Dout, 4>>> t{};
-    for (int i = 0; i < 4; ++i)
-      for (int j = 0; j < 4; ++j)
-        t.data[i * 4 + j] = dirac::gamma_entry(Mu, i, j);
-    return t;
-  }
 
   /// @brief @f$\gamma^\mu@f$ carrying a free Lorentz axis (rank-3: Lorentz ⊗ two spinor).
   template <int MuLbl, int Din, int Dout> constexpr auto gamma_axis()
@@ -452,32 +345,6 @@ NT_END_NO_LOOP_VECTORIZE
       for (int i = 0; i < 4; ++i)
         for (int j = 0; j < 4; ++j)
           t.data[(mu * 4 + i) * 4 + j] = dirac::gamma_entry(mu, i, j);
-    return t;
-  }
-
-  /// @brief The chirality matrix @f$\gamma_5@f$.
-  template <int Din, int Dout> constexpr auto gamma5()
-  {
-    DTensor<AxList<Ax<Din, 4>, Ax<Dout, 4>>> t{};
-    for (int i = 0; i < 4; ++i)
-      for (int j = 0; j < 4; ++j)
-        t.data[i * 4 + j] = dirac::gamma5_entry(i, j);
-    return t;
-  }
-
-  /// @brief The charge-conjugation matrix @f$C=\gamma^2\gamma^4@f$ (two spinor axes).
-  ///
-  /// This path contracts by AXIS LABEL, so it is indifferent to which slot is the row and which the
-  /// column — a transposed factor is just the same tensor with its two labels named the other way
-  /// round. That makes it the independent oracle for anything involving `C`: it needs no orientation
-  /// model and no charge-conjugation rewrite, so it grades both the `DFac::C` engine token and the
-  /// front-end fold without sharing any machinery with either.
-  template <int Din, int Dout> constexpr auto C()
-  {
-    DTensor<AxList<Ax<Din, 4>, Ax<Dout, 4>>> t{};
-    for (int i = 0; i < 4; ++i)
-      for (int j = 0; j < 4; ++j)
-        t.data[i * 4 + j] = dirac::c_entry(i, j);
     return t;
   }
 

@@ -4,9 +4,9 @@
    colour trace, AND an index-disjoint pure-Lorentz scalar. These three pieces MULTIPLY (they are
    independent closed scalars of ONE 1-loop diagram) — exactly the structure that tripped the
    MakeNTKernel::disconnectmix guard (the hSigL sigma-quark vertex, QCD.nb). The numeric backend now
-   factors the disconnected Lorentz scalar as its own trace and multiplies it in at assembly, matching
-   the dense oracle's `coeff * tr_dirac * tr_colour * tr_lorentz`. compare_discdirac_num.cpp checks
-   numeric == dense over ~200k random points.
+   factors the disconnected Lorentz scalar as its own trace and multiplies it in at assembly
+   (`coeff * tr_dirac * tr_colour * tr_lorentz`). compare_discdirac_num.cpp checks it against a
+   direct analytic closed form.
 
    Three diagrams over the sp3Frame kinematics (p, l1 are SCALAR magnitudes here; the 4-momenta are
    q1, q2, q3, ql — ql carries the loop angle):

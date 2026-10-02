@@ -1,7 +1,7 @@
 #!/usr/bin/env wolframscript
 (* Codegen gate for the longitudinal projector: a hand-built DSL net (no FunKit / no FORM /
    no dressings) mixing ntLongProj and ntTransProj on the loop momentum, emitted via the NUMERIC
-   matrix-product backend and the DENSE oracle. compare_proj_num.cpp checks numeric == dense.
+   matrix-product backend. compare_proj_num.cpp checks it against a direct analytic closed form.
 
    The net is two non-telescoping diagrams over the sp3Frame kinematics:
      d1 = q1 . P_L(l) . q1   (longitudinal: (q1.l)^2 / l^2, keeps the 1/l^2 atom)

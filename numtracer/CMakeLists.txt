@@ -367,10 +367,12 @@ if(NUMTRACER_BUILD_TESTS)
     target_include_directories(${_bench} PRIVATE tests/gen tests/refshim)
     target_link_libraries(${_bench} PRIVATE NumTracer::NumTracer)
   endforeach()
+  # The frozen dense kernels include the test-side dense oracle (tests/oracle/dtensor.hpp).
+  target_include_directories(bench_za_dense PRIVATE tests/oracle)
+  target_include_directories(bench_za3_147_dense PRIVATE tests/oracle)
 
-  # The dense-tensor pack/unpack round trip (dense/dtensor.hpp). Same story: the source existed and
-  # was built by nothing. It is the only test of that subsystem — README calls DTensor "the naive
-  # baseline the generated kernels are validated against" — so it is registered as a real test.
+  # The dense-tensor packed-renv round trip (tests/oracle/dtensor.hpp). Same story: the source
+  # existed and was built by nothing, so it is registered as a real test.
   add_executable(test_dense_pack tests/test_dense_pack.cpp)
   target_link_libraries(test_dense_pack PRIVATE NumTracer::NumTracer)
 

@@ -1,15 +1,12 @@
 /// @file axplan.hpp
-/// @brief The entry-type-agnostic per-axis contraction *planner* — the structural
-///        index scheduler shared by the dense numeric tensor (@ref numtracer::dense::DTensor)
-///        and any other labelled-axis tensor.
+/// @brief The per-axis contraction *planner* for the test-side dense oracle
+///        (@ref numtracer::dense::DTensor, `dtensor.hpp`).
 ///
 /// Each axis is a *type* @ref numtracer::core::Ax "Ax<Id, Dim>": `Id` is the
 /// *contraction identity* (axes with the same `Id` on two tensors contract) and
 /// `Dim` is that axis's extent. The planner is purely combinatorial — it resolves
 /// which axes are shared (summed) versus free and the per-operand strides needed to
-/// walk both operands — and carries no entry *values*, so it is independent of the
-/// tensor's element type (expression types, `Cx`, ...). The element-specific fold
-/// lives in the consuming tensor (the dense `contract`, ...).
+/// walk both operands — and carries no entry values; the numeric fold lives in `dtensor.hpp`.
 #pragma once
 
 #include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
@@ -17,7 +14,6 @@
 #include <array>
 #include <cstddef>
 #include <stdexcept>
-#include <utility>
 
 namespace numtracer::core
 {
@@ -44,9 +40,8 @@ namespace numtracer::core
   /// overrun `rid`/`rdim`. That is exactly the "transient outer-product growth" the @ref kMaxAxisRank doc
   /// warns about, and it is reachable from in-range inputs.
   ///
-  /// `constexpr`-friendly: in a constant-evaluated call (@ref numtracer::dense::contract) a thrown
-  /// exception is simply not a constant expression, so the overflow becomes a COMPILE error at the
-  /// offending call site. At runtime (the `DynTensor` fold, `dense/dtensor.hpp`) it throws.
+  /// `constexpr`-friendly: in a constant-evaluated fold a thrown exception is not a constant
+  /// expression, so the overflow becomes a COMPILE error; at runtime it throws.
   constexpr void ax_check_rank(int r, const char *what)
   {
     if (r < 0 || r > kMaxAxisRank) NT_THROW(std::runtime_error, what);
@@ -95,14 +90,12 @@ namespace numtracer::core
       str[a] = str[a + 1] * dims[a + 1];
   }
 
-  // ---- contraction plan (structural => usable as a non-type template param) ----
+  // ---- contraction plan --------------------------------------------------------
 
   /// @brief A fully resolved contraction schedule for two labelled-axis tensors.
   ///
-  /// A *structural type* so it can be passed as a non-type template parameter,
-  /// which is how the result entries are built at compile time. It records which
-  /// axes are shared (summed) versus free, the result axes, and the per-operand
-  /// strides needed to walk both operands.
+  /// Records which axes are shared (summed) versus free, the result axes, and the
+  /// per-operand strides needed to walk both operands.
   struct EPlan {
     int RA = 0;                 ///< Rank of operand A.
     int RB = 0;                 ///< Rank of operand B.
@@ -145,8 +138,8 @@ namespace numtracer::core
     EPlan p;
     // Guard BEFORE any [kMaxAxisRank] write. RA/RB bound the b_is_shared / faAxis / fbAxis / strA / strB
     // writes; p.RR (checked after it is known, below) bounds rid/rdim.
-    ax_check_rank(RA, "make_eplan: operand A rank exceeds kMaxAxisRank (core/axplan.hpp)");
-    ax_check_rank(RB, "make_eplan: operand B rank exceeds kMaxAxisRank (core/axplan.hpp)");
+    ax_check_rank(RA, "make_eplan: operand A rank exceeds kMaxAxisRank (tests/oracle/axplan.hpp)");
+    ax_check_rank(RB, "make_eplan: operand B rank exceeds kMaxAxisRank (tests/oracle/axplan.hpp)");
     p.RA = RA;
     p.RB = RB;
     bool b_is_shared[kMaxAxisRank] = {};
@@ -163,7 +156,7 @@ namespace numtracer::core
         // extent, reading past B or truncating it.
         if (adim[a] != bdim[m])
           NT_THROW(std::runtime_error,
-                   "make_eplan: axes sharing an identity disagree on extent (core/axplan.hpp)");
+                   "make_eplan: axes sharing an identity disagree on extent (tests/oracle/axplan.hpp)");
         p.saAxis[p.nSh] = a;
         p.sbAxis[p.nSh] = m;
         p.sdim[p.nSh] = adim[a]; // == bdim[m]
@@ -179,7 +172,7 @@ namespace numtracer::core
     // THE case rank-checking the operands misses: two in-range operands sharing NO axis
     // outer-product to RR = RA + RB. Two rank-10 operands give RR = 20 > kMaxAxisRank and overrun rid/rdim.
     ax_check_rank(p.RR, "make_eplan: result rank nFreeA+nFreeB exceeds kMaxAxisRank — the chain "
-                        "outer-products before a shared axis closes it (core/axplan.hpp)");
+                        "outer-products before a shared axis closes it (tests/oracle/axplan.hpp)");
     for (int t = 0; t < p.nFreeA; ++t) {
       p.rid[t] = ida[p.faAxis[t]];
       p.rdim[t] = adim[p.faAxis[t]];
@@ -205,48 +198,6 @@ namespace numtracer::core
     return p;
   }
 
-  /// @brief Flat index into operand A for a given result index and shared index.
-  /// @param r The flat result index.
-  /// @param s The flat shared (summed) index.
-  /// @param p The contraction plan.
-  /// @return The flat index into A's entries.
-  constexpr std::size_t a_index(std::size_t r, std::size_t s, const EPlan &p)
-  {
-    std::size_t cr[kMaxAxisRank] = {}, cs[kMaxAxisRank] = {};
-    unflatten_mixed(r, p.rdim, p.RR, cr);
-    unflatten_mixed(s, p.sdim, p.nSh, cs);
-    std::size_t a = 0;
-    for (int t = 0; t < p.nFreeA; ++t)
-      a += cr[t] * p.strA[p.faAxis[t]];
-    for (int k = 0; k < p.nSh; ++k)
-      a += cs[k] * p.strA[p.saAxis[k]];
-    return a;
-  }
-  /// @brief Flat index into operand B for a given result index and shared index.
-  /// @param r The flat result index.
-  /// @param s The flat shared (summed) index.
-  /// @param p The contraction plan.
-  /// @return The flat index into B's entries.
-  constexpr std::size_t b_index(std::size_t r, std::size_t s, const EPlan &p)
-  {
-    std::size_t cr[kMaxAxisRank] = {}, cs[kMaxAxisRank] = {};
-    unflatten_mixed(r, p.rdim, p.RR, cr);
-    unflatten_mixed(s, p.sdim, p.nSh, cs);
-    std::size_t b = 0;
-    for (int t = 0; t < p.nFreeB; ++t)
-      b += cr[p.nFreeA + t] * p.strB[p.fbAxis[t]];
-    for (int k = 0; k < p.nSh; ++k)
-      b += cs[k] * p.strB[p.sbAxis[k]];
-    return b;
-  }
-
-  /// @brief Build the result @ref numtracer::core::AxList type from a plan's result axes.
-  /// @tparam plan The contraction plan.
-  /// @tparam I The result-axis index pack `0..RR-1`.
-  /// @return (unevaluated) the `AxList<Ax<rid,rdim>...>` result-axis type.
-  template <EPlan plan, std::size_t... I>
-  auto make_axlist(std::index_sequence<I...>) -> AxList<Ax<plan.rid[I], plan.rdim[I]>...>;
-
   // ---- entrywise sum plan (the dual of contract) ------------------------------
 
   /// @brief A resolved plan for adding two tensors with the same axis-id set.
@@ -268,7 +219,7 @@ namespace numtracer::core
                                    const std::array<int, Nb> &idb, const std::array<int, Nb> &bdim)
   {
     EAddPlan p;
-    ax_check_rank(R, "make_eaddplan: rank exceeds kMaxAxisRank (core/axplan.hpp)");
+    ax_check_rank(R, "make_eaddplan: rank exceeds kMaxAxisRank (tests/oracle/axplan.hpp)");
     p.R = R;
     int b_dims_local[kMaxAxisRank] = {};
     std::size_t bstrideAll[kMaxAxisRank] = {};

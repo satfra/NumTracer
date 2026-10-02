@@ -1,7 +1,7 @@
 #pragma once
 
 #include "shim.hpp"
-#include "numtracer/dense/dtensor.hpp"
+#include "dtensor.hpp"
 
 namespace DiFfRG
 {

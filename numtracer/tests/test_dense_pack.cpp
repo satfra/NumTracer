@@ -6,7 +6,7 @@
 // the old index-by-Lorentz-component scheme. This test exercises the case they don't: a GAPPED
 // mask (0b1001 — components 0 and 3 present, 1 and 2 absent), where Base+k != Base+component and
 // the packing actually matters.
-#include "numtracer/dense/dtensor.hpp"
+#include "oracle/dtensor.hpp"
 
 #include <cmath>
 #include <cstdio>
