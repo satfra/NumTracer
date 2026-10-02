@@ -218,7 +218,6 @@ recipe below silently ineffective.)
 | `NT_GEN_MEMO_MAX` | phase A/B | all distinct traces | Cap how many contracted traces stay resident; the rest are recomputed in phase B. The memory-bound dressed flows (`ZAAqbq`) dial this back. |
 | `NT_GEN_NO_DEDUP` | codegen | off | Disable the global sub-term dedup. The A/B control for the dedup speedup — `gen_zaaqbq1_small_numeric.wls` emits a dedup-off kernel with it as a graded reference. |
 | `NT_GEN_NO_POLYDIV` | phase A | off | Disable multi-term denominator cancellation (`divThroughPolyAtoms`). Costs a large amount of kernel size on quark/ghost loops; the control for that measurement. |
-| `NT_GEN_CC_CHUNK` | codegen | full fusion | Chunk size for fused-trace (`CrossTraceCSE`) lowering. Measured: full fusion wins. |
 | `NT_VERTEX_COLLECT` | front end | off | Enable the open-leg vertex collection (`ntDiracSlot`, above). Off because high-multiplicity flows OOM; on where it wins. |
 | `NT_NO_LABEL_CHECK` | front end | check on | Skip the per-diagram label census. ~14% of front-end time, but it is the guard that catches a label occurring more than twice — which otherwise becomes a silently wrong contraction. |
 | `NT_GEN_NOINLINE_MIN` | emission | `500` | Per-function instruction threshold above which a device trace function is emitted out-of-line. See [tests/gpu/README.md](../../tests/gpu/README.md). |

@@ -118,7 +118,6 @@ with the probe it has produced an O(1)-wrong kernel: the probe then runs on the 
 set, sees no imaginary part left, and flips the verdict to "pure" — validating exactly the
 assumption the pruning made. A self-confirming check is worse than no check.
 
-By contrast `CrossTraceCSE` is safe here (measured: zero deviation), it just costs compile time.
 ```
 
 ```{admonition} `ntRePartIntegrand` is not the naive rewrite

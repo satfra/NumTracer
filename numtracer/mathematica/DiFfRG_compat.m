@@ -164,9 +164,6 @@ Options[MakeNTKernelDiFfRG] =
     "ComputeType" -> "double",
     "ctype" -> Automatic, (* deprecated spelling of "ComputeType" *)
     "Type" -> "double",
-(* Fuse every trace into one shared CSE program (`trace_all`) instead of one function per trace.
-   Off by default, as in MakeNTKernel; GlobalCollect (on by default) largely subsumes it. *)
-    "CrossTraceCSE" -> False,
     "Decorator" -> Automatic, (* Automatic -> derived from Device *)
     "FlowDirectory" -> Automatic, (* Automatic -> DiFfRG`CodeTools`flowDir *)
     "GenDirectory" -> Automatic, (* Automatic -> a "gen" sibling of the flow directory *)
@@ -405,7 +402,6 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
       "DressingType" -> dressTy,
       "ShareInterpolatorIndex" -> shareIdxOpt,
       "HoistLoopConstLookups" -> hoistOpt,
-      "CrossTraceCSE" -> OptionValue["CrossTraceCSE"],
       "RealOutput" -> OptionValue["RealOutput"],
       "ComplexRuntimeProjection" -> OptionValue["ComplexRuntimeProjection"],
       "ComplexEndProjection" -> OptionValue["ComplexEndProjection"],

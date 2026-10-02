@@ -31,9 +31,8 @@ from pathlib import Path
 # The emitted forms we parse. These track gen.hpp's printer:
 #   trace fn   "<decor> double trN([[maybe_unused]] const double *f) {"
 #   SSA slot   "  const double sK = <expr>;"   (or "[[maybe_unused]] const double sK")
-#   fused      "<decor> void trace_all(..., double *t)"
 # ---------------------------------------------------------------------------------------------
-RE_FN = re.compile(r"^\s*(?:static\s+)?\S.*?\b(?:double|nt_complex_t|void)\s+(tr\d+|trace_all|fill)\s*\(")
+RE_FN = re.compile(r"^\s*(?:static\s+)?\S.*?\b(?:double|nt_complex_t|void)\s+(tr\d+|fill)\s*\(")
 RE_SSA = re.compile(r"^\s*(?:\[\[maybe_unused\]\]\s*)?const\s+double\s+s(\d+)\s*=\s*(.*?);\s*$")
 RE_FMA = re.compile(r"\bfma\s*\(")
 RE_CALL = re.compile(r"\b(sqrt|cos|sin|exp|log|log1p|pow|tanh|atan|cosh|sinh)\s*\(")

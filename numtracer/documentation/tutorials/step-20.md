@@ -90,7 +90,7 @@ levers:
   (the generator then *runs* slowly). This is one of the few settings where the middle option is
   the right one.
 * **Chunking.** Big net-builder literal tables are split into top-level functions of bounded size
-  (`ntChunkDef`, `$ntDefChunk`, `NT_GEN_CC_CHUNK`), and the chunks are bin-packed into several
+  (`ntChunkDef`, `$ntDefChunk`), and the chunks are bin-packed into several
   translation units (`gen_*_u0.cpp … _uN.cpp`) so no single emitted function blows the compiler.
   This is automatic; you only meet it when a flow is large enough to produce eight units, as
   [step-15](step-15.md)'s `ZA` manifest does.
@@ -128,9 +128,6 @@ are worth knowing:
   loops. Measured on `kernels.hh`: `ZAqbq{1,4,7}_147` went **1.92M/1.81M/2.01M → 431K/389K/451K**
   (0.22×), `ZAqbq1`/`ZAcbc` 0.27×, `ZA4` 0.76×. Accuracy *improved* and generation got faster.
   `NT_GEN_NO_POLYDIV=1` disables it — as a control, never as a setting.
-* **`CrossTraceCSE`** ([step-09](step-09.md)) reduces evaluation but costs roughly **2.2× on the
-  consumer's `-O3` compile**, and is measured roughly neutral (~0.87×) across this repository's
-  flows. Measure per flow.
 
 ## Offline generation
 

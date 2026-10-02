@@ -6,7 +6,7 @@ COMPLEMENT, which FINDINGS.md's per-flow tables left as an unattributed 50-68% b
 the flow's real CT_map_1.cc four times, each time with kernel.hh progressively stubbed:
 
     full        the production kernel.hh, untouched (sanity: must reproduce the production count)
-    nont        NumTracer traces stubbed (trace_all -> constants, fill dropped)
+    nont        NumTracer traces stubbed (trN calls -> constants, fill dropped)
     nont_ni     + every interpolator lookup stubbed (index()/at()/direct calls -> constants)
     nont_ni_nr  + every regulator call (RB/RBdot/RF/RFdot) stubbed
 
@@ -37,11 +37,8 @@ FUNC = re.compile(r"Function : (\S+)")
 
 def stub_nont(text: str) -> str:
     text = re.sub(r"[\w:]*::fill\(fenv[^;]*\);", "(void)fenv;", text)
-    text = re.sub(
-        r"[\w:]*::trace_all\(fenv, tarr\);",
-        "for (int _q = 0; _q < (int)(sizeof(tarr)/sizeof(tarr[0])); ++_q) tarr[_q] = 1e-3 * (_q + 1);",
-        text)
-    # complex flows call ntRe/ntIm over individual trace fns instead of trace_all
+    text = re.sub(r"[\w:]*::tr(\d+)\(fenv\)", lambda m: f"(1e-3 * ({m.group(1)} + 1))", text)
+    # complex flows read the traces through ntRe/ntIm
     text = re.sub(r"const auto (_interp\d+) = nt(Re|Im)\([^;]*\);",
                   lambda m: f"const auto {m.group(1)} = 1e-3;", text)
     return text

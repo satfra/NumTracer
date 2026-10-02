@@ -473,55 +473,6 @@ int main()
     }
   }
 
-  // D) Fused lowering chunk boundaries. `to_genprog_fused` now runs through the incremental
-  //    FusedStream (so the streaming phase B can lower a group at a time without ever materialising the
-  //    vector of every group's polynomial). Values are covered upstream; what is NOT covered anywhere
-  //    else is that `FusedProg::offset` — the global trace index of `root[0]`, which emit_cpp_fused uses
-  //    to store into the caller's `t[]` — still lands where the batch version put it. An off-by-one
-  //    there writes every trace to the wrong slot, silently, downstream of every value check.
-  //
-  //    NT_GEN_CC_CHUNK is latched into a function-local static on first use, so set it HERE, before the
-  //    first fused call in this process: that puts the whole block in the chunked regime, which is the
-  //    one with boundaries to get wrong. 7 traces at step 3 gives a short tail chunk.
-  {
-    std::printf("\nD) fused lowering: chunk offsets\n");
-    ::setenv("NT_GEN_CC_CHUNK", "3", /*overwrite=*/1);
-    constexpr int STEP = 3;
-
-    const int nsym = 3;
-    nm::LorentzEnv env(nsym);
-    std::vector<nm::MPoly> ps;
-    for (int i = 0; i < 7; ++i)
-      ps.push_back(env.mono({i % 3, (i + 1) % 2, 1}, Cx{1.0 + i, 0.25 * i}));
-    const std::vector<int> realOnly(ps.size(), 0);
-
-    network::GlobalEnv g;
-    const auto out = nm::to_genprog_fused(ps, g, realOnly);
-
-    const std::size_t wantChunks = (ps.size() + STEP - 1) / STEP;
-    bool ok = out.size() == wantChunks;
-    std::size_t seen = 0;
-    for (std::size_t c = 0; c < out.size(); ++c) {
-      const std::size_t wantOff = c * STEP;
-      const std::size_t wantN = std::min<std::size_t>(STEP, ps.size() - wantOff);
-      if (static_cast<std::size_t>(out[c].offset) != wantOff) ok = false;
-      if (out[c].root.size() != wantN || out[c].rootIm.size() != wantN) ok = false;
-      if (out[c].ins.empty()) ok = false;
-      seen += out[c].root.size();
-    }
-    if (seen != ps.size()) ok = false;
-    std::printf("  %zu traces at step %d -> %zu chunk(s), offsets contiguous, %zu roots %s\n", ps.size(),
-                STEP, out.size(), seen, ok ? "ok" : "FAIL");
-    if (!ok) ++fails;
-
-    // An empty input must yield NO program, not one empty one: emit_cpp_fused would otherwise emit a
-    // bodiless trace_all_c0 that stores nothing into t[].
-    network::GlobalEnv g2;
-    const auto empty = nm::to_genprog_fused(std::vector<nm::MPoly>{}, g2, std::vector<int>{});
-    std::printf("  empty input -> %zu programs %s\n", empty.size(), empty.empty() ? "ok" : "FAIL");
-    if (!empty.empty()) ++fails;
-  }
-
   // ---- H) the charge-conjugation matrix C, and the word-reversal identity it licenses ----------
   // C is a plain constexpr table (dirac/dirac_data.hpp), so nothing else would notice if an entry
   // were wrong -- this block is its safety net, exactly as section A is the gamma table's.

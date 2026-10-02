@@ -716,9 +716,8 @@ ntGenMainPhaseA[nSub_, nReused_, hasDressed_, mIdx_] :=
    ORDER INVARIANT: each group left-folds its members in group order, and the sink runs on the calling
    thread for gi = 0,1,2,... ascending; that fixes GlobalEnv intern order and the CSE instruction
    stream. The scale is spelled per branch so each keeps its exact expression (poly*constant vs
-   DPoly scaleCx). With CrossTraceCSE (crossCSE) the sink feeds ONE shared CSE builder (FusedStream)
-   instead of one independent program per group. *)
-ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_, crossCSE_] :=
+   DPoly scaleCx). *)
+ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_] :=
   With[{nGrp = Length[groups],
         grp = ntGenBigTable["ntGroups", "std::vector<std::vector<int>>", ntIntRow /@ groups, "std::vector<std::vector<int>> groups"]},
     ntStageResult["ntGenMainPhaseB", {"Defs", "Text"},
@@ -748,14 +747,8 @@ ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_, crossCSE_] :=
             "  numtracer::numeric::check_group_partition(groups, " <> ToString[nNet] <> ");\n",
 (* The dressed fold reads the plain-MPoly trace table + the per-sub-term dressing monomials sdr and
    builds the per-net DPoly channel by channel (fold_groups_streaming_dressed). *)
-            Which[
-              crossCSE && hasDressed,
-                "  FusedStream fstream(genv, realOnly);\n" <> "  env.fold_groups_streaming_dressed(sidx, dsc, sdr, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "    [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },\n" <> "    [&](size_t, DPoly &&acc){ fstream.add(acc); });\n" <> "  std::vector<FusedProg> fused = fstream.finish();\n",
-              crossCSE,
-                "  FusedStream fstream(genv, realOnly);\n" <> "  env.fold_groups_streaming<MPoly>(sidx, dsc, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "    [&](int d, MPoly &&m){ return m*env.constant(colv[d]); },\n" <> "    [&](size_t, MPoly &&acc){ fstream.add(acc); });\n" <> "  std::vector<FusedProg> fused = fstream.finish();\n",
-              hasDressed,
+            If[hasDressed,
                 "  env.fold_groups_streaming_dressed(sidx, dsc, sdr, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "    [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },\n" <> "    [&](size_t gi, DPoly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });\n",
-              True,
                 "  env.fold_groups_streaming<MPoly>(sidx, dsc, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "    [&](int d, MPoly &&m){ return m*env.constant(colv[d]); },\n" <> "    [&](size_t gi, MPoly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });\n"
             ],
             "  if(ntprof) std::fprintf(stderr,\"[num] phase B+lower: %d nets in %d groups, window %ld, %.1f s (W=%u)\\n\", " <> ToString[nNet] <> ", " <> ToString[nGrp] <> ", netWindow, std::chrono::duration<double>(std::chrono::steady_clock::now()-tB).count(), workersB);\n",
@@ -764,7 +757,7 @@ ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_, crossCSE_] :=
             "  { std::vector<MPoly> dead; traceTable.swap(dead); }\n"]|>]];
 
 (* the fill formulas, the header preamble, the Matsubara verdict, and the trace bodies *)
-ntGenMainEmission[varFill_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDressed_, crossCSE_, mIdx_, nGrp_] :=
+ntGenMainEmission[varFill_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDressed_, mIdx_, nGrp_] :=
   ntStageResult["ntGenMainEmission", {"Text"},
     <|"Text" ->
       StringJoin[
@@ -823,11 +816,8 @@ ntGenMainEmission[varFill_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDres
    duplicate as a one-line forwarder `trN(f){ return trK(f); }` (K = first with that body); a pure
    source-size win. The forwarder's RETURN TYPE is read off the emitted signature (the token before
    " tr<i>("), since a complex return is spelled as the `nt_complex_t` alias. The decorator stays
-   `decor`, so an out-of-lined canonical body does not drag `noinline` onto the forwarder.
-   Fused (crossCSE): ONE trace_all(f, t[]) instead of nGrp trN(); the kernel reads tarr[i]. *)
-        If[crossCSE,
-          "  emit_cpp_fused(std::cout, fused, \"trace_all\", decor);\n",
-          "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> ToString[nGrp] <> ");\n" <>
+   `decor`, so an out-of-lined canonical body does not drag `noinline` onto the forwarder. *)
+        "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> ToString[nGrp] <> ");\n" <>
           "    for(int i=0;i<" <> ToString[nGrp] <> ";++i){\n" <>
           "      const std::string nm = \"tr\"+std::to_string(i);\n" <>
           "      std::ostringstream os; emit_cpp(os, progs[i], nm, decor);\n" <>
@@ -835,8 +825,7 @@ ntGenMainEmission[varFill_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDres
           "      auto it = seen.find(body);\n" <>
           "      if(it==seen.end()){ seen.emplace(std::move(body), nm); std::cout << s; }\n" <>
           "      else { const std::string sig = s.substr(0, s.find(\" \"+nm+\"(\")); const std::string rt = sig.substr(sig.rfind(' ')+1);\n" <>
-          "        std::cout << decor << \" \" << rt << \" \" << nm << \"(const " <> $ntRealT <> " *f) { return \" << it->second << \"(f); }\\n\"; } } }\n"
-        ],
+          "        std::cout << decor << \" \" << rt << \" \" << nm << \"(const " <> $ntRealT <> " *f) { return \" << it->second << \"(f); }\\n\"; } } }\n",
         "  std::cout << \"}} // namespace " <> kernelNs <> "::\" << hns << \"\\n\";\n",
         "  if(ntprof) std::fprintf(stderr,\"[num] emission: %.1f s\\n\", std::chrono::duration<double>(std::chrono::steady_clock::now()-tEmit).count());\n",
         "  return 0;\n}\n"]|>];
@@ -847,7 +836,7 @@ ntGenMainEmission[varFill_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDres
    NT_GEN_NO_DEDUP=1 turns the dedup join off (I4): every occurrence is its own trace, nothing is
    merged, dropped or cached. It is the escape hatch and the control for the equivalence test, which
    must compare kernel VALUES: dedup changes GlobalEnv interning order and so renumbers every sN. *)
-emitNumericGenerator[coreNets_, restScalars_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kernelNs_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False, mIdx_:-1] :=
+emitNumericGenerator[coreNets_, restScalars_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kernelNs_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, mIdx_:-1] :=
   Module[{nNet = Length[coreNets], hasDressed = !FreeQ[coreNets, _ntDressedCore],
           noDedup = ntEnvFlag["NT_GEN_NO_DEDUP"], sub, col, preambles, cse, joined, unitSrc, main, ntT},
     sub = ntGenExpandSubTerms[coreNets, restScalars];
@@ -870,7 +859,7 @@ emitNumericGenerator[coreNets_, restScalars_, colourNets_, groups_, ncomp_, nsIn
     ntT = First @ AbsoluteTiming[
       main =
         With[{tables = ntGenMainTables[joined["netTraceRows"], joined["netDressRows"], joined["netScalarRows"], hasDressed],
-              phaseB = ntGenMainPhaseB[groups, nNet, realOnlyG, hasDressed, crossCSE]},
+              phaseB = ntGenMainPhaseB[groups, nNet, realOnlyG, hasDressed]},
           StringJoin[
             tables["Defs"], col["ColRDef"], phaseB["Defs"],
             ntGenMainPrologue[ncomp, nsInner, hasDressed]["Text"],
@@ -878,6 +867,6 @@ emitNumericGenerator[coreNets_, restScalars_, colourNets_, groups_, ncomp_, nsIn
             ntGenMainPhaseA[joined["nSub"], joined["nReused"], hasDressed, mIdx]["Text"],
             col["MainText"],
             phaseB["Text"],
-            ntGenMainEmission[ncomp["varFill"], nsInner, kernelNs, fillArgSig, complexQ, hasDressed, crossCSE, mIdx, Length[groups]]["Text"]]];];
+            ntGenMainEmission[ncomp["varFill"], nsInner, kernelNs, fillArgSig, complexQ, hasDressed, mIdx, Length[groups]]["Text"]]];];
     ntLog["[prof] main() data tables: ", ntT, " s"];
     {preambles["Pre"], unitSrc["Units"], unitSrc["Decl"], main, joined["nSub"]}];

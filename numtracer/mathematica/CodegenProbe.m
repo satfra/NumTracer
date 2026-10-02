@@ -12,11 +12,8 @@
    The verdict is applied by the PREPROCESSOR: `kernel.hh` carries all three bodies under
    `#if <MACRO> == 2 / #elif == 1 / #else`, and the probe's C++ `main` writes `<MACRO>` into the verdict
    header (`-o <file> -m <MACRO>`). So the probe is an ordinary build step and generation can run
-   without a Wolfram kernel.
-
-   "TraceArrayDecl": with CrossTraceCSE the integrand's trace tokens are `tarr[i]` reads, so the probe
-   must declare and fill that array exactly as the kernel's coreBlock does. Empty for the per-trace path. *)
-Options[ntProbeSource] = {"NPoints" -> 4000, "Tol" -> 1.*^-9, "TraceArrayDecl" -> ""};
+   without a Wolfram kernel. *)
+Options[ntProbeSource] = {"NPoints" -> 4000, "Tol" -> 1.*^-9};
 
 (* ---- ntProbeSource: CONTRACT ------------------------------------------------------------------
    Emits the C++ source of the imaginary-part PROBE: a standalone program that evaluates the same
@@ -81,10 +78,7 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
           angleDecls,
           {$ntRealT <> " fenv[(" <> nsHome <> "::nenv) > 0 ? (" <> nsHome <> "::nenv) : 1];"},
           drDecls,
-          {nsHome <> "::fill(fenv, " <> StringRiffle[Join[SymbolName /@ fillArgs, drFillArgs], ", "] <> ");"},
-          If[OptionValue["TraceArrayDecl"] === "",
-            {},
-            {OptionValue["TraceArrayDecl"]}]],
+          {nsHome <> "::fill(fenv, " <> StringRiffle[Join[SymbolName /@ fillArgs, drFillArgs], ", "] <> ");"}],
         "\n"];
     (* Three more full COEN lowerings of the stubbed integrand; timed separately from the kernel's own
        [prof] body lines because this is pure verdict overhead. *)

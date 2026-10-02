@@ -184,8 +184,8 @@ directly, with the projector and Wick combinatorics resolved numerically rather 
 same invariant scalar-product basis a symbolic tracer arrives at, without ever forming the
 intermediate blow-ups.
 
-Three things then keep the emitted polynomial small. Two are cancellations, and they are where the
-compactness actually comes from:
+Two cancellations then keep the emitted polynomial small, and they are where the compactness actually
+comes from:
 
 - **Unit-vector constraints** (`reduce_units`, `numeric/mpoly.hpp`). The loop momentum is written as
   magnitude × unit direction, so `ΣUμ² = 1` holds exactly; rewriting `U_last² → 1 − Σ_{μ<last} Uμ²`
@@ -199,8 +199,6 @@ compactness actually comes from:
   the atom entirely. Dirac-trace numerators routinely do contain a factor of the very `k²` that sits
   underneath them, so this fires often and removes both a division and every term that cancelled
   against it.
-- **Cross-trace CSE** (`"CrossTraceCSE"`, see [CSE and lowering](cse-and-lowering.md)), which shares
-  subexpressions across all of a flow's traces rather than lowering each independently.
 
 The second of these is the frame-space analogue of the partial-fractioning (integration-by-parts-like)
 step a symbolic tracer does on scalar products *before* substituting a frame. It was previously

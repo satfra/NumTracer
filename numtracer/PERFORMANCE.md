@@ -38,10 +38,7 @@ Three changes landed to get there, in order of size:
    ZAqbq1_147 Mq-in: 384 of 1,168 trial divisions are exact, monomials 13,269 → 4,832, SSA
    33,775 → 7,649, runtime 3021 → 1102 ns. **Accuracy improves** (one division and a pile of
    cancelling terms are gone). Generation gets *faster*. `NT_GEN_NO_POLYDIV=1` disables.
-2. **`CrossTraceCSE` / `trace_all`** (`codegen/gen.hpp`, `numeric/numeric_contract.hpp`) — all trace
-   polynomials lower through one shared CSE program. 2.64x → 2.47x on ZAqbq1_147 Mq-in. Opt-in
-   (`"CrossTraceCSE" -> True`): it costs ~2.2x on the consumer's `-O3` compile.
-3. **Coefficient snapping** (`snap_coeff`, `numeric/numeric_contract.hpp`) — 2.90x → 2.64x, free.
+2. **Coefficient snapping** (`snap_coeff`, `numeric/numeric_contract.hpp`) — 2.90x → 2.64x, free.
 
 This supersedes the 1.35/1.37/1.05 row below, which had been unchanged since the initial commit and
 predates `tests/gen/gen_qcd_aqbq147_numeric.wls` — it never measured this flow.

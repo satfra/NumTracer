@@ -59,10 +59,6 @@ FUN_RE = re.compile(
     r"^static\s+(?:" + DECOR_RE + r"\s+)*"
     r"(void|double|float|nt_complex_t|std::complex<double>|auto)\s+(\w+)\("
 )
-# CrossTraceCSE emits ONE `void trace_all(const double *f, T *t)` per chunk instead of N `trN()`
-# functions, and its results leave through `t[i] = ...;` stores rather than a `return`. Those stores
-# are the roots — without them every op in the fused body looks dead and the reported cost is zero.
-STORE_RE = re.compile(r"^\s*t\[\d+\] = (.+);\s*$")
 RET_RE = re.compile(r"^\s*return\s+(.*);\s*$")
 NUM_RE = re.compile(r"^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$")
 IDENT_RE = re.compile(r"\b[A-Za-z_]\w*\b")
@@ -123,16 +119,15 @@ def parse_rhs(rhs):
 
 
 def roots_of(fn):
-    """Every result expression of a trace fn: its `return`, plus any fused `t[i] =` stores."""
+    """Every result expression of a trace fn (its `return`)."""
     out = []
     if fn["ret"]:
         out.append(fn["ret"])
-    out.extend(fn.get("stores", ()))
     return out
 
 
 def parse_functions(lines):
-    """{name: {"ops": {...}, "order": [...], "ret": <return str>, "stores": [<store str>...]}}."""
+    """{name: {"ops": {...}, "order": [...], "ret": <return str>}}."""
     fns = {}
     cur = None
     depth = 0
@@ -140,7 +135,7 @@ def parse_functions(lines):
         if cur is None:
             m = FUN_RE.match(ln)
             if m and m.group(2) not in ("powr", "fill"):
-                cur = {"name": m.group(2), "ops": {}, "order": [], "ret": None, "stores": []}
+                cur = {"name": m.group(2), "ops": {}, "order": [], "ret": None}
                 depth = ln.count("{") - ln.count("}")
                 if depth <= 0:
                     depth = 1 if "{" in ln else 0
@@ -158,9 +153,6 @@ def parse_functions(lines):
         m = RET_RE.match(ln)
         if m:
             cur["ret"] = m.group(1)
-        m = STORE_RE.match(ln)
-        if m:
-            cur["stores"].append(m.group(1))
         if depth <= 0:
             fns[cur["name"]] = cur
             cur = None

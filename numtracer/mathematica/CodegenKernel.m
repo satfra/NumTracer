@@ -189,10 +189,6 @@ Options[mkGenerateKernel] =
 (* {sym -> expr}: kinematic angle symbols the dressing keeps SYMBOLIC, emitted once as
    `const double sym = ...;` so a shared sub-expression (a sqrt) is computed once. *)
     "AngleDefs" -> {},
-(* True: lower all traces through ONE shared CSE program, trace_all(f, t[]), sharing subexpressions
-   across traces. t[] is typed trace_all_t (complex iff some trace is), so nothing is truncated.
-   Merging many small functions into one large block can spill and cost runtime. *)
-    "CrossTraceCSE" -> False,
 (* <|mom -> {e0,e1,e2,e3}|>: explicit momentum components, taken verbatim (polynomialised);
    Automatic picks the most compact frame parametrisation. *)
     "Components" -> Automatic,
@@ -430,7 +426,7 @@ ntGenOptions[OptionsPattern[mkGenerateKernel]] :=
     ntStageResult["ntGenOptions",
       {"Name", "Namespace", "KernelNamespace", "SupportNamespace", "NsHome", "VerdictMacro",
        "Dressings", "ScalarParams", "ScalarParamNames", "ADNames", "ParameterOrder", "DressingType",
-       "ConstArgQ", "AngleDefs", "CrossTraceCSE", "Decorator", "DeviceTarget", "Offline",
+       "ConstArgQ", "AngleDefs", "Decorator", "DeviceTarget", "Offline",
        "RunGenerator", "RunOnline", "MainOpt", "IncludeDir", "RuntimeInclude", "ExtraIncludes",
        "RegulatorTemplate", "RegulatorAlias", "Components", "SymbolDefs", "MatsubaraVar",
        "DecayingRegulators", "MatsubaraFiniteExtent", "HoistLoopConstLookups",
@@ -462,7 +458,6 @@ ntGenOptions[OptionsPattern[mkGenerateKernel]] :=
               Function[a, a === Global`p || a === Global`k],
               Function[a, a === Global`k || MemberQ[ca, If[StringQ[a], a, ToString[a]]]]]],
         "AngleDefs" -> OptionValue["AngleDefs"],
-        "CrossTraceCSE" -> OptionValue["CrossTraceCSE"],
 (* normalise raw CUDA qualifiers to the Kokkos macros — see ntKokkosDecor. *)
         "Decorator" -> ntKokkosDecor[OptionValue["Decorator"]],
         "DeviceTarget" -> OptionValue["DeviceTarget"],
@@ -848,13 +843,8 @@ ntGroupTraces[netCoeff_, colourDressingToken_, factorIdsOf_, factorNets_, factor
             Identity]|>]];
 
 (* ---- STAGE 6: integrand -----------------------------------------------------------------------
-   Trace reference: with CrossTraceCSE the kernel fills a `tarr[]` once via trace_all() and reads
-   tarr[i]; otherwise it calls the independent tr_i(fenv). *)
-ntTraceRef[crossCSE_, nsHome_] :=
-  If[crossCSE,
-    "tarr[" <> ToString[#] <> "]",
-    nsHome <> "::tr" <> ToString[#] <> "(fenv)"
-  ]&;
+   Trace reference: the kernel calls the independent tr_i(fenv). *)
+ntTraceRef[nsHome_] := nsHome <> "::tr" <> ToString[#] <> "(fenv)"&;
 
 (* The dressing coefficient stays FACTORED in `netCoeff` (COEN CSEs it), so each group is one
    collected kinematic trace × its dressing — not a flat polynomial.
@@ -905,22 +895,15 @@ ntHoistLoopConstLookups[integrand_, args_, dress_, enabled_] :=
     ntStageResult["ntHoistLoopConstLookups", {"Integrand", "HoistCalls", "HoistSyms"},
       <|"Integrand" -> expr, "HoistCalls" -> hoistCalls, "HoistSyms" -> hoistSyms|>]];
 
-(* ---- STAGE 7: kernel lowering -----------------------------------------------------------------
-   The tarr declaration+fill, used by BOTH the kernel's preamble and the RealProbe TU (which
-   evaluates the same integrand, so it needs the same tokens in scope). `trace_all_t` is emitted by
-   emit_cpp_fused from the ACTUAL lowered roots (complex iff some trace is complex), so the array
-   type can never disagree with what trace_all stores — and ntIm(double)=0.0 is then correct rather
-   than lossy, because the type is double only when every trace really is real. *)
-ntTarrDecl[nsHome_, nGrp_] :=
-  nsHome <> "::trace_all_t tarr[" <> ToString[nGrp] <> "]; " <> nsHome <> "::trace_all(fenv, tarr);";
+(* ---- STAGE 7: kernel lowering ----------------------------------------------------------------- *)
 
 (* NB: deliberately NO `using std::complex;` — unqualified complex<double> resolves to the
    support namespace's `complex` alias, so a device support header can substitute a device-safe
    complex (nvcc silently miscompiles std::complex arithmetic to 0 in device code).
    The fenv setup block: declare fenv, (dressed only) compute each dressing atom into dr_<id>,
-   fill, and (CrossTraceCSE) precompute the traces. Kinematic angle defs (kept symbolic in the
+   and fill. Kinematic angle defs (kept symbolic in the
    dressing) are emitted once as named temporaries. *)
-ntKernelPreamble[angleDefs_, fillArgs_, drAtoms_, hasDr_, crossCSE_, tarrDecl_, nsHome_, supportNs_] :=
+ntKernelPreamble[angleDefs_, fillArgs_, drAtoms_, hasDr_, nsHome_, supportNs_] :=
   Module[{angleDecls, coreBlock},
     angleDecls = ("const " <> $ntRealT <> " " <> SymbolName[First[#]] <> " = " <> cppFlat[Last[#]] <> ";")& /@ angleDefs;
     coreBlock =
@@ -938,10 +921,7 @@ ntKernelPreamble[angleDefs_, fillArgs_, drAtoms_, hasDr_, crossCSE_, tarrDecl_, 
             If[hasDr,
               Join[SymbolName /@ fillArgs, ("dr_" <> ToString[#])& /@ Range[0, Length[drAtoms] - 1]],
               SymbolName /@ fillArgs]},
-          nsHome <> "::fill(fenv, " <> StringRiffle[fillCallArgs, ", "] <> ");"],
-        If[crossCSE,
-          tarrDecl,
-          Nothing]};
+          nsHome <> "::fill(fenv, " <> StringRiffle[fillCallArgs, ", "] <> ");"]};
 (* DRESSED: the dr_<id> dressing expressions can reference the derived kinematic angles, so the
    angle decls must precede the fenv block. NON-dressed: fenv first, then the angle decls. *)
     ntStageResult["ntKernelPreamble", {"Preamble", "AngleDecls"},
@@ -1260,7 +1240,7 @@ ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, 
 ntEmitGeneratorSources[coreNets_, restScalars_, colourNets_, groups_, ncomp_, fillArgSig_, complexQ_,
                        realOnlyG_, mVarIdx_, o_, genFile_] :=
   Module[{genPre, genUnits, genDecl, genMain, nSub, declFile, pchFile, unitFiles},
-    With[{ntT = First @ AbsoluteTiming[{genPre, genUnits, genDecl, genMain, nSub} = emitNumericGenerator[coreNets, restScalars, colourNets, groups, ncomp, o["Namespace"], fillArgSig, o["KernelNamespace"], complexQ, realOnlyG, o["CrossTraceCSE"], mVarIdx];]},
+    With[{ntT = First @ AbsoluteTiming[{genPre, genUnits, genDecl, genMain, nSub} = emitNumericGenerator[coreNets, restScalars, colourNets, groups, ncomp, o["Namespace"], fillArgSig, o["KernelNamespace"], complexQ, realOnlyG, mVarIdx];]},
       ntLog["[prof] emitNumericGenerator: ", ntT, " s"]];
     declFile = StringReplace[genFile, ".cpp" -> "_nets.hh"];
 (* Precompiled-header source for the -O0 net-builder units. Deliberately a SUPERSET of what any
@@ -1439,12 +1419,12 @@ ntGenPass[coreNets_, restScalars_, colourNets_, groups_, ncomp_, fillArgSig_, co
    "Reprune": the verdict was taken on the UNPRUNED traces, so a real verdict (Pure/RePart)
    certifies the imaginary residual cancels and a pruned re-generation is lossless for the
    consumer. A Complex verdict keeps all-complex traces. *)
-ntProbeAndReprune[o_, integrand_, args_, fillArgs_, angleDecls_, drAtoms_, tarrDecl_, pruneG_,
+ntProbeAndReprune[o_, integrand_, args_, fillArgs_, angleDecls_, drAtoms_, pruneG_,
                   complexQ_, genFile_, headerFile_] :=
   Module[{probeFile = None, verdict = None, reprune = False},
     If[complexQ && !o["ComplexEndProjection"],
       probeFile = FileNameJoin[{DirectoryName[genFile], "probe_" <> o["Namespace"] <> ".cpp"}];
-      ntExportCpp[probeFile, ntProbeSource[integrand, args, fillArgs, o["AngleDefs"], angleDecls, o["NsHome"], headerFile, drAtoms, "TraceArrayDecl" -> If[o["CrossTraceCSE"], tarrDecl, ""]]];
+      ntExportCpp[probeFile, ntProbeSource[integrand, args, fillArgs, o["AngleDefs"], angleDecls, o["NsHome"], headerFile, drAtoms]];
       Print["wrote probe: ", probeFile];
       If[o["RunOnline"] && o["RealProbe"],
         verdict = ntRunProbe[probeFile, DirectoryName[headerFile], FileNameJoin[{DirectoryName[headerFile], ntVerdictFile}], o["VerdictMacro"]];
@@ -1483,7 +1463,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
          $ntComplexRuntimeProjection = $ntComplexRuntimeProjection,
          $diagDrIntern = $diagDrIntern, $drIntern = $drIntern,
          $ctCache = <||>, $dsCache = <||>, $odCache = <||>, $dslCache = <||>},
-  Module[{o, fr, ms, complexQ, nets, incDir, dd, grp, hoist, integrand, prune, nGrp, tarrDecl,
+  Module[{o, fr, ms, complexQ, nets, incDir, dd, grp, hoist, integrand, prune, nGrp,
           hasDr, pre, sig, part, header, gen, probe},
     Needs["FunKit`"];
 (* The integrand Sum and COEN's lowering recurse ~linearly in the number of trace groups (>1000 on
@@ -1509,7 +1489,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
             nets["FactorCompOf"]];
     hoist = ntHoistLoopConstLookups[
               ntAssembleIntegrand[grp["Groups"], grp["NAdditiveGroups"], grp["FactorGroupsOf"], nets["NetCoeff"],
-                dd["ColourDressingToken"], nets["FactorIdsOf"], ntTraceRef[o["CrossTraceCSE"], o["NsHome"]]]["Integrand"],
+                dd["ColourDressingToken"], nets["FactorIdsOf"], ntTraceRef[o["NsHome"]]]["Integrand"],
               fr["Args"], o["Dressings"], o["HoistLoopConstLookups"]];
     integrand = hoist["Integrand"];
 (* a package global read several call layers down (ntPureIntegrand/ntRePartIntegrand ->
@@ -1518,7 +1498,6 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
     prune = ntPruneSpec[nets["NetCoeff"], grp["Groups"], complexQ, o["Offline"],
               o["PruneRealTraces"], o["RealProbe"], o["RunGenerator"]];
     nGrp = Length[grp["Groups"]];
-    tarrDecl = ntTarrDecl[o["NsHome"], nGrp];
 (* surface the post-net-build shape, and abort on empty nets / empty grouping rather than emit a
    placeholder kernel. *)
     ntLog["[prof] post-net-build: nets=", Length[nets["CoreNets"]], " groups(nGrp)=", nGrp, " complexQ=", complexQ];
@@ -1526,8 +1505,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
       Message[mkGenerateKernel::emptynets, o["Name"], Length[nets["CoreNets"]], nGrp];
       Abort[]];
     hasDr = !FreeQ[nets["CoreNets"], _ntDressedCore];
-    pre = ntKernelPreamble[o["AngleDefs"], fr["FillArgs"], nets["DrAtoms"], hasDr, o["CrossTraceCSE"],
-            tarrDecl, o["NsHome"], o["SupportNamespace"]];
+    pre = ntKernelPreamble[o["AngleDefs"], fr["FillArgs"], nets["DrAtoms"], hasDr, o["NsHome"],
+            o["SupportNamespace"]];
     sig = ntKernelSignature[o, fr["Args"], fr["FillArgs"], hoist["HoistCalls"], hoist["HoistSyms"],
             hasDr, Length[nets["DrAtoms"]]];
     ntAssertNumericIntegrand[integrand];
@@ -1538,7 +1517,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
     gen = ntGenPass[nets["CoreNets"], nets["RestScalars"], dd["ColourNets"], grp["Groups"], fr["NComp"],
             sig["FillArgSig"], complexQ, prune["realOnlyG"], ms["MVarIdx"], o, incDir, genFile, headerFile];
     probe = ntProbeAndReprune[o, integrand, fr["Args"], fr["FillArgs"], pre["AngleDecls"],
-              nets["DrAtoms"], tarrDecl, prune["pruneG"], complexQ, genFile, headerFile];
+              nets["DrAtoms"], prune["pruneG"], complexQ, genFile, headerFile];
 (* the deferred PruneRealTraces pass: re-emit with the pruned groups *)
     If[probe["Reprune"],
       gen = ntGenPass[nets["CoreNets"], nets["RestScalars"], dd["ColourNets"], grp["Groups"], fr["NComp"],

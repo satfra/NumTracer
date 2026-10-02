@@ -190,12 +190,11 @@ nt_tutorial_wls(dsl_heads
                 H_sunf_kernel.hh H_sunf_kernels.hh
                 H_dress_kernel.hh H_dress_kernels.hh)
 
-# step-09 — the same network emitted four ways; every variant must agree to the last bit
+# step-09 — the same network emitted three ways; every variant must agree to the last bit
 nt_tutorial_wls(options
                 step-09-codegen-options/options.wls
                 step-09-codegen-options/check_options.cpp
                 Opt_default_kernel.hh Opt_default_kernels.hh
-                Opt_xcse_kernel.hh Opt_xcse_kernels.hh
                 Opt_const_kernel.hh Opt_const_kernels.hh
                 Opt_ns_kernel.hh Opt_ns_kernels.hh)
 

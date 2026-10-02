@@ -6,7 +6,7 @@ Tags: `codegen`, `options` · **Tier B** (a Wolfram kernel and FunKit)*
 ## Introduction
 
 `MakeNTKernel` has 35 options. Listing them would be a reference page; this is a tutorial, so
-instead we emit **the same network four ways** and look at what actually changed in the generated
+instead we emit **the same network three ways** and look at what actually changed in the generated
 C++.
 
 The organising fact is this: **almost every option is semantics-preserving.** It changes how the
@@ -21,7 +21,7 @@ From `CodegenKernel.m`:
 
 ```
 "ComputeType","Name","Namespace","Dressings","ScalarParams","ADParams","ParameterOrder",
-"Decorator","DeviceTarget","IncludeDir","RunGenerator","AngleDefs","CrossTraceCSE",
+"Decorator","DeviceTarget","IncludeDir","RunGenerator","AngleDefs",
 "Components","SymbolDefs","RuntimeInclude","ExtraIncludes","KernelNamespace","SupportNamespace",
 "DressingType","ShareInterpolatorIndex","HoistLoopConstLookups","RegulatorTemplate",
 "RegulatorAlias","RealProbe","PruneRealTraces","ComplexRuntimeProjection","ComplexEndProjection",
@@ -36,7 +36,7 @@ They fall into seven groups:
 | **Identity** — what the kernel is called and where it lives | `Name`, `Namespace`, `KernelNamespace`, `SupportNamespace`, `Decorator`, `DeviceTarget` | here, and [step-21](step-21.md) for the device decorator |
 | **Interface** — what it takes and returns | `Dressings`, `DressingType`, `ScalarParams`, `ADParams`, `Constant`, `CoordinateArgs`, `AngleDefs` | here, [step-13](step-13.md), [step-14](step-14.md) |
 | **Target** — what it compiles against | `RuntimeInclude`, `ExtraIncludes`, `IncludeDir`, `RegulatorTemplate`, `RegulatorAlias` | [step-15](step-15.md) |
-| **Emission strategy** — how it is spelled | `CrossTraceCSE`, `Components`, `SymbolDefs`, `ShareInterpolatorIndex`, `HoistLoopConstLookups` | here, [step-20](step-20.md), [step-21](step-21.md) |
+| **Emission strategy** — how it is spelled | `Components`, `SymbolDefs`, `ShareInterpolatorIndex`, `HoistLoopConstLookups` | here, [step-20](step-20.md), [step-21](step-21.md) |
 | **Build orchestration & correctness probes** | `Offline`, `RunGenerator`, `RealProbe`, `PruneRealTraces` | [step-20](step-20.md), [step-21](step-21.md) |
 | **Complex flows** — how a complex integrand becomes a real kernel | `ComplexRuntimeProjection`, `ComplexEndProjection`, `RealOutput` | below |
 | **Finite temperature & precision** | `MatsubaraVar`, `DecayingRegulators`, `MatsubaraFiniteExtent`, `ComputeType` | below |
@@ -99,7 +99,7 @@ If[nd =!= 3, Print["FAIL: expected 3 diagrams, got ", nd]; Exit[1]];
 Assert the number you expect, not merely that it is nonzero — a truncated sum still has diagrams.
 ````
 
-### The four variants
+### The three variants
 
 ```{literalinclude} ../../../Tutorials/step-09-codegen-options/options.wls
 :language: mathematica
@@ -114,9 +114,8 @@ cmake --build build --target options && ./build/options
 ```
 
 ```text
-one network, four emissions, at (p, l1, cos1) = (1.7, 0.9, 0.35)
+one network, three emissions, at (p, l1, cos1) = (1.7, 0.9, 0.35)
   default                      =       5.608045   (closed form 5.608045)
-  CrossTraceCSE -> True        =       5.608045   == default
   Constant -> myZ[p]           =       5.608045   == default
   renamed namespaces           =       5.608045   == default
 the constant() entry point
@@ -125,7 +124,7 @@ the constant() entry point
 ALL TESTS PASSED
 ```
 
-All four agree, as they must. Now the interesting part.
+All three agree, as they must. Now the interesting part.
 
 ### What the default emits
 
@@ -138,43 +137,6 @@ Two trace functions. `tr1` is the collected $P^T + P^L$ pair — the two diagram
 dressing coefficient `myZ(l1)`, folded into one trace so that `_interp1` multiplies them once. `tr0`
 is the third diagram, multiplied by its own scalar coefficient `cos1*l1*p`. This is the
 $\sum_{\text{diagrams}}\text{coeff}\times\text{trace}$ shape, made concrete.
-
-### `CrossTraceCSE -> True` — a genuinely different shape
-
-This one is visible immediately. Instead of separate `trN` functions, the traces header now
-contains a single fused program:
-
-```cpp
-static inline constexpr int nenv = 1;          // was 2
-static inline void fill(double *f, double l1, double cos1, double p) {
-  f[0] = p;
-}
-using trace_all_t = double;
-static inline void trace_all(const double *f, double *t) {
-  const double s1 = f[0];
-  const double s2 = s1*s1;
-  t[0] = s2;
-  t[1] = s2;
-}
-```
-
-and the kernel calls it once:
-
-```cpp
-trace_all_t tarr[2];
-trace_all(fenv, tarr);
-return fma(_interp1, tarr[1], fma(tarr[0], cos1 * l1 * p, 0.));
-```
-
-Two things happened. The CSE now runs **across** traces, so it noticed that both traces are the
-same value $p^2$ and computed `s1*s1` once instead of twice. And `nenv` dropped from 2 to 1 — the
-fused program needed one fewer env slot.
-
-That looks like a pure win, and on this toy it is. It is nevertheless **off by default**, because
-on a real flow the fused program is one enormous function: register pressure goes up, the compiler's
-optimiser gets slower (sometimes dramatically), and GPU occupancy can fall. Measured on the flows
-in this repository it is roughly neutral-to-slightly-negative (~0.87×). Treat it as something to
-measure per flow, not to switch on globally — [step-20](step-20.md).
 
 ### `Constant -> expr` — the one that changes behaviour
 
@@ -231,11 +193,7 @@ support API.
 2. **See the dressing-coefficient grouping do more work.** Add several more diagrams sharing the
    same dressing product, and count the `_interp` hoists in the emission before and after.
 
-3. **Measure `CrossTraceCSE` honestly.** Time both variants in a tight loop over $10^7$ points. On
-   this toy the difference is noise; the exercise is to build the harness, because
-   [step-20](step-20.md) asks you to do it for real.
-
-4. **A `Decorator` that does not compile.** Set `"Decorator" -> "constexpr"` and see what the
+3. **A `Decorator` that does not compile.** Set `"Decorator" -> "constexpr"` and see what the
    emitter does with it. The decorator is pasted through verbatim — it is a string, not a validated
    enum — which is the source of its flexibility and of some confusing errors.
 

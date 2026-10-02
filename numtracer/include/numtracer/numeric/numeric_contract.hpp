@@ -1762,68 +1762,21 @@ namespace numtracer::numeric
     return std::strtod(buf, nullptr);
   }
 
-  NUMTRACER_FUNC network::GenProg to_genprog(const MPoly &p, network::GlobalEnv &g, bool realOnly = false);
-  NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly = false);
-  NUMTRACER_FUNC std::vector<network::FusedProg> to_genprog_fused(const std::vector<MPoly> &ps,
-                                                                  network::GlobalEnv &g,
-                                                                  const std::vector<int> &realOnly);
-  NUMTRACER_FUNC std::vector<network::FusedProg> to_genprog_fused(const std::vector<DPoly> &ps,
-                                                                  network::GlobalEnv &g,
-                                                                  const std::vector<int> &realOnly);
-
-  /// @brief Incremental form of @ref to_genprog_fused: lower one trace polynomial at a time.
-  ///
-  /// Same output as handing the whole `std::vector<Poly>` over at once — @ref to_genprog_fused is
-  /// literally a loop over `add` — but the caller never has to build that vector. That is what lets
-  /// the generator's streaming phase B (`trace_fold.hpp`'s `fold_groups_streaming`) lower each trace
-  /// group the moment it is folded and then drop it, instead of accumulating every group's polynomial
-  /// first. Traces are added in ascending order and flushed into a new chunk every
-  /// `NT_GEN_CC_CHUNK` traces, so the chunk boundaries (and hence `FusedProg::offset`) are identical
-  /// to the batch version's `[base, hi)` slices.
-  ///
-  /// `add` is deliberately two overloads rather than a template: the definitions live in the library
-  /// TU alongside `lower_into`, and MPoly/DPoly are the only two backends — the same split every other
-  /// entry point here uses (see core/export.hpp).
-  class FusedStream
-  {
-  public:
-    NUMTRACER_FUNC FusedStream(network::GlobalEnv &g, const std::vector<int> &realOnly);
-    NUMTRACER_FUNC void add(const MPoly &p);
-    NUMTRACER_FUNC void add(const DPoly &p);
-    /// Flushes the tail (if any). An empty stream yields an empty vector, not one empty chunk —
-    /// `emit_cpp_fused` would otherwise emit a bodiless `trace_all_c0` that stores nothing.
-    NUMTRACER_FUNC std::vector<network::FusedProg> finish();
-
-  private:
-    template <class Poly> void add_(const Poly &p);
-    void begin_();
-    void flush_();
-
-    network::GlobalEnv *g_;
-    const std::vector<int> *ro_;
-    std::size_t step_;
-    std::size_t n_ = 0;     ///< global trace index of the next add()
-    std::size_t total_ = 0; ///< summed SSA instruction count, for the polystats line
-    network::rdetail::RBuilder w_;
-    network::FusedProg fp_;
-    std::vector<network::FusedProg> out_;
-  };
-
-#if NUMTRACER_DEFINE_BODIES
-  /// @brief Lower a contracted diagram polynomial into the shared env via the existing CSE + Horner
-  ///        back-end (`gdetail::best_into`). User symbols intern as env kind 3 (`var`), surviving
-  ///        inverse atoms as kind 1 (`inv`). Returns an @ref network::GenProg (real, or complex when the
-  ///        polynomial carries an imaginary coefficient).
+  /// @brief Lower a contracted diagram polynomial into the shared env via the CSE + Horner back-end
+  ///        (`gdetail::best_into`). User symbols intern as env kind 3 (`var`), surviving inverse atoms
+  ///        as kind 1 (`inv`). Returns an @ref network::GenProg (real, or complex when the polynomial
+  ///        carries an imaginary coefficient).
   /// @param realOnly when true, emit a REAL program even if the polynomial has imaginary coefficients
   ///        — the caller has proven only `Re(this trace)` is consumed (its assembly coefficient is
   ///        real). `Re(Σ c·mono) = Σ Re(c)·mono` for real monomials, so the imaginary half is dead;
   ///        skipping it avoids computing+returning a `std::complex` whose `.imag()` nobody reads.
-  /// @brief Lower ONE polynomial into an EXISTING CSE builder; returns `{reRoot, imRoot}` with
-  ///        `imRoot == network::kRealProgram` when the polynomial is real.
-  ///
-  /// Split out of @ref to_genprog so the same lowering can be replayed into a builder that already
-  /// holds other traces (@ref to_genprog_fused / `CrossTraceCSE`). `to_genprog` is now this function
-  /// plus a fresh builder, so single-trace output is byte-identical to before the split.
+  NUMTRACER_FUNC network::GenProg to_genprog(const MPoly &p, network::GlobalEnv &g, bool realOnly = false);
+  NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly = false);
+
+#if NUMTRACER_DEFINE_BODIES
+  /// @brief Lower ONE polynomial into @p builder; returns `{reRoot, imRoot}` with
+  ///        `imRoot == network::kRealProgram` when the polynomial is real. @ref to_genprog is this plus
+  ///        a fresh builder.
   NUMTRACER_FUNC std::pair<int, int> lower_into(const MPoly &p, network::GlobalEnv &g,
                                                 network::rdetail::RBuilder &builder, bool realOnly)
   {
@@ -2030,106 +1983,6 @@ namespace numtracer::numeric
     return gp;
   }
 
-  /// @brief Lower EVERY trace group into one shared CSE builder (`CrossTraceCSE`), so a subexpression
-  ///        reached by several traces is emitted once. See @ref network::FusedProg.
-  ///
-  /// Measured on ZAqbq1_147 Mq-in (108 traces, 54 complex): the shared stream is **30,547** SSA
-  /// instructions against **47,558** for the same traces lowered independently — 0.64x, at unchanged
-  /// lowering cost (0.30 s either way). The saving is bounded by the fact that each of the 28,856
-  /// monomial OCCURRENCES still needs its own accumulate into its own trace; only the products are
-  /// shared. So the duplication factor (3.54x distinct-vs-total monomials) is an upper bound that is
-  /// nowhere near attainable — do not quote it as the expected speedup.
-  ///
-  /// NOTE `network::gdetail::best_into` costs its candidate Horner orderings on scratch builders that
-  /// start EMPTY, so it cannot see CSE hits against the already-populated `builder`: trace k's ordering is
-  /// chosen as if traces 0..k-1 did not exist. That caps the achievable sharing (mostly moot — the
-  /// sweep collapses to a single ordering above 2000 monomials).
-  /// Traces per fused program. 0 (the default) = fuse everything into one. `NT_GEN_CC_CHUNK` overrides.
-  ///
-  /// Fusing all traces maximises sharing but builds one enormous basic block that SPILLS: on
-  /// ZAqbq1_147 Mq-in the fully-fused kernel executes ~8,200 instructions/eval more than its own
-  /// arithmetic op count, against ~2,900 for the unfused baseline — i.e. fusion bought ~17k ops and
-  /// handed back ~5,400 instructions of spill traffic, which is the measured IPC drop (2.405 -> 2.278).
-  /// Chunking trades a little cross-trace sharing back for register pressure.
-  inline int cc_chunk_size()
-  {
-    static const int n = [] {
-      const long v = env_int("NT_GEN_CC_CHUNK", 0);
-      return v > 0 ? static_cast<int>(v) : 0; // 0 = fuse every trace into one program
-    }();
-    return n;
-  }
-
-  // The batch entry point is a thin loop over FusedStream::add, so the streaming and non-streaming
-  // lowerings cannot drift apart: they are the same code.
-  template <class Poly>
-  NUMTRACER_FUNC std::vector<network::FusedProg> to_genprog_fused_impl(const std::vector<Poly> &ps,
-                                                                       network::GlobalEnv &g,
-                                                                       const std::vector<int> &realOnly)
-  {
-    FusedStream fs(g, realOnly);
-    for (const auto &p : ps)
-      fs.add(p);
-    return fs.finish();
-  }
-
-  FusedStream::FusedStream(network::GlobalEnv &g, const std::vector<int> &realOnly)
-      : g_(&g), ro_(&realOnly),
-        step_(cc_chunk_size() > 0 ? static_cast<std::size_t>(cc_chunk_size())
-                                  : std::numeric_limits<std::size_t>::max())
-  {
-    begin_();
-  }
-
-  template <class Poly> void FusedStream::add_(const Poly &p)
-  {
-    const bool ro = n_ < ro_->size() && (*ro_)[n_] != 0;
-    const auto [re, im] = lower_into(p, *g_, w_, ro);
-    fp_.root.push_back(re);
-    fp_.rootIm.push_back(im);
-    ++n_;
-    if (fp_.root.size() == step_) {
-      flush_();
-      begin_();
-    }
-  }
-  void FusedStream::add(const MPoly &p) { add_(p); }
-  void FusedStream::add(const DPoly &p) { add_(p); }
-
-  std::vector<network::FusedProg> FusedStream::finish()
-  {
-    if (!fp_.root.empty()) flush_();
-    if (polystats_level() == 1)
-      std::fprintf(stderr, "[polystats] FUSED ssa instrs=%zu over %zu traces in %zu chunk(s)\n", total_,
-                     n_, out_.size());
-    return std::move(out_);
-  }
-
-  void FusedStream::begin_()
-  {
-    w_ = network::rdetail::RBuilder{};
-    fp_ = network::FusedProg{};
-    fp_.offset = static_cast<int>(n_);
-  }
-  void FusedStream::flush_()
-  {
-    total_ += w_.ins.size();
-    fp_.ins = std::move(w_.ins);
-    out_.push_back(std::move(fp_));
-  }
-
-  NUMTRACER_FUNC std::vector<network::FusedProg> to_genprog_fused(const std::vector<MPoly> &ps,
-                                                                  network::GlobalEnv &g,
-                                                                  const std::vector<int> &realOnly)
-  {
-    return to_genprog_fused_impl(ps, g, realOnly);
-  }
-  NUMTRACER_FUNC std::vector<network::FusedProg> to_genprog_fused(const std::vector<DPoly> &ps,
-                                                                  network::GlobalEnv &g,
-                                                                  const std::vector<int> &realOnly)
-  {
-    return to_genprog_fused_impl(ps, g, realOnly);
-  }
 #endif // NUMTRACER_DEFINE_BODIES
 
 } // namespace numtracer::numeric

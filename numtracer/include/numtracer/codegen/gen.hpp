@@ -110,31 +110,6 @@ namespace numtracer::network
     int rootIm = kRealProgram;
   };
 
-  /// @brief Several diagram programs lowered into ONE shared instruction stream (`CrossTraceCSE`).
-  ///
-  /// Emitted as `void trace_all(const double* f, <T>* t)` rather than N independent `trN()`, so a
-  /// subexpression reached by more than one trace is computed once. This is the only way to exploit
-  /// CROSS-DIAGRAM monomial duplication: FormTracer sums every diagram into one polynomial before
-  /// expanding, so identical monomials collect; NumTracer keeps one polynomial per trace and cannot.
-  /// A compiler can never recover it either — collecting a monomial out of N traces is a
-  /// floating-point reassociation across function boundaries (measured: force-inlining all 108 traces
-  /// of ZAqbq1_147 recovered only -3.5% instructions).
-  ///
-  /// `root[i]` / `rootIm[i]` are the same pair as @ref GenProg, per trace; `rootIm[i] ==
-  /// kRealProgram` marks trace `i` real. The emitted array element type is `std::complex<double>` if
-  /// ANY trace is complex (uniform, so the kernel's `tarr[i]` reads keep the type `trN(fenv)`
-  /// returned), otherwise `double`.
-  /// `offset` is the global trace index of `root[0]`: a fused program may cover a CONTIGUOUS SLICE of
-  /// the traces rather than all of them (see `NT_GEN_CC_CHUNK`). Fusing everything into one function
-  /// maximises sharing but produces a single enormous basic block that spills; chunking trades a little
-  /// sharing for register pressure. `offset` lets each chunk store into the caller's `t[]` directly.
-  struct FusedProg {
-    std::vector<RInstr> ins;
-    std::vector<int> root;
-    std::vector<int> rootIm;
-    int offset = 0;
-  };
-
   /// @brief Lower a polynomial's monomials into the shared env via CSE (`RBuilder`) + Horner.
   ///
   /// The input is first sorted into a **canonical order** so the emitted program (env-id layout, Horner
@@ -235,8 +210,7 @@ namespace numtracer::network
     ///
     /// The scalar of the normalised lowering (@ref NVal) is materialised HERE, via @ref scale_into, so
     /// callers keep dealing in plain slots. Doing it at this one seam rather than at each `lower_into`
-    /// call site also covers the shared-builder (`CrossTraceCSE`) path, where the per-trace scaling has
-    /// to land inside the fused builder before the root is recorded. `scale_into` is likewise what keeps
+    /// call site keeps every caller's root a plain slot. `scale_into` is likewise what keeps
     /// a trace whose polynomial is a pure CONSTANT correct: its shape slot is negative, and handing that
     /// to `rmul` — which reads a negative slot as structural zero — would silently emit `return 0.0;`.
     inline int best_into(std::vector<LMono> monos, rdetail::RBuilder &builder)
@@ -303,16 +277,12 @@ namespace numtracer::network
   // (library TU / header-only build). See core/export.hpp.
   NUMTRACER_FUNC void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name,
                                const std::string &decor = "static inline");
-  NUMTRACER_FUNC void emit_cpp_fused(std::ostream &out, const std::vector<FusedProg> &ps,
-                                     const std::string &name,
-                                     const std::string &decor = "static inline");
   NUMTRACER_FUNC void emit_env_layout(std::ostream &out, const GlobalEnv &g);
 
 #if NUMTRACER_DEFINE_BODIES
   namespace edetail
   {
-    /// Per-program statement-emission plan, shared by the single-output (@ref emit_cpp) and fused
-    /// (@ref emit_cpp_fused) writers so their statement forms cannot drift. Two statement-level
+    /// Per-program statement-emission plan used by @ref emit_cpp. Two statement-level
     /// rewrites, both pure emission (the SSA program itself is untouched, slot numbering included):
     ///
     ///  - fmaFold: a MUL whose ONLY use is one ADD is emitted inside that consumer as
@@ -630,7 +600,7 @@ namespace numtracer::network
     // g++ and nvcc; fill()/powr stay inline.
     const std::string effDecor = edetail::eff_decor(decor, p.ins.size());
     // Statement plan: liveness ([[maybe_unused]] tagging of dead slots), single-use-constant
-    // inlining, and MUL->ADD/SUB fma folding — shared with the fused writer via edetail.
+    // inlining, and MUL->ADD/SUB fma folding (see edetail::EmitPlan).
     const int roots[2] = {p.root, p.rootIm}; // kRealProgram (INT_MIN) and -1 are filtered inside
     const edetail::EmitPlan pl = edetail::make_plan(p.ins, roots, 2);
     auto opnd = [&](int r) { edetail::emit_operand(out, p.ins, pl, r); };
@@ -661,95 +631,6 @@ namespace numtracer::network
     out << "  return ";
     opnd(p.root);
     out << ";\n}\n";
-  }
-
-  /// @brief Print a FUSED multi-output program as `void name(const double* f, <T>* t)`.
-  ///
-  /// One instruction stream, N stores. The element type is `std::complex<double>` if any trace is
-  /// complex and `double` otherwise — uniform across the array, because the kernel indexes it as
-  /// `tarr[i]` wherever it used to call `tr<i>(fenv)` and those calls had a single return type per
-  /// trace. A real trace in a complex array stores `{re, 0.0}`; the zero is a compile-time constant
-  /// the consumer's arithmetic folds away.
-  ///
-  /// Liveness is seeded from EVERY root (a slot feeding only trace 7's result is live even though it
-  /// feeds no other instruction) — the single-output writer's two `markUse` calls become a loop.
-  namespace edetail
-  {
-    /// One fused chunk, written as `void <name>(const double* f, <T>* t)`. @p anyComplex and @p elemT
-    /// are the WHOLE array's verdict, not this chunk's — chunks share the caller's `t[]`.
-    inline void emit_fused_one(std::ostream &out, const FusedProg &p, const std::string &name,
-                               const std::string &decor, bool anyComplex, const char *elemT)
-    {
-    const std::string effDecor = edetail::eff_decor(decor, p.ins.size());
-    const std::size_t n = p.root.size();
-
-    // Statement plan seeded from EVERY root (a slot feeding only trace 7's result is live even though
-    // it feeds no other instruction); kRealProgram (INT_MIN) and -1 are filtered inside.
-    std::vector<int> roots;
-    roots.reserve(2 * n);
-    roots.insert(roots.end(), p.root.begin(), p.root.end());
-    roots.insert(roots.end(), p.rootIm.begin(), p.rootIm.end());
-    const edetail::EmitPlan pl = edetail::make_plan(p.ins, roots.data(), roots.size());
-
-    auto opnd = [&](int r) { edetail::emit_operand(out, p.ins, pl, r); };
-    auto emitStore = [&](std::size_t i) {
-      out << "  t[" << (static_cast<std::size_t>(p.offset) + i) << "] = ";
-      if (!anyComplex)
-        opnd(p.root[i]);
-      else if (p.rootIm[i] == kRealProgram) {
-        out << "nt_complex_t{";
-        opnd(p.root[i]);
-        out << ", " << zero_literal() << "}";
-      } else {
-        out << "nt_complex_t{";
-        opnd(p.root[i]);
-        out << ", ";
-        opnd(p.rootIm[i]);
-        out << "}";
-      }
-      out << ";\n";
-    };
-
-    // All N stores go at the END, after the whole instruction stream.
-    //
-    // REFUTED ALTERNATIVE (measured 2026-07-19, do not retry): sinking each `t[i] = …` to just after
-    // its last input slot, so results don't stay live to the end. The register-pressure argument for it
-    // is intuitive and WRONG here — on ZAqbq1_147 Mq-in it cut instructions 40.70e9 -> 39.83e9 but RAISED
-    // cycles 17.90e9 -> 18.25e9, a consistent 2% runtime LOSS over repeated runs (3018 -> 3080 ns/eval).
-    // Interleaving stores into the arithmetic constrains the scheduler more than the shortened live
-    // ranges buy back.
-    out << effDecor << " void " << name << "([[maybe_unused]] const " << codegen::emit_real_type() << " *f, " << elemT
-        << " *t) {\n";
-    out << std::setprecision(17);
-    for (std::size_t i = 0; i < p.ins.size(); ++i) edetail::emit_stmt(out, p.ins, i, pl);
-    for (std::size_t i = 0; i < n; ++i)
-      emitStore(i);
-    out << "}\n";
-    }
-  } // namespace edetail
-
-  NUMTRACER_FUNC void emit_cpp_fused(std::ostream &out, const std::vector<FusedProg> &ps,
-                                     const std::string &name, const std::string &decor)
-  {
-    // The element type and its published typedef are decided ONCE over all chunks: they share the
-    // caller's `t[]`, so a per-chunk verdict could disagree and would redefine `<name>_t`.
-    bool anyComplex = false;
-    for (const FusedProg &q : ps)
-      for (std::size_t i = 0; i < q.root.size(); ++i)
-        if (q.rootIm[i] != kRealProgram) anyComplex = true;
-    const char *elemT = anyComplex ? "nt_complex_t" : codegen::emit_real_type();
-    out << "using " << name << "_t = " << elemT << ";\n";
-
-    for (std::size_t ci = 0; ci < ps.size(); ++ci)
-      edetail::emit_fused_one(out, ps[ci], ps.size() == 1 ? name : name + "_c" + std::to_string(ci),
-                              decor, anyComplex, elemT);
-    if (ps.size() == 1) return;
-    // Wrapper, so the kernel's call site is identical whether or not the traces were chunked.
-    out << edetail::eff_decor(decor) << " void " << name << "([[maybe_unused]] const " << codegen::emit_real_type()
-        << " *f, " << elemT << " *t) {\n";
-    for (std::size_t ci = 0; ci < ps.size(); ++ci)
-      out << "  " << name << "_c" << ci << "(f, t);\n";
-    out << "}\n";
   }
 
   /// @brief Print the shared env layout as a comment (which `f[i]` is which symbol) so the codegen /
