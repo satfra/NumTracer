@@ -74,11 +74,11 @@ namespace numtracer::numeric
     // Fully qualified because this member name shadows the free function of the same name.
     Mat4 slashC(const std::array<MPoly, 4> &comp) const { return ::numtracer::numeric::slashC(nsym_, comp); }
 
-    // ── public entry points (env supplies nsym_, and units_ to the *_netval forms) ───────────────────
+    // ── public entry points (env supplies nsym_, and units_ to every contraction) ────────────────────
     MPoly numeric_value(const network::DiracNet &dirac, const NNet &lorentz,
                         const std::vector<std::array<MPoly, 4>> &comp, const std::vector<MPoly> &atomDen) const
     {
-      return ::numtracer::numeric::numeric_value(nsym_, dirac, lorentz, comp, atomDen);
+      return ::numtracer::numeric::numeric_value(nsym_, dirac, lorentz, comp, atomDen, units_);
     }
     MPoly numeric_value_netval(const network::DiracNet &dirac, const network::NetVal &lor,
                                const std::vector<std::array<MPoly, 4>> &comp,
@@ -90,7 +90,7 @@ namespace numtracer::numeric
                                 const NNet &lorentz, const std::vector<std::array<MPoly, 4>> &comp,
                                 const std::vector<MPoly> &atomDen) const
     {
-      return ::numtracer::numeric::numeric_value_dressed(nsym_, chain, slots, lorentz, comp, atomDen);
+      return ::numtracer::numeric::numeric_value_dressed(nsym_, chain, slots, lorentz, comp, atomDen, units_);
     }
     DPoly numeric_value_dressed_netval(const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
                                        const network::NetVal &lor, const std::vector<std::array<MPoly, 4>> &comp,

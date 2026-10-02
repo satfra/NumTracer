@@ -1151,7 +1151,8 @@ namespace numtracer::numeric
   // collect_atom_denoms are declared further below, after the dressing types they reference.
   NUMTRACER_FUNC MPoly numeric_value(int nsym, const network::DiracNet &dirac, const NNet &lorentz,
                                      const std::vector<std::array<MPoly, 4>> &comp,
-                                     const std::vector<MPoly> &atomDen);
+                                     const std::vector<MPoly> &atomDen,
+                                     const std::vector<std::vector<int>> &units = {});
   NUMTRACER_FUNC MPoly numeric_value_netval(int nsym, const network::DiracNet &dirac,
                                             const network::NetVal &lor,
                                             const std::vector<std::array<MPoly, 4>> &comp,
@@ -1159,45 +1160,6 @@ namespace numtracer::numeric
                                             const std::vector<std::vector<int>> &units = {});
 
 #if NUMTRACER_DEFINE_BODIES
-  /// @brief Contract a diagram (Dirac chain ⊗ Lorentz network) to its scalar trace polynomial.
-  /// @param nsym     number of user symbols (MPoly variable count)
-  /// @param dirac    the closed Dirac chain (may be empty for a pure-gauge diagram)
-  /// @param lorentz  the pure-Lorentz network (metrics / vectors / projectors / Levi-Civita)
-  /// @param comp     component table `comp[vid]` = 4 MPoly components of fundamental momentum `vid`
-  /// @param atomDen  projector denominators `atomDen[aid] = k²` (for monomial cancellation)
-  NUMTRACER_FUNC MPoly numeric_value(int nsym, const network::DiracNet &dirac, const NNet &lorentz,
-                                     const std::vector<std::array<MPoly, 4>> &comp, const std::vector<MPoly> &atomDen)
-  {
-    // a component may hold SEVERAL independent spinor loops (e.g. a quark loop + the projection-closed
-    // external line, tied only by gluon propagators) — trace each into its own Lorentz tensor; the
-    // gluon legs they share contract via the Lorentz net below. tr(1)=4 rides each loop's trace.
-    std::vector<ndetail::Factor> loops = ndetail::dirac_loop_factors(nsym, dirac, comp);
-    MPoly result = MPolyFactory::zero(nsym);
-    for (const NTerm &nt : lorentz) {
-      // fold same-momentum projector chains (P·P→P, orthogonal→0) before expansion; no-op unless present.
-      std::vector<NElem> elems = nt.e;
-      Cx co = nt.coeff;
-      ndetail::fuse_projectors(elems, co);
-      if (co.re == 0 && co.im == 0) continue;
-      std::vector<ndetail::Factor> facs;
-      facs.reserve(loops.size() + elems.size());
-      for (const ndetail::Factor &L : loops) facs.push_back({L.ids, {}, &L.data()});
-      for (const NElem &el : elems)
-        ndetail::push_elem_factors(facs, nsym, el, comp, atomDen);
-      // contract_factors consumes its `facs` argument by value — move so the per-term
-      // factor list is built once, not copied again into the call.
-      MPoly term = ndetail::contract_factors(nsym, std::move(facs));
-      // `scaled`, not `* constant(co)`: same coefficient product (Cx multiply is commutative
-      // bit-for-bit), same monomials in the same order, but without the |term|-entry scratch and
-      // the `from_scratch` sort that multiplying by a one-term polynomial otherwise pays.
-      term = MPolyFactory::scaled(nsym, term, co);
-      result = std::move(result) + std::move(term);
-    }
-    if (lorentz.empty())
-      result = ndetail::close_loops(nsym, loops, atomDen);
-    return divThroughMonomialAtoms(std::move(result), atomDen);
-  }
-
   /// @brief Map one inv-backend @ref network::Elem to a numeric @ref NElem. The projector's loop momentum
   ///        is stored as a single vector id (`vid`) and its `1/k²` env id (`inv`) becomes the atom id.
   inline NElem elem_to_nelem(const network::Elem &e)
@@ -1265,93 +1227,134 @@ namespace numtracer::numeric
     return on;
   }
 
-  /// @brief Contract a diagram given the Lorentz part as an inv-backend @ref network::NetVal (so the
-  ///        generator reuses the existing net-string emission: `proj`/`met`/`vec`/`epsilon` builders).
-  ///        Equivalent to @ref numeric_value but reading `network::Elem` instead of @ref NElem.
+  namespace ndetail
+  {
+    /// @brief The contraction pipeline shared by @ref numeric_value_netval and @ref numeric_value:
+    ///        trace the Dirac loops, contract each Lorentz term against them (with per-step unit and
+    ///        atom reductions when @p units is non-empty), then reduce_units, monomial-atom and
+    ///        multi-term-atom (polydiv) cancellation.
+    /// @param lor      the Lorentz net: a range of terms, each with a `coeff`
+    /// @param elemsOf  `elemsOf(term, elems)` fills the empty @ref NElem list of one term
+    template <class Net, class ElemsOf>
+    MPoly contract_net(int nsym, const network::DiracNet &dirac, const Net &lor, ElemsOf &&elemsOf,
+                       const std::vector<std::array<MPoly, 4>> &comp, const std::vector<MPoly> &atomDen,
+                       const std::vector<std::vector<int>> &units)
+    {
+      NT_STAT_ADD(traces, 1);
+      // a component may hold SEVERAL independent spinor loops (e.g. a quark loop + the projection-closed
+      // external line, tied only by gluon propagators) — trace each into its own Lorentz tensor; the
+      // gluon legs they share contract via the Lorentz net below. tr(1)=4 rides each loop's trace.
+      std::vector<Factor> loops;
+      {
+        NT_STAT_TIMER(t_dirac);
+        loops = dirac_loop_factors(nsym, dirac, comp);
+      }
+      // pre-reduce the atom denominators (idempotent if the caller already did) so monomial-cancellation
+      // detection works during the per-step intermediate reduction inside contract_factors.
+      //
+      // The caller — the generated driver — already does exactly this once at setup, so on every trace
+      // the reduction is a NO-OP. It nevertheless used to cost a deep copy of the whole table plus one
+      // more deep copy per entry (reduce_units' pass-through returned `p` by value), on 10^5 traces ×
+      // combinations. So: test the pass-through predicate first and only materialise a reduced copy when
+      // an entry genuinely needs rewriting; otherwise alias the caller's table. When every entry passes
+      // through, `reduce_units` would have returned it unchanged, so aliasing is value-identical.
+      std::vector<MPoly> adenOwned;
+      bool needReduce = false;
+      for (const MPoly &a : atomDen)
+        if (!reduceUnitsIsNoop(a, units)) {
+          needReduce = true;
+          break;
+        }
+      if (needReduce) {
+        adenOwned = atomDen;
+        for (MPoly &a : adenOwned)
+          a = reduce_units(std::move(a), units);
+      }
+      const std::vector<MPoly> &aden = needReduce ? adenOwned : atomDen;
+      MPoly result = MPolyFactory::zero(nsym);
+      for (const auto &lt : lor) {
+        // build the numeric element list, then fold same-momentum projector chains (P·P→P,
+        // orthogonal→0) before expansion.
+        Cx co = lt.coeff;
+        std::vector<Factor> facs;
+        {
+          NT_STAT_TIMER(t_elem);
+          std::vector<NElem> elems;
+          elemsOf(lt, elems);
+          fuse_projectors(elems, co);
+          if (co.re == 0 && co.im == 0) continue;
+          facs.reserve(loops.size() + elems.size());
+          for (const Factor &L : loops) facs.push_back({L.ids, {}, &L.data()});
+          for (const NElem &el : elems)
+            push_elem_factors(facs, nsym, el, comp, aden);
+        }
+        // move the per-term factor list into contract_factors (consumed by value) — avoids
+        // a redundant deep copy of every Factor's MPoly entries.
+        MPoly term;
+        {
+          NT_STAT_TIMER(t_contract);
+          term = contract_factors(nsym, std::move(facs), aden, units);
+        }
+        // `scaled` instead of `* constant(co)`: bit-identical (see MPolyFactory::scaled) without the
+        // scratch + sort. Once per Lorentz PTerm per trace, on the FULLY CONTRACTED term.
+        term = MPolyFactory::scaled(nsym, term, co);
+        result = std::move(result) + std::move(term);
+      }
+      if (lor.empty())
+        result = close_loops(nsym, loops, aden, units);
+      // sin^2 -> 1 - cos^2 BEFORE cancellation: collapses bare-loop k²=l1²(cos²+sin²) to the monomial l1²
+      // (so its atom cancels) and shrinks the polynomial to the FORM angular basis.
+      {
+        NT_STAT_TIMER(t_reduce);
+        result = reduce_units(std::move(result), units); // pass-through MOVES the whole trace polynomial
+      }
+      {
+        NT_STAT_TIMER(t_divmono);
+        result = divThroughMonomialAtoms(std::move(result), aden);
+      }
+      // Then cancel the MULTI-TERM (shifted-line) denominators by exact polynomial division — the case
+      // divThroughMonomialAtoms structurally cannot reach. Off via NT_GEN_NO_POLYDIV=1 for A/B.
+      // NOTE `aden`, not `atomDen`: the trial division must see the SAME unit-reduced denominators the
+      // intermediate reductions used, or a numerator reduced mod ΣU²=1 will not divide by an unreduced D.
+      if (!polydiv_enabled()) return result;
+      NT_STAT_TIMER(t_divpoly);
+      return divThroughPolyAtoms(std::move(result), aden);
+    }
+  } // namespace ndetail
+
+  /// @brief Contract a diagram (Dirac chain ⊗ Lorentz network) to its scalar trace polynomial, the
+  ///        Lorentz part given as an inv-backend @ref network::NetVal (so the generator reuses the
+  ///        net-string emission: `proj`/`met`/`vec`/`epsilon` builders). This is the production path.
+  /// @param nsym     number of user symbols (MPoly variable count)
+  /// @param dirac    the closed Dirac chain (may be empty for a pure-gauge diagram)
+  /// @param lor      the pure-Lorentz network (metrics / vectors / projectors / Levi-Civita)
+  /// @param comp     component table `comp[vid]` = 4 MPoly components of fundamental momentum `vid`
+  /// @param atomDen  projector denominators `atomDen[aid] = k²` (for atom cancellation)
+  /// @param units    unit-constraint groups (`Σ U² = 1`); empty when the frame has none
   NUMTRACER_FUNC MPoly numeric_value_netval(int nsym, const network::DiracNet &dirac, const network::NetVal &lor,
                                             const std::vector<std::array<MPoly, 4>> &comp,
                                             const std::vector<MPoly> &atomDen,
                                             const std::vector<std::vector<int>> &units)
   {
-    NT_STAT_ADD(traces, 1);
-    // trace each independent spinor loop of the component (see numeric_value); the shared gluon legs
-    // contract via the Lorentz net below.
-    std::vector<ndetail::Factor> loops;
-    {
-      NT_STAT_TIMER(t_dirac);
-      loops = ndetail::dirac_loop_factors(nsym, dirac, comp);
-    }
-    // pre-reduce the atom denominators (idempotent if the caller already did) so monomial-cancellation
-    // detection works during the per-step intermediate reduction inside contract_factors.
-    //
-    // The caller — the generated driver — already does exactly this once at setup, so on every trace
-    // the reduction is a NO-OP. It nevertheless used to cost a deep copy of the whole table plus one
-    // more deep copy per entry (reduce_units' pass-through returned `p` by value), on 10^5 traces ×
-    // combinations. So: test the pass-through predicate first and only materialise a reduced copy when
-    // an entry genuinely needs rewriting; otherwise alias the caller's table. When every entry passes
-    // through, `reduce_units` would have returned it unchanged, so aliasing is value-identical.
-    std::vector<MPoly> adenOwned;
-    bool needReduce = false;
-    for (const MPoly &a : atomDen)
-      if (!reduceUnitsIsNoop(a, units)) {
-        needReduce = true;
-        break;
-      }
-    if (needReduce) {
-      adenOwned = atomDen;
-      for (MPoly &a : adenOwned)
-        a = reduce_units(std::move(a), units);
-    }
-    const std::vector<MPoly> &aden = needReduce ? adenOwned : atomDen;
-    MPoly result = MPolyFactory::zero(nsym);
-    for (const network::PTerm &pt : lor) {
-      // build the numeric element list, then fold same-momentum projector chains before expansion.
-      Cx co = pt.coeff;
-      std::vector<ndetail::Factor> facs;
-      {
-        NT_STAT_TIMER(t_elem);
-        std::vector<NElem> elems;
-        elems.reserve(pt.e.size());
-        for (const network::Elem &el : pt.e)
-          elems.push_back(elem_to_nelem(el));
-        ndetail::fuse_projectors(elems, co);
-        if (co.re == 0 && co.im == 0) continue;
-        facs.reserve(loops.size() + elems.size());
-        for (const ndetail::Factor &L : loops) facs.push_back({L.ids, {}, &L.data()});
-        for (const NElem &el : elems)
-          ndetail::push_elem_factors(facs, nsym, el, comp, aden);
-      }
-      // move the per-term factor list into contract_factors (consumed by value) — avoids
-      // a redundant deep copy of every Factor's MPoly entries.
-      MPoly term;
-      {
-        NT_STAT_TIMER(t_contract);
-        term = ndetail::contract_factors(nsym, std::move(facs), aden, units);
-      }
-      // `scaled` instead of `* constant(co)`: bit-identical (see MPolyFactory::scaled) without the
-      // scratch + sort. Once per Lorentz PTerm per trace, on the FULLY CONTRACTED term.
-      term = MPolyFactory::scaled(nsym, term, co);
-      result = std::move(result) + std::move(term);
-    }
-    if (lor.empty())
-      result = ndetail::close_loops(nsym, loops, aden, units);
-    // sin^2 -> 1 - cos^2 BEFORE cancellation: collapses bare-loop k²=l1²(cos²+sin²) to the monomial l1²
-    // (so its atom cancels) and shrinks the polynomial to the FORM angular basis.
-    {
-      NT_STAT_TIMER(t_reduce);
-      result = reduce_units(std::move(result), units); // pass-through MOVES the whole trace polynomial
-    }
-    {
-      NT_STAT_TIMER(t_divmono);
-      result = divThroughMonomialAtoms(std::move(result), aden);
-    }
-    // Then cancel the MULTI-TERM (shifted-line) denominators by exact polynomial division — the case
-    // divThroughMonomialAtoms structurally cannot reach. Off via NT_GEN_NO_POLYDIV=1 for A/B.
-    // NOTE `aden`, not `atomDen`: the trial division must see the SAME unit-reduced denominators the
-    // intermediate reductions used, or a numerator reduced mod ΣU²=1 will not divide by an unreduced D.
-    if (!polydiv_enabled()) return result;
-    NT_STAT_TIMER(t_divpoly);
-    return divThroughPolyAtoms(std::move(result), aden);
+    return ndetail::contract_net(
+        nsym, dirac, lor,
+        [](const network::PTerm &pt, std::vector<NElem> &elems) {
+          elems.reserve(pt.e.size());
+          for (const network::Elem &el : pt.e)
+            elems.push_back(elem_to_nelem(el));
+        },
+        comp, atomDen, units);
+  }
+
+  /// @brief @ref numeric_value_netval reading the numeric @ref NNet Lorentz network (@ref NElem)
+  ///        instead of a @ref network::NetVal. Same pipeline, same reductions.
+  NUMTRACER_FUNC MPoly numeric_value(int nsym, const network::DiracNet &dirac, const NNet &lorentz,
+                                     const std::vector<std::array<MPoly, 4>> &comp, const std::vector<MPoly> &atomDen,
+                                     const std::vector<std::vector<int>> &units)
+  {
+    return ndetail::contract_net(
+        nsym, dirac, lorentz, [](const NTerm &nt, std::vector<NElem> &elems) { elems = nt.e; }, comp, atomDen,
+        units);
   }
 #endif // NUMTRACER_DEFINE_BODIES
 
@@ -1436,7 +1439,8 @@ namespace numtracer::numeric
   NUMTRACER_FUNC DPoly numeric_value_dressed(int nsym, const std::vector<DChainTok> &chain,
                                              const std::vector<DSlot> &slots, const NNet &lorentz,
                                              const std::vector<std::array<MPoly, 4>> &comp,
-                                             const std::vector<MPoly> &atomDen);
+                                             const std::vector<MPoly> &atomDen,
+                                             const std::vector<std::vector<int>> &units = {});
   NUMTRACER_FUNC std::vector<MPoly> collect_atom_denoms(int nsym, const std::vector<network::NetVal> &lors,
                                                         const std::vector<std::array<MPoly, 4>> &comp);
 
@@ -1603,12 +1607,13 @@ namespace numtracer::numeric
   NUMTRACER_FUNC DPoly numeric_value_dressed(int nsym, const std::vector<DChainTok> &chain,
                                              const std::vector<DSlot> &slots, const NNet &lorentz,
                                              const std::vector<std::array<MPoly, 4>> &comp,
-                                             const std::vector<MPoly> &atomDen)
+                                             const std::vector<MPoly> &atomDen,
+                                             const std::vector<std::vector<int>> &units)
   {
     return ndetail::dress_collect(
         nsym, chain, slots, [&](const network::DiracNet &d, const std::vector<network::Elem> &slotFacs) {
-          return slotFacs.empty() ? numeric_value(nsym, d, lorentz, comp, atomDen)
-                                  : numeric_value(nsym, d, with_slot_facs(lorentz, slotFacs), comp, atomDen);
+          return slotFacs.empty() ? numeric_value(nsym, d, lorentz, comp, atomDen, units)
+                                  : numeric_value(nsym, d, with_slot_facs(lorentz, slotFacs), comp, atomDen, units);
         });
   }
 
