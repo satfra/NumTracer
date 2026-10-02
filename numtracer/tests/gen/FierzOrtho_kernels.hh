@@ -2,7 +2,7 @@
 #pragma once
 #include <cmath>
 namespace numtracer_kernels { namespace fierz_ortho {
-template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
+template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<(N<0?-N:N);++i) r*=x; return N<0?1.0/r:r; }
 // fundamental-symbol env layout (fill f[i] per call):
 static inline constexpr int nenv = 0;
 static inline void fill(double *f, [[maybe_unused]] double p, [[maybe_unused]] double l1, [[maybe_unused]] double cos1, [[maybe_unused]] double cos2, [[maybe_unused]] double phi) {
@@ -51,24 +51,20 @@ static inline double tr32(const double *f) { return tr0(f); }
 static inline double tr33(const double *f) { return tr0(f); }
 static inline double tr34(const double *f) { return tr0(f); }
 static inline double tr35([[maybe_unused]] const double *f) {
-  return (1.4210854715202001e-14);
+  return (2.8421709430404001e-14);
 }
 static inline double tr36(const double *f) { return tr0(f); }
 static inline double tr37([[maybe_unused]] const double *f) {
-  return (5.6843418860808002e-14);
+  return (1.4210854715202001e-13);
 }
-static inline double tr38([[maybe_unused]] const double *f) {
-  return (-2.8421709430404001e-14);
-}
+static inline double tr38(const double *f) { return tr0(f); }
 static inline double tr39(const double *f) { return tr0(f); }
-static inline double tr40(const double *f) { return tr38(f); }
+static inline double tr40(const double *f) { return tr0(f); }
 static inline double tr41(const double *f) { return tr0(f); }
 static inline double tr42([[maybe_unused]] const double *f) {
-  return (8.5265128291211997e-14);
+  return (9.9475983006414001e-14);
 }
-static inline double tr43([[maybe_unused]] const double *f) {
-  return (2.8421709430404001e-14);
-}
+static inline double tr43(const double *f) { return tr35(f); }
 static inline double tr44(const double *f) { return tr0(f); }
 static inline double tr45([[maybe_unused]] const double *f) {
   return (384);
@@ -81,7 +77,9 @@ static inline double tr47([[maybe_unused]] const double *f) {
 }
 static inline double tr48(const double *f) { return tr0(f); }
 static inline double tr49(const double *f) { return tr0(f); }
-static inline double tr50(const double *f) { return tr35(f); }
+static inline double tr50([[maybe_unused]] const double *f) {
+  return (1.2789769243682e-13);
+}
 static inline double tr51(const double *f) { return tr0(f); }
 static inline double tr52(const double *f) { return tr0(f); }
 static inline double tr53(const double *f) { return tr0(f); }
