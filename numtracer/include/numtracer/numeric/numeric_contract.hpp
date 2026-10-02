@@ -1691,6 +1691,16 @@ namespace numtracer::numeric
   ///        validate against the INTEGRATED numeric-vs-FORM error, not a pointwise round-off floor.
   inline constexpr double kNoisePruneRelTol = 1e-9;
 
+  /// @brief `NT_GEN_POLYSTATS` verbosity: 0 off, 1 the summary counts, 2 the per-monomial key dump.
+  ///
+  /// Level 2 is a DIFFERENT report, not a superset of level 1: the dump is meant to be piped through
+  /// `sort -u` to count distinct monomials across traces, and the summary lines would corrupt that.
+  inline int polystats_level()
+  {
+    static const int lvl = static_cast<int>(env_int("NT_GEN_POLYSTATS", 0));
+    return lvl;
+  }
+
   /// @brief Significant decimal digits kept when snapping a lowered coefficient (@ref snap_coeff).
   ///
   /// The numeric backend contracts components in `double`, so one correctly-rounded frame literal
@@ -1714,18 +1724,7 @@ namespace numtracer::numeric
   ///   12     |     25,988 |           338 |    3220 |  2.63x  | 4.55e-06   <- 1000x accuracy loss
   ///
   /// 14 captures essentially the whole speed win at no accuracy cost; 12 buys a further 2% for three
-  /// orders of magnitude of accuracy, which is a bad trade. Override with NT_GEN_SNAP_DIGITS
-  /// (0 = disable). Re-measure this table before changing the default.
-  /// @brief `NT_GEN_POLYSTATS` verbosity: 0 off, 1 the summary counts, 2 the per-monomial key dump.
-  ///
-  /// Level 2 is a DIFFERENT report, not a superset of level 1: the dump is meant to be piped through
-  /// `sort -u` to count distinct monomials across traces, and the summary lines would corrupt that.
-  inline int polystats_level()
-  {
-    static const int lvl = static_cast<int>(env_int("NT_GEN_POLYSTATS", 0));
-    return lvl;
-  }
-
+  /// orders of magnitude of accuracy, which is a bad trade. Re-measure this table before changing it.
   inline constexpr int kCoeffSnapDigits = 14;
 
   /// @brief Round @p v to @ref kCoeffSnapDigits significant decimal digits.
@@ -1745,20 +1744,13 @@ namespace numtracer::numeric
   /// still identifiable rather than becoming a mysterious `nan` in generated source.
   inline double snap_coeff(double v)
   {
-    static const int digits = [] {
-      // 0 is a meaningful value here (snapping off), so "unset" is the empty/absent case, not 0;
-      // a value outside [0,17] is a caller error and falls back to the default rather than
-      // silently truncating to nothing.
-      const long d = env_int("NT_GEN_SNAP_DIGITS", kCoeffSnapDigits);
-      return (d >= 0 && d <= 17) ? static_cast<int>(d) : kCoeffSnapDigits;
-    }();
     if (!std::isfinite(v))
       NT_THROW(std::runtime_error,
                "snap_coeff: non-finite (NaN/Inf) polynomial coefficient reached the lowering — it "
                "would be emitted as a literal `nan` and would defeat the SSA constant CSE");
-    if (digits == 0 || v == 0.0) return v;
+    if (v == 0.0) return v;
     char buf[40];
-    std::snprintf(buf, sizeof(buf), "%.*e", digits - 1, v);
+    std::snprintf(buf, sizeof(buf), "%.*e", kCoeffSnapDigits - 1, v);
     return std::strtod(buf, nullptr);
   }
 

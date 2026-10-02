@@ -18,7 +18,6 @@
 #pragma once
 
 #include "numtracer/codegen/real_cse.hpp"
-#include "numtracer/core/envvar.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -131,12 +130,6 @@ inline int mul_shape(rdetail::RBuilder &builder, int pivotPow, int shape)
   return shape < 0 ? pivotPow : rdetail::rmul(builder, pivotPow, shape);
 }
 
-/// @brief Is the scalar-normalising lowering enabled? `NT_GEN_NO_NORMHORNER` turns it off.
-inline bool normhorner_enabled()
-{
-  static const bool on = !env_flag("NT_GEN_NO_NORMHORNER");
-  return on;
-}
 
 /// @brief Greedy multivariate Horner of a monomial set, emitted through the real value-numbering
 ///        builder (so shared powers / products / factors are CSE'd).
@@ -164,9 +157,8 @@ inline NVal horner(rdetail::RBuilder &builder, std::vector<LMono> terms, bool no
   if (allconst) {
     double sum = 0;
     for (const LMono &m : terms) sum += m.c;
-    // The un-normalised arm keeps materialising the constant HERE, at the base, rather than deferring
-    // it to the parent's combine: that is what makes it emit byte-identically to the classic lowering,
-    // so `NT_GEN_NO_NORMHORNER` is a true A/B control and not merely an equivalent one.
+    // The un-normalised arm materialises the constant HERE, at the base, rather than deferring it to
+    // the parent's combine, so it emits exactly the classic (un-normalised) lowering it is costed as.
     if (!normalise) return from_slot(rconst(builder, sum));
     return {sum, -1};
   }

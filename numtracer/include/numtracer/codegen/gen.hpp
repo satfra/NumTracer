@@ -184,8 +184,7 @@ namespace numtracer::network
   namespace gdetail
   {
     /// @brief Traces at or below this monomial count have BOTH lowerings costed; larger ones are
-    ///        normalised unconditionally. `NT_GEN_NORM_GUARD_MAX` overrides: 0 switches the check OFF
-    ///        (nothing is `<= 0`, so everything normalises); a very large value costs both everywhere.
+    ///        normalised unconditionally.
     ///
     /// Scalar normalisation is a large win on a trace with many repeated shapes and a small LOSS on
     /// one with none. Measured: on the small fixtures nearly every trace grows ~5-10% (73 of 75 on the
@@ -194,14 +193,7 @@ namespace numtracer::network
     /// is why no regenerated kernel came out larger than its baseline. It is not free — it is a second
     /// full Horner pass — so it is spent only where the regression actually lives and where that pass
     /// is cheap; big traces reliably win and are the expensive ones to re-lower, so they skip it.
-    inline std::size_t norm_guard_max()
-    {
-      static const std::size_t m = [] {
-        const long v = env_int("NT_GEN_NORM_GUARD_MAX", -1);
-        return v >= 0 ? static_cast<std::size_t>(v) : static_cast<std::size_t>(2000);
-      }();
-      return m;
-    }
+    inline constexpr std::size_t kNormGuardMax = 2000;
 
     /// Pick the cheapest Horner ordering of @p monos (costed on scratch builders), then replay it into
     /// @p builder (so several parts — e.g. a trace's real and imaginary halves — share one CSE stream). Returns
@@ -219,18 +211,15 @@ namespace numtracer::network
       // cheapest. But each trial is a FULL horner pass: for the dense 1/4/7 traces (tens of thousands of
       // monomials) the 8-way sweep dominates GENERATION while changing the op count only ~1% (the op count
       // tracks the monomial count, not the pivot order — see the noise-prune notes). So scale the sweep
-      // down with the polynomial size; NT_GEN_HORNER_ORDERS=<n> overrides.
-      const bool norm = normhorner_enabled();
+      // down with the polynomial size.
       std::size_t numOrderings = 8;
-      if (const long v = env_int("NT_GEN_HORNER_ORDERS", 0); v > 0)
-        numOrderings = static_cast<std::size_t>(v);
-      else if (monos.size() > 2000)
+      if (monos.size() > 2000)
         numOrderings = 1;
       else if (monos.size() > 500)
         numOrderings = 3;
 
       std::vector<LMono> chosen;
-      std::size_t sweptOps = 0; // the winning ordering's op count with `norm` lowering; 0 = no sweep ran
+      std::size_t sweptOps = 0; // the winning ordering's op count, normalised lowering; 0 = no sweep ran
       if (numOrderings <= 1)
         chosen = std::move(monos); // canonical (as-built) order only — no sweep, no deep copy
       else {
@@ -240,7 +229,7 @@ namespace numtracer::network
         bool have = false;
         for (std::size_t i = 0; i < numOrderings; ++i) {
           rdetail::RBuilder scratch; // cost this ordering on a throwaway builder
-          scale_into(scratch, horner(scratch, orders[i], norm));
+          scale_into(scratch, horner(scratch, orders[i], true));
           if (!have || scratch.ins.size() < bestOps) {
             bestOps = scratch.ins.size();
             bestIdx = i;
@@ -255,8 +244,8 @@ namespace numtracer::network
       // on a trace with many repeated shapes and a small loss on one with none, and this is what makes
       // it self-guarding. The comparison is STRICT so a tie keeps the normalised form: flipping ties to
       // the plain lowering would change the emitted kernel on those traces for no gain at all.
-      bool useNorm = norm;
-      if (norm && chosen.size() <= norm_guard_max()) {
+      bool useNorm = true;
+      if (chosen.size() <= kNormGuardMax) {
         // The sweep already costed `chosen` with the normalised lowering; reuse that count.
         std::size_t normOps = sweptOps;
         if (normOps == 0) {

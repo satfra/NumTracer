@@ -34,7 +34,7 @@ namespace numtracer
   /// @brief Read @p name as an integer, falling back to @p dflt when unset, empty or unparsable.
   ///
   /// Deliberately NOT `env_flag`-shaped: `0` is a legitimate value for several of these knobs
-  /// (`NT_GEN_SNAP_DIGITS=0` disables coefficient snapping), so emptiness — not the value — is
+  /// (`NT_GEN_NOINLINE_MIN=0` puts every device trace function out of line), so emptiness — not the value — is
   /// what means "unset". Callers that need a range check apply it to the returned value; passing
   /// an out-of-range value is a caller error, not a parse error, and each call site says so.
   inline long env_int(const char *name, long dflt)
