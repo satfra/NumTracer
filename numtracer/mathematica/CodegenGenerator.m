@@ -168,13 +168,17 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
 
 (* rows -> distinct rows (first-appearance order) and each row's 0-based index into them. With
    "Values", first intern the row ENTRIES the same way, then hash-cons the rows of value indices:
-   rows alone differ while their entries repeat. *)
+   rows alone differ while their entries repeat.
+   Distinctness must be the Association's (exact) key equality, not SameQ: SameQ treats machine numbers
+   one ulp apart as equal (0.5 vs 0.5000000000000001), so DeleteDuplicates would drop one and its
+   lookup would come back Missing[KeyAbsent, ...] into the C++. Keys@PositionIndex is exact and keeps
+   first-appearance order. *)
 ntHashConsRows[rows_List] :=
-  With[{u = DeleteDuplicates[rows]},
+  With[{u = Keys[PositionIndex[rows]]},
     <|"Rows" -> u, "RowIdx" -> AssociationThread[u -> Range[Length[u]] - 1] /@ rows|>];
 
 ntHashConsRows[rows_List, "Values"] :=
-  With[{vals = DeleteDuplicates[Flatten[rows, 1]]},
+  With[{vals = Keys[PositionIndex[Flatten[rows, 1]]]},
     Append[ntHashConsRows[Map[AssociationThread[vals -> Range[Length[vals]] - 1], rows, {2}]],
       "Values" -> vals]];
 
