@@ -2,7 +2,7 @@
 #pragma once
 #include <cmath>
 namespace numtracer_kernels { namespace proj_num {
-template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
+template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<(N<0?-N:N);++i) r*=x; return N<0?1.0/r:r; }
 // fundamental-symbol env layout (fill f[i] per call):
 //   f[0] = var(4)
 //   f[1] = var(2)
@@ -14,16 +14,16 @@ static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] 
   f[2] = cos1;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s2 = f[2];
-  const double s4 = f[1];
-  const double s5 = (-0.75)*s4;
-  const double s6 = fma((0.86602540378444004), s2, s5);
-  const double s9 = s2*s2;
-  const double s11 = fma((0.75), s9, (1));
-  const double s13 = fma(s4, s6, s11);
-  const double s14 = f[0];
-  const double s15 = s14*s14;
-  const double s16 = s13*s15;
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s4 = fma(s1, (-0.86602540378443726), s0);
+  const double s7 = fma(s0, s0, (1.3333333333333333));
+  const double s10 = s7*(0.86602540378443726);
+  const double s11 = fma(s1, s4, s10);
+  const double s12 = f[0];
+  const double s13 = s12*s12;
+  const double s14 = s11*s13;
+  const double s16 = s14*(0.86602540378444004);
   return s16;
 }
 }} // namespace numtracer_kernels::proj_num

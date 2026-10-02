@@ -53,9 +53,11 @@ namespace numtracer_kernels
     }
     private:
     static inline double ntRe(double x) { return x; }
-    template <class T> static inline double ntRe(const T &z) { return z.real(); }
     static inline double ntIm(double) { return 0.0; }
-    template <class T> static inline double ntIm(const T &z) { return z.imag(); }
+    template <class T> static inline auto ntRe(const T &z) -> decltype(z.real()) { return z.real(); }
+    template <class T> static inline auto ntRe(const T &z) -> decltype(real(z)) requires (!requires { z.real(); }) { return real(z); }
+    template <class T> static inline auto ntIm(const T &z) -> decltype(z.imag()) { return z.imag(); }
+    template <class T> static inline auto ntIm(const T &z) -> decltype(imag(z)) requires (!requires { z.imag(); }) { return imag(z); }
   };
 }
 using numtracer_kernels::Cplxrt_num_kernel;

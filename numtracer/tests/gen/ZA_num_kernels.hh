@@ -7,7 +7,7 @@ namespace DiFfRG { namespace za_num {
 #define NT_TRACE_COMPLEX std::complex<double>
 #endif
 using nt_complex_t = NT_TRACE_COMPLEX;
-template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
+template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<(N<0?-N:N);++i) r*=x; return N<0?1.0/r:r; }
 // fundamental-symbol env layout (fill f[i] per call):
 //   f[0] = var(3)
 //   f[1] = inv(13)

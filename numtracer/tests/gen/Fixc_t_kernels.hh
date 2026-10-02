@@ -2,7 +2,7 @@
 #pragma once
 #include <cmath>
 namespace numtracer_kernels { namespace fixc_t {
-template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
+template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<(N<0?-N:N);++i) r*=x; return N<0?1.0/r:r; }
 // fundamental-symbol env layout (fill f[i] per call):
 //   f[0] = var(1)
 static inline constexpr int nenv = 1;

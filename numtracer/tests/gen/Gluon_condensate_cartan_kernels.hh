@@ -2,7 +2,7 @@
 #pragma once
 #include <cmath>
 namespace DiFfRG { namespace gluon_condensate_cartan {
-template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
+template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<(N<0?-N:N);++i) r*=x; return N<0?1.0/r:r; }
 // fundamental-symbol env layout (fill f[i] per call):
 //   f[0] = var(0)
 //   f[1] = var(1)
@@ -14,27 +14,27 @@ static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] 
   f[2] = p;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s1 = f[2];
-  const double s2 = (4)*s1;
-  const double s4 = f[0];
-  const double s6 = f[1];
-  const double s7 = s2*s6;
-  const double s8 = fma((-4), s4, s7);
-  const double s9 = s4*s4;
-  const double s10 = s4*s9;
-  const double s11 = s8*s10;
+  const double s0 = f[2];
+  const double s1 = f[0];
+  const double s2 = f[1];
+  [[maybe_unused]] const double s4 = -1;
+  const double s6 = fma(s0, s2, -s1);
+  const double s7 = s1*s1;
+  const double s8 = s1*s7;
+  const double s9 = s6*s8;
+  const double s11 = s9*(4);
   return s11;
 }
 static inline double tr1([[maybe_unused]] const double *f) {
-  const double s1 = f[2];
-  const double s2 = (-4)*s1;
-  const double s4 = f[0];
-  const double s6 = f[1];
-  const double s7 = s2*s6;
-  const double s8 = fma((4), s4, s7);
-  const double s9 = s4*s4;
-  const double s10 = s4*s9;
-  const double s11 = s8*s10;
+  const double s0 = f[2];
+  const double s1 = f[0];
+  const double s2 = f[1];
+  [[maybe_unused]] const double s4 = -1;
+  const double s6 = fma(s0, s2, -s1);
+  const double s7 = s1*s1;
+  const double s8 = s1*s7;
+  const double s9 = s6*s8;
+  const double s11 = s9*(-4);
   return s11;
 }
 }} // namespace DiFfRG::gluon_condensate_cartan

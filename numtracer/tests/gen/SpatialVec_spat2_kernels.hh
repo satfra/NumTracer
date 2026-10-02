@@ -2,7 +2,7 @@
 #pragma once
 #include <cmath>
 namespace numtracer_kernels { namespace spatialvec_spat2 {
-template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
+template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<(N<0?-N:N);++i) r*=x; return N<0?1.0/r:r; }
 // fundamental-symbol env layout (fill f[i] per call):
 //   f[0] = var(3)
 //   f[1] = var(0)
@@ -14,13 +14,14 @@ static inline void fill(double *f, [[maybe_unused]] double p0, [[maybe_unused]] 
   f[2] = cos1;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s2 = f[2];
-  const double s3 = (4)*s2;
-  const double s4 = f[1];
-  const double s6 = f[0];
-  const double s7 = (-4)*s6;
-  const double s8 = fma(s3, s4, s7);
-  const double s9 = s6*s8;
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s2 = s0*s1;
+  const double s3 = f[0];
+  [[maybe_unused]] const double s4 = -1;
+  const double s6 = s3-s2;
+  const double s7 = s3*s6;
+  const double s9 = s7*(-4);
   return s9;
 }
 }} // namespace numtracer_kernels::spatialvec_spat2

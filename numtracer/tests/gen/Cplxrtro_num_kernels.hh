@@ -7,7 +7,7 @@ namespace numtracer_kernels { namespace cplxrtro_num {
 #define NT_TRACE_COMPLEX std::complex<double>
 #endif
 using nt_complex_t = NT_TRACE_COMPLEX;
-template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
+template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<(N<0?-N:N);++i) r*=x; return N<0?1.0/r:r; }
 // fundamental-symbol env layout (fill f[i] per call):
 //   f[0] = var(1)
 //   f[1] = var(2)
@@ -28,12 +28,11 @@ static inline nt_complex_t tr0([[maybe_unused]] const double *f) {
   const double s2 = f[4];
   const double s3 = f[3];
   const double s4 = f[0];
-  const double s5 = 24;
-  const double s6 = s0*s5;
-  const double s7 = s1*s6;
-  const double s8 = s2*s5;
-  const double s10 = s4*s7;
-  const double s11 = fma(s3, s8, s10);
+  const double s5 = s0*s1;
+  const double s7 = s4*s5;
+  [[maybe_unused]] const double s8 = 1;
+  const double s9 = fma(s2, s3, s7);
+  const double s11 = s9*(24);
   return nt_complex_t{0.0, s11};
 }
 static inline nt_complex_t tr1(const double *f) { return tr0(f); }

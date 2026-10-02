@@ -2,7 +2,7 @@
 #pragma once
 #include <cmath>
 namespace numtracer_kernels { namespace discdirac_num {
-template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
+template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<(N<0?-N:N);++i) r*=x; return N<0?1.0/r:r; }
 // fundamental-symbol env layout (fill f[i] per call):
 //   f[0] = var(0)
 //   f[1] = var(1)
@@ -23,52 +23,51 @@ static inline double tr1([[maybe_unused]] const double *f) {
 }
 static inline double tr2(const double *f) { return tr1(f); }
 static inline double tr3([[maybe_unused]] const double *f) {
-  const double s1 = f[2];
-  const double s2 = (4)*s1;
-  const double s3 = f[1];
+  const double s0 = f[2];
+  const double s1 = f[1];
+  const double s2 = s0*s1;
+  const double s3 = f[0];
   const double s4 = s2*s3;
-  const double s5 = f[0];
-  const double s6 = s4*s5;
+  const double s6 = s4*(4);
   return s6;
 }
 static inline double tr4([[maybe_unused]] const double *f) {
-  const double s2 = f[1];
-  const double s4 = f[3];
-  const double s5 = (-0.75)*s4;
-  const double s6 = fma((-0.86602540378444004), s2, s5);
-  const double s9 = s2*s2;
-  const double s11 = fma((-0.25), s9, (1));
-  const double s13 = fma(s4, s6, s11);
-  const double s14 = f[2];
-  const double s15 = s14*s14;
-  const double s16 = s13*s15;
+  const double s0 = f[1];
+  const double s1 = f[3];
+  const double s4 = fma(s1, (0.86602540378443726), s0);
+  const double s7 = fma(s0, s0, (-4));
+  const double s10 = s7*(0.28867513459481242);
+  const double s11 = fma(s1, s4, s10);
+  const double s12 = f[2];
+  const double s13 = s12*s12;
+  const double s14 = s11*s13;
+  const double s16 = s14*(-0.86602540378444004);
   return s16;
 }
 static inline double tr5([[maybe_unused]] const double *f) {
-  const double s2 = f[1];
-  const double s4 = f[3];
-  const double s5 = (3.4641016151378001)*s4;
-  const double s6 = fma((-2), s2, s5);
-  const double s7 = f[2];
+  const double s0 = f[1];
+  const double s1 = f[3];
+  const double s4 = fma(s0, (-0.57735026918961818), s1);
+  const double s5 = f[2];
+  const double s6 = s4*s5;
+  const double s7 = f[0];
   const double s8 = s6*s7;
-  const double s9 = f[0];
-  const double s10 = s8*s9;
+  const double s10 = s8*(3.4641016151378001);
   return s10;
 }
 static inline double tr6([[maybe_unused]] const double *f) {
-  [[maybe_unused]] const double s0 = 1;
-  const double s1 = f[2];
-  const double s2 = s1*s1;
-  const double s3 = f[1];
-  const double s4 = s3*s3;
-  const double s5 = s2*s4;
-  return s5;
+  const double s0 = f[2];
+  const double s1 = s0*s0;
+  const double s2 = f[1];
+  const double s3 = s2*s2;
+  const double s4 = s1*s3;
+  return s4;
 }
 static inline double tr7(const double *f) { return tr3(f); }
 static inline double tr8([[maybe_unused]] const double *f) {
-  const double s1 = f[2];
-  const double s2 = s1*s1;
-  const double s3 = (-2)*s2;
+  const double s0 = f[2];
+  const double s1 = s0*s0;
+  const double s3 = s1*(-2);
   return s3;
 }
 }} // namespace numtracer_kernels::discdirac_num

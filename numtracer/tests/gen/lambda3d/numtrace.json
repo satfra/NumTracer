@@ -16,7 +16,6 @@
 	],
 	"decorator":"static inline",
 	"main_opt":"-O1",
-	"full_parallel":false,
 	"maxw":8,
 	"maxw_b":4,
 	"device":false,

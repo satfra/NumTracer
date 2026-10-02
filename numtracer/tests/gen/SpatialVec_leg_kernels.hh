@@ -2,7 +2,7 @@
 #pragma once
 #include <cmath>
 namespace numtracer_kernels { namespace spatialvec_leg {
-template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
+template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<(N<0?-N:N);++i) r*=x; return N<0?1.0/r:r; }
 // fundamental-symbol env layout (fill f[i] per call):
 //   f[0] = var(0)
 //   f[1] = var(1)
@@ -16,18 +16,17 @@ static inline void fill(double *f, [[maybe_unused]] double p0, [[maybe_unused]] 
   f[3] = 1.0/((1.00000000000000000e+00)*(p0)*(p0) + (1.00000000000000000e+00)*(p)*(p));
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  [[maybe_unused]] const double s0 = -1;
-  const double s1 = f[3];
-  const double s2 = -s1;
-  const double s3 = f[2];
-  const double s4 = s3*s3;
-  const double s5 = s2*s4;
-  const double s7 = f[1];
-  const double s8 = s7*s7;
-  const double s10 = fma(s5, s8, (1));
-  const double s11 = f[0];
-  const double s12 = s11*s11;
-  const double s13 = s10*s12;
-  return s13;
+  const double s0 = f[3];
+  const double s1 = f[2];
+  const double s2 = s1*s1;
+  const double s3 = s0*s2;
+  const double s4 = f[1];
+  const double s5 = s4*s4;
+  const double s8 = fma(s3, s5, (-1));
+  const double s9 = f[0];
+  const double s10 = s9*s9;
+  const double s11 = s8*s10;
+  const double s12 = -s11;
+  return s12;
 }
 }} // namespace numtracer_kernels::spatialvec_leg

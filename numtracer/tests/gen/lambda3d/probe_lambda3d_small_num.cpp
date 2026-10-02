@@ -5,19 +5,22 @@
 #define __device__
 #include <complex>
 #include <cmath>
+#include <algorithm>
 #include <random>
 #include <cstdio>
 #include <cstring>
 #include "Lambda3DSmall_num_kernels.hh"
 template<int N, class T> static inline T powr(T x){ T r=T(1); int n=N<0?-N:N; for(int i=0;i<n;++i) r*=x; return N<0?T(1)/r:r; }
-using std::pow; using std::sqrt; using std::sin; using std::cos; using std::tan; using std::exp; using std::log; using std::fma; using std::fabs;
+using std::pow; using std::sqrt; using std::sin; using std::cos; using std::tan; using std::exp; using std::log; using std::fma; using std::fabs; using std::min; using std::max;
 static inline std::complex<double> fma(const std::complex<double>&a,const std::complex<double>&b,const std::complex<double>&c){return a*b+c;}
 template<class T> using complex = std::complex<T>;
 static inline double ntStub(double seed, double x){ double h = std::sin(seed*0.1031 + x*0.3127 + 1.7)*43758.5453; return 0.4 + 0.5*(h - std::floor(h)); }
 static inline double ntRe(double x) { return x; }
-template <class T> static inline double ntRe(const T &z) { return z.real(); }
 static inline double ntIm(double) { return 0.0; }
-template <class T> static inline double ntIm(const T &z) { return z.imag(); }
+template <class T> static inline auto ntRe(const T &z) -> decltype(z.real()) { return z.real(); }
+template <class T> static inline auto ntRe(const T &z) -> decltype(real(z)) requires (!requires { z.real(); }) { return real(z); }
+template <class T> static inline auto ntIm(const T &z) -> decltype(z.imag()) { return z.imag(); }
+template <class T> static inline auto ntIm(const T &z) -> decltype(imag(z)) requires (!requires { z.imag(); }) { return imag(z); }
 static inline auto probe_full(const double& l1, const double& cos1, const double& cos2, const double& S0, const double& S1, const double& SPhi, const double& k)
 {
   double fenv[(DiFfRG::lambda3d_small_num::nenv) > 0 ? (DiFfRG::lambda3d_small_num::nenv) : 1];

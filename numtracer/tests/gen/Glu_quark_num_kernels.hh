@@ -2,7 +2,7 @@
 #pragma once
 #include <cmath>
 namespace numtracer_kernels { namespace glu_quark_num {
-template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
+template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<(N<0?-N:N);++i) r*=x; return N<0?1.0/r:r; }
 // fundamental-symbol env layout (fill f[i] per call):
 //   f[0] = var(0)
 //   f[1] = var(1)
@@ -14,31 +14,31 @@ static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] 
   f[2] = p;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s2 = f[1];
-  const double s3 = (32)*s2;
-  const double s4 = f[0];
-  const double s6 = f[2];
-  const double s7 = (-48)*s6;
-  const double s8 = fma(s3, s4, s7);
-  const double s11 = s2*s8;
-  const double s12 = fma(s4, (16), s11);
-  const double s13 = s4*s4;
-  const double s14 = s4*s13;
-  const double s15 = s12*s14;
+  const double s0 = f[1];
+  const double s1 = f[0];
+  const double s2 = s0*s1;
+  const double s3 = f[2];
+  const double s6 = fma(s2, (-0.66666666666666663), s3);
+  const double s9 = s1*(-0.33333333333333331);
+  const double s10 = fma(s0, s6, s9);
+  const double s11 = s1*s1;
+  const double s12 = s1*s11;
+  const double s13 = s10*s12;
+  const double s15 = s13*(-48);
   return s15;
 }
 static inline double tr1([[maybe_unused]] const double *f) {
-  const double s2 = f[1];
-  const double s3 = (-32)*s2;
-  const double s4 = f[0];
-  const double s6 = f[2];
-  const double s7 = (48)*s6;
-  const double s8 = fma(s3, s4, s7);
-  const double s11 = s2*s8;
-  const double s12 = fma(s4, (-16), s11);
-  const double s13 = s4*s4;
-  const double s14 = s4*s13;
-  const double s15 = s12*s14;
+  const double s0 = f[1];
+  const double s1 = f[0];
+  const double s2 = s0*s1;
+  const double s3 = f[2];
+  const double s6 = fma(s2, (-0.66666666666666663), s3);
+  const double s9 = s1*(-0.33333333333333331);
+  const double s10 = fma(s0, s6, s9);
+  const double s11 = s1*s1;
+  const double s12 = s1*s11;
+  const double s13 = s10*s12;
+  const double s15 = s13*(48);
   return s15;
 }
 }} // namespace numtracer_kernels::glu_quark_num
