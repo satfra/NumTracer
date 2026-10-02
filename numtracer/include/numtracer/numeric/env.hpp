@@ -28,15 +28,11 @@ namespace numtracer::numeric
 
   // Forward declarations of the host-only trace-fold templates (`numeric/trace_fold.hpp`). That header
   // spawns threads and is forbidden in the -fno-exceptions net-builder TUs, so `env.hpp` must NOT include
-  // it. The two @ref LorentzEnv methods that forward here are member templates whose bodies are only
+  // it. The @ref LorentzEnv methods that forward here are member templates whose bodies are only
   // instantiated in the generator's main TU, where `trace_fold.hpp` is already included — so these
   // declarations are enough to compile `env.hpp` everywhere else.
   template <class P, class TraceFn>
   std::vector<P> contract_traces(int nsym, long nCache, unsigned W, TraceFn &&trace);
-  template <class P, class TraceFn>
-  std::vector<P> fold_nets(int nsym, const std::vector<std::vector<int>> &traceIdx,
-                           const std::vector<std::vector<Cx>> &subScale, const std::vector<P> &traceTable,
-                           long nCache, unsigned W, TraceFn &&trace);
   template <class P, class TraceFn, class ScaleFn, class Sink>
   void fold_groups_streaming(int nsym, const std::vector<std::vector<int>> &traceIdx,
                              const std::vector<std::vector<Cx>> &subScale,
@@ -119,14 +115,6 @@ namespace numtracer::numeric
     std::vector<P> contract_traces(long nCache, unsigned W, TraceFn &&trace) const
     {
       return ::numtracer::numeric::contract_traces<P>(nsym_, nCache, W, std::forward<TraceFn>(trace));
-    }
-    template <class P, class TraceFn>
-    std::vector<P> fold_nets(const std::vector<std::vector<int>> &traceIdx,
-                             const std::vector<std::vector<Cx>> &subScale, const std::vector<P> &traceTable,
-                             long nCache, unsigned W, TraceFn &&trace) const
-    {
-      return ::numtracer::numeric::fold_nets<P>(nsym_, traceIdx, subScale, traceTable, nCache, W,
-                                                std::forward<TraceFn>(trace));
     }
     /// Streaming phase B: folds each group's nets on demand and drains straight to `sink`, so no net
     /// polynomial outlives its group. See `trace_fold.hpp` for the equivalence argument.

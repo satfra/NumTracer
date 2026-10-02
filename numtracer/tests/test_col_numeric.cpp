@@ -89,7 +89,7 @@ int main() {
     rep("SU(5) d_fund loop (=5)", sun_value_cx({sun5.deltaFund(0, 1), sun5.deltaFund(1, 0)}), Cx{5, 0});
   }
 
-  // ---- backward compat: cf/cdelta (g defaulted to 3) + the double sun_value() shim ------
+  // ---- backward compat: cf/cdelta (g defaulted to 3) ------
   std::printf("[backward-compat — committed adjoint nets via sun3.f()/sun3.deltaAdj()]\n");
   {
     // The 5 nonzero SU(3) colour nets emitted by gen_qcd_za_inv.cpp:60. These must keep their
@@ -102,7 +102,7 @@ int main() {
         {sun3.deltaAdj(0, 1), sun3.deltaAdj(2, 3), sun3.deltaAdj(4, 5), sun3.deltaAdj(6, 7), sun3.deltaAdj(7, 2), sun3.f(0, 3, 4), sun3.f(1, 5, 6)}};
     const double want[5] = {-24, 0, 24, 24, -24}; // SU(3) ZA colour factors (the refactor must preserve these)
     for (int i = 0; i < 5; ++i)
-      rep("ZA colnet", Cx{sun_value(za[i]), 0}, Cx{want[i], 0}); // double shim, as the generators use it
+      rep("ZA colnet", Cx{sun_value_cx(za[i]).re, 0}, Cx{want[i], 0});
   }
 
   // ---- group-diagonal dressings: the fold returns a SUNPoly Σ_a c_a D_a, not a single number ----

@@ -10,7 +10,6 @@
 #pragma once
 
 #include "numtracer/core/cx.hpp"
-#include "numtracer/core/hash.hpp" // splitmix64_finalise / hash_combine
 #include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
 
 #include <cstdint>

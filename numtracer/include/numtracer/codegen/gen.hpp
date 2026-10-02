@@ -14,6 +14,7 @@
 
 #include "numtracer/core/export.hpp"   // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
 #include "numtracer/core/envvar.hpp"   // env_flag / env_int — the single truth test for NT_* switches
+#include "numtracer/core/hash.hpp"     // splitmix64_finalise / hash_combine (GlobalEnv)
 #include "numtracer/codegen/lower.hpp"
 #include "numtracer/codegen/precision.hpp" // float vs double emission
 #include "numtracer/network/network.hpp" // NetVal / Elem / GenProg

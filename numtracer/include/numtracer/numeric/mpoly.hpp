@@ -696,21 +696,6 @@ namespace numtracer::numeric
   public:
     int size() const { return terms.size(); }
     bool empty() const { return terms.empty(); }
-
-    /// Insert/accumulate one term (keeps `terms` sorted). O(n) shift — used only on the incremental paths
-    /// (component builders); the hot `operator*`/`operator+`/reductions build whole vectors at once.
-    void addTerm(const Mono &m, Cx c)
-    {
-      if (c.re == 0 && c.im == 0) return;
-      auto it = std::lower_bound(terms.begin(), terms.end(), m,
-                                 [](const std::pair<Mono, Cx> &a, const Mono &k) { return a.first < k; });
-      if (it != terms.end() && it->first == m) {
-        it->second = it->second + c;
-        if (it->second.re == 0 && it->second.im == 0) terms.erase(it);
-      } else {
-        terms.insert(it, {m, c});
-      }
-    }
   };
 
   /// @brief Internal attorney re-exposing the private @ref MPoly factories to the trusted cross-header

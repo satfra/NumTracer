@@ -221,21 +221,21 @@ int main() {
     enum { a, b, c, d, i, j, k };
 
     // ANCHORS: the closed nets keep their values.
-    ok("open-leg guard: f^{abc}f^{abc} still 24", sun_value({sun3.f(a, b, c), sun3.f(a, b, c)}) == 24.0);
-    ok("open-leg guard: tr(T^a T^a) still 4", std::fabs(sun_value({sun3.T(a, i, j), sun3.T(a, j, i)}) - 4.0) < 1e-12);
+    ok("open-leg guard: f^{abc}f^{abc} still 24", sun_value_cx({sun3.f(a, b, c), sun3.f(a, b, c)}).re == 24.0);
+    ok("open-leg guard: tr(T^a T^a) still 4", std::fabs(sun_value_cx({sun3.T(a, i, j), sun3.T(a, j, i)}).re - 4.0) < 1e-12);
     // a label used TWICE WITHIN ONE factor is a legal closed loop (δ^{aa} = N²−1), not an open leg.
-    ok("open-leg guard: delta^{aa} still 8", sun_value({sun3.deltaAdj(a, a)}) == 8.0);
+    ok("open-leg guard: delta^{aa} still 8", sun_value_cx({sun3.deltaAdj(a, a)}).re == 8.0);
 
     // THE traps. Pre-guard values in comments — every one of them silently wrong.
-    ok("open adjoint delta leg throws (was 8)", throws([&] { (void)sun_value({sun3.deltaAdj(a, b)}); }));
+    ok("open adjoint delta leg throws (was 8)", throws([&] { (void)sun_value_cx({sun3.deltaAdj(a, b)}); }));
     ok("open adjoint f legs throw (was 24)",
-       throws([&] { (void)sun_value({sun3.f(a, b, c), sun3.f(a, b, d)}); }));
+       throws([&] { (void)sun_value_cx({sun3.f(a, b, c), sun3.f(a, b, d)}); }));
     ok("open adjoint generator legs throw (was 4)",
-       throws([&] { (void)sun_value({sun3.T(a, i, j), sun3.T(b, j, i)}); }));
-    ok("open fundamental delta leg throws (was 3)", throws([&] { (void)sun_value({sun3.deltaFund(i, j)}); }));
+       throws([&] { (void)sun_value_cx({sun3.T(a, i, j), sun3.T(b, j, i)}); }));
+    ok("open fundamental delta leg throws (was 3)", throws([&] { (void)sun_value_cx({sun3.deltaFund(i, j)}); }));
     // the one case that was already caught (extract_cycles) — now caught earlier, still caught.
     ok("open fundamental generator chain still throws",
-       throws([&] { (void)sun_value({sun3.T(a, i, j), sun3.T(a, j, k)}); }));
+       throws([&] { (void)sun_value_cx({sun3.T(a, i, j), sun3.T(a, j, k)}); }));
 
     // the DRESSED fold is a second contraction core with the same union-find; guard it too.
     auto arr = [](int dim) {

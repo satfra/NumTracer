@@ -821,7 +821,6 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
 
 // Public SU(N) entry points: declared always, defined once (library TU / header-only build).
 NUMTRACER_FUNC Cx sun_value_cx(const SUNNet &net);
-NUMTRACER_FUNC double sun_value(const SUNNet &net);
 NUMTRACER_FUNC SUNPoly sun_value_dressed(const SUNNet &net);
 
 #if NUMTRACER_DEFINE_BODIES
@@ -842,12 +841,6 @@ NUMTRACER_FUNC Cx sun_value_cx(const SUNNet &net) {
   }
   return r;
 }
-
-/// @brief Contract an SU(N) network to its real scalar value (backward-compatible entry point).
-///
-/// Kept returning `double` so existing generator call sites are untouched; adjoint SU(3) colour
-/// nets are real, so taking the real part is exact.
-NUMTRACER_FUNC double sun_value(const SUNNet &net) { return sun_value_cx(net).re; }
 
 /// @brief Contract a (possibly two-group) SU(N) network carrying **group-diagonal dressings** to a
 ///        @ref SUNPoly — `Σ_t coeff_t · Π D^{dr}`.

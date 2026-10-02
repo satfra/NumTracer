@@ -104,9 +104,6 @@ template <> struct SUNData<3> {
 };
 template <> inline constexpr bool kHasSUNData<3> = true; ///< SU(3) data is tabulated.
 
-namespace sun_detail {
-} // namespace sun_detail
-
 /// @brief The SU(N) sector: a runtime numeric oracle for the colour algebra.
 ///
 /// The constructor builds the fundamental generators (generalized Gell-Mann) and the
