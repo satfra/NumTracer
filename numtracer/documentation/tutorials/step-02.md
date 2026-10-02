@@ -153,8 +153,7 @@ than trusting them.
 
 5. **Feel the blow-up you are avoiding.** Contract a chain of six $f$'s (a ring:
    $f^{a b c}f^{c d e}f^{e f g}\dots$ closing back on $a$) and time it. Then estimate how many
-   entries the dense intermediate would have had. The test-side dense oracle
-   (`tests/oracle/dtensor.hpp`) will actually build it if you want the comparison.
+   entries the dense intermediate would have had.
 
 ## The plain program
 

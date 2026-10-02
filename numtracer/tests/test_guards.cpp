@@ -1,6 +1,6 @@
 // NumTracer — guards against silent-corruption traps on code paths no current flow exercises.
 //
-// These cover latent bugs the end-to-end FORM/dense oracles cannot catch because no committed flow
+// These cover latent bugs the end-to-end FORM oracles cannot catch because no committed flow
 // triggers them:
 //   (A1) network::add collapses a same-index vector sum into one compound-vector leaf whose weights
 //        are REAL (Elem::vlc is std::pair<double,int>). A complex coefficient on such a term would
@@ -14,11 +14,6 @@
 //        trace_rec, whose pair_factor read the Comm's empty vlc and silently collapsed it. This
 //        function is the cross-validation ORACLE in test_numeric_contract.cpp, so a wrong verdict
 //        here would "confirm" a wrong engine result.
-//   (D1) oracle/axplan.hpp's kMaxAxisRank=16 scratch arrays were entirely unbounds-checked, though the header
-//        itself says an overflow "silently corrupts the contraction". Checking the OPERAND ranks is
-//        not enough: the result rank is nFreeA+nFreeB, so two in-range rank-10 operands sharing no
-//        axis give RR=20>kMaxAxisRank and overrun rid/rdim. This is the dense validation ORACLE's planner, so
-//        a silent corruption here confirms a wrong engine result.
 //   (D2) MPoly::atom narrowed the atom id to int16 with no check; aid>=32768 wrapped to a different
 //        (or negative) id, so the term carried somebody else's denominator into the cancellation.
 //   (D3) collect_atom_denoms overwrote atomDen[id] unconditionally, so two projectors sharing an id
@@ -41,7 +36,6 @@
 //        Both cores now count occurrences up front and refuse count == 1. Counts ≥ 3 are deliberately
 //        left alone (the front-end's NumTrace::badlabel owns those), so no valid net changes value —
 //        which is what the anchors below pin down.
-#include "oracle/axplan.hpp"
 #include "numtracer/network/dirac.hpp"
 #include "numtracer/network/network.hpp"
 #include "numtracer/network/sun_net.hpp"
@@ -124,59 +118,6 @@ int main() {
       return true;
     }
   };
-
-  // ---- D1: axplan kMaxAxisRank bounds ----------------------------------------------------------------
-  // NOTE the pre-fix behaviour of the overflow cases is UB (an out-of-bounds write into a stack
-  // array), not a wrong-but-defined value, so these were confirmed red by hand under
-  // -fsanitize=address rather than by expecting a particular garbage result.
-  {
-    using namespace numtracer::core;
-    // Rank-8 + rank-8 sharing 4 axes: RR = 8, comfortably in range. Must NOT throw, and must give
-    // the same plan as before the guard — this is the "don't break the legitimate case" anchor.
-    {
-      std::array<int, 8> ida{}, adim{}, idb{}, bdim{};
-      for (int i = 0; i < 8; ++i) {
-        ida[i] = i;
-        adim[i] = 2;
-        idb[i] = (i < 4) ? i : 100 + i; // ids 0..3 shared, 4..7 free on each side
-        bdim[i] = 2;
-      }
-      bool threw = throws([&] { (void)make_eplan(ida, adim, 8, idb, bdim, 8); });
-      const EPlan p = make_eplan(ida, adim, 8, idb, bdim, 8);
-      ok("axplan: rank-8 x rank-8 with 4 shared does not throw", !threw);
-      ok("axplan: ...and still plans RR=8, nSh=4", p.RR == 8 && p.nSh == 4);
-    }
-    // Operand rank past kMaxAxisRank.
-    {
-      std::array<int, 17> id{}, dim{};
-      for (int i = 0; i < 17; ++i) {
-        id[i] = i;
-        dim[i] = 2;
-      }
-      std::array<int, 1> id1{{999}}, dim1{{2}};
-      ok("axplan: RA=17 throws", throws([&] { (void)make_eplan(id, dim, 17, id1, dim1, 1); }));
-      ok("axplan: RB=17 throws", throws([&] { (void)make_eplan(id1, dim1, 1, id, dim, 17); }));
-      ok("axplan: make_eaddplan R=17 throws", throws([&] { (void)make_eaddplan(id, dim, 17, id, dim); }));
-    }
-    // THE case operand-rank checks miss: two in-range rank-10 operands, NO shared axis, RR = 20.
-    {
-      std::array<int, 10> ida{}, adim{}, idb{}, bdim{};
-      for (int i = 0; i < 10; ++i) {
-        ida[i] = i;
-        adim[i] = 2;
-        idb[i] = 500 + i; // disjoint ids => pure outer product
-        bdim[i] = 2;
-      }
-      ok("axplan: rank-10 (x) rank-10 disjoint => RR=20 throws",
-         throws([&] { (void)make_eplan(ida, adim, 10, idb, bdim, 10); }));
-    }
-    // Shared identity with disagreeing extents was a comment, not a check.
-    {
-      std::array<int, 1> ida{{7}}, adim{{4}}, idb{{7}}, bdim{{3}};
-      ok("axplan: shared axis with mismatched extent throws",
-         throws([&] { (void)make_eplan(ida, adim, 1, idb, bdim, 1); }));
-    }
-  }
 
   // ---- D2 / D3 / D4: numeric-engine silent-corruption guards ---------------------------------
   {

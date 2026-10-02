@@ -3,7 +3,7 @@
 // NumTracer emits a PLAIN kernel class: a flow whose dressing rules mention RB/RF/... emits
 // unqualified calls to them and the consumer supplies the definitions. This header is the test
 // suite's supply, and the single source of truth for the formulas — DiFfRG::ShimRegulator (shim.hpp)
-// forwards here, so the NumTracer kernel and the still-templated FORM/dense oracles it is graded
+// forwards here, so the NumTracer kernel and the still-templated FORM oracles it is graded
 // against can never regulate differently.
 //
 // Definitions live at GLOBAL scope on purpose: unqualified lookup from a kernel member runs

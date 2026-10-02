@@ -357,24 +357,11 @@ if(NUMTRACER_BUILD_TESTS)
   target_include_directories(bench_147 PRIVATE tests/gen tests/refshim)
   target_link_libraries(bench_147 PRIVATE NumTracer::NumTracer)
 
-  # The other three benchmarks, wired the same way. They were present in the tree but named by NO
-  # CMakeLists at all, so nothing ever compiled them: a source that is never built rots silently
-  # (its sibling prototype tests/proto_matprod.cpp had already bit-rotted against a private MPoly
-  # factory and no longer compiled). EXCLUDE_FROM_ALL keeps them off the default build; naming them
-  # here is what makes the rot visible.
-  foreach(_bench bench_aqbq147 bench_za_dense bench_za3_147_dense)
-    add_executable(${_bench} EXCLUDE_FROM_ALL tests/refshim/${_bench}.cpp)
-    target_include_directories(${_bench} PRIVATE tests/gen tests/refshim)
-    target_link_libraries(${_bench} PRIVATE NumTracer::NumTracer)
-  endforeach()
-  # The frozen dense kernels include the test-side dense oracle (tests/oracle/dtensor.hpp).
-  target_include_directories(bench_za_dense PRIVATE tests/oracle)
-  target_include_directories(bench_za3_147_dense PRIVATE tests/oracle)
-
-  # The dense-tensor packed-renv round trip (tests/oracle/dtensor.hpp). Same story: the source
-  # existed and was built by nothing, so it is registered as a real test.
-  add_executable(test_dense_pack tests/test_dense_pack.cpp)
-  target_link_libraries(test_dense_pack PRIVATE NumTracer::NumTracer)
+  # The other benchmark, wired the same way. EXCLUDE_FROM_ALL keeps it off the default build;
+  # naming it here keeps it compiling (a source that is never built rots silently).
+  add_executable(bench_aqbq147 EXCLUDE_FROM_ALL tests/refshim/bench_aqbq147.cpp)
+  target_include_directories(bench_aqbq147 PRIVATE tests/gen tests/refshim)
+  target_link_libraries(bench_aqbq147 PRIVATE NumTracer::NumTracer)
 
   add_executable(compare_za4_num tests/refshim/compare_za4_num.cpp)
   target_include_directories(compare_za4_num PRIVATE tests/gen tests/refshim)
@@ -586,15 +573,13 @@ if(NUMTRACER_BUILD_TESTS)
   # Finite-temperature quark self-energy (hand-coded, dependency-free): the numeric engine contracts
   # the closed Dirac trace tr[(γ·p) γ^μ (γ·q) γ^ν] against the finite-T gluon line
   # ZAE·P_E(l) + ZAM·P_M(l) in the heat-bath frame (p0 = πT), checked against the closed-form trace
-  # identity oracle. (The codegen DENSE oracle overflows the stack at -O3 for a 4-γ × projector trace;
-  # this validates the same physics through the numeric path without that fragility.)
+  # identity oracle.
   add_executable(test_finiteT_quark tests/test_finiteT_quark.cpp)
   target_link_libraries(test_finiteT_quark PRIVATE NumTracer::NumTracer)
 
   enable_testing()
   add_test(NAME numeric_contract COMMAND test_numeric_contract)
   add_test(NAME dpoly COMMAND test_dpoly)
-  add_test(NAME dense_pack COMMAND test_dense_pack)
   add_test(NAME flow_zq_collect COMMAND compare_zq_collect)
   add_test(NAME projector_identity COMMAND test_projector_identity)
   add_test(NAME projector_fusion COMMAND test_projector_fusion)

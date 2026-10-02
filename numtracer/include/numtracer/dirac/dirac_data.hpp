@@ -13,7 +13,7 @@
 ///
 /// Index conventions: `mu = 0..3` corresponds to @f$\gamma^1..\gamma^4@f$; spinor
 /// indices `i, j = 0..3`. The values are stored as plain `constexpr` tables, read by
-/// `numeric/spinor_mat.hpp` (and the test-side dense oracle, `tests/oracle/dtensor.hpp`), and
+/// `numeric/spinor_mat.hpp`, and
 /// are cross-checked against the Clifford algebra in `tests/test_numeric_contract.cpp`
 /// (sections A/F for the gammas, H for `kC` below) -- that test is the safety net for
 /// these tables, which nothing else would notice were wrong.
@@ -77,22 +77,5 @@ inline constexpr Cx kC[4][4] = {{Cx{0, 0}, Cx{-1, 0}, Cx{0, 0}, Cx{0, 0}},
                                 {Cx{1, 0}, Cx{0, 0}, Cx{0, 0}, Cx{0, 0}},
                                 {Cx{0, 0}, Cx{0, 0}, Cx{0, 0}, Cx{1, 0}},
                                 {Cx{0, 0}, Cx{0, 0}, Cx{-1, 0}, Cx{0, 0}}};
-
-/// @brief Look up a gamma-matrix entry.
-/// @param mu The matrix index `0..3` (selecting @f$\gamma^1..\gamma^4@f$).
-/// @param i The row (spinor) index `0..3`.
-/// @param j The column (spinor) index `0..3`.
-/// @return @f$(\gamma^\mu)_{ij}@f$.
-constexpr Cx gamma_entry(int mu, int i, int j) { return kGamma[mu][i][j]; }
-/// @brief Look up a @f$\gamma_5@f$ entry.
-/// @param i The row (spinor) index `0..3`.
-/// @param j The column (spinor) index `0..3`.
-/// @return @f$(\gamma_5)_{ij}@f$.
-constexpr Cx gamma5_entry(int i, int j) { return kGamma5[i][j]; }
-/// @brief Look up a charge-conjugation-matrix entry.
-/// @param i The row (spinor) index `0..3`.
-/// @param j The column (spinor) index `0..3`.
-/// @return @f$C_{ij}@f$.
-constexpr Cx c_entry(int i, int j) { return kC[i][j]; }
 
 } // namespace numtracer::dirac
