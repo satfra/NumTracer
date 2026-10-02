@@ -502,7 +502,7 @@ namespace numtracer::numeric
     /// `x0·y0 + x1·y1`, bit-identical to evaluating it with @ref operator* and @ref operator+, for
     /// the Dirac fold's 2×2 block products. With atom-free operands the two products stay in key form
     /// and are merged there, so only the final terms are built as Monos.
-    [[gnu::noinline]] static MPoly mulAdd(const MPoly &x0, const MPoly &y0, const MPoly &x1, const MPoly &y1);
+    static MPoly mulAdd(const MPoly &x0, const MPoly &y0, const MPoly &x1, const MPoly &y1); // noinline, see definition
 
     /// Keyed product for operands that carry atoms: the distinct merged atom lists are built once and
     /// ranked in MonoAtoms order, and the key is (packed exponent sum, atom rank), which compares exactly
@@ -917,7 +917,7 @@ namespace numtracer::numeric
     return acc;
   }
 
-  inline MPoly MPoly::mulAdd(const MPoly &x0, const MPoly &y0, const MPoly &x1, const MPoly &y1)
+  [[gnu::noinline]] inline MPoly MPoly::mulAdd(const MPoly &x0, const MPoly &y0, const MPoly &x1, const MPoly &y1)
   {
     // Only a sum of two non-trivial products gains: an empty or constant factor already has a
     // scratch-free path in operator*, and operator+ moves an empty side.
