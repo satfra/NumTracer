@@ -28,6 +28,8 @@
 #include "numtracer/numeric/spinor_mat.hpp" // Mat4 / matmul / mtrace / gammaC / slashC
 
 #include <algorithm>
+#include <cassert>
+#include <cstdint>
 #include <array>
 #include <cmath>
 #include <cstdio>

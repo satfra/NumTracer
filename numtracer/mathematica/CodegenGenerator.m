@@ -658,14 +658,14 @@ ntGenMainPhaseA[nSub_, nReused_, hasDressed_, mIdx_] :=
           "  std::atomic<bool> ntMEven{true};\n" <>
           "  for(const auto &a: atomDen) if(!poly_even_in(a, " <> ToString[mIdx] <> ")) ntMEven.store(false, std::memory_order_relaxed);\n",
           ""],
-        "  const bool ntprof = (std::getenv(\"NT_GEN_PROFILE\")!=nullptr);\n",
+        "  const bool ntprof = numtracer::env_flag(\"NT_GEN_PROFILE\");\n",
         "  unsigned workersA=std::thread::hardware_concurrency(); if(!workersA)workersA=4u;\n",
-        "  if(const char* mw=std::getenv(\"NT_GEN_MAXW\")){int v=std::atoi(mw); if(v>0&&(unsigned)v<workersA)workersA=(unsigned)v;}\n",
+        "  if(const long v=numtracer::env_int(\"NT_GEN_MAXW\",0); v>0&&(unsigned long)v<workersA) workersA=(unsigned)v;\n",
 (* SEPARATE worker count for phase B, whose memory profile differs from phase A's. Phase B runs `hw`
    concurrent RECOMPUTES of the uncached traces, which are the singletons (ntGenDedupJoin orders by
    descending refcount) and typically the heaviest ones; they land on top of the live window, so
    phase B can need FEWER workers than phase A. Defaults to phase A's count. *)
-        "  unsigned workersB=workersA; if(const char* mb=std::getenv(\"NT_GEN_MAXW_B\")){int v=std::atoi(mb); if(v>0)workersB=(unsigned)v;}\n",
+        "  unsigned workersB=workersA; if(const long v=numtracer::env_int(\"NT_GEN_MAXW_B\",0); v>0) workersB=(unsigned)v;\n",
         "  const long NSUB = " <> ToString[nSub] <> ";\n",
 (* how many traces are RESIDENT. Default: the reused ones (refCount >= 2), which the dedup ordering
    puts first; a singleton is contracted once whether cached or not, so caching it is pure RAM.
@@ -674,7 +674,7 @@ ntGenMainPhaseA[nSub_, nReused_, hasDressed_, mIdx_] :=
    NT_GEN_MEMO_MAX overrides either way (clamped to [0, NSUB]): lower it when memory is tight, raise
    it to put the singletons in phase A's balanced work list. *)
         "  long nCache = " <> ToString[If[hasDressed, nSub, nReused]] <> ";\n",
-        "  if(const char* mm=std::getenv(\"NT_GEN_MEMO_MAX\")){ long v=std::atol(mm); if(v>=0) nCache=std::min<long>(v,NSUB); }\n",
+        "  if(const long v=numtracer::env_int(\"NT_GEN_MEMO_MAX\",-1); v>=0) nCache=std::min<long>(v,NSUB);\n",
 (* Traces are dressing-stripped, so phase A caches plain MPoly on both paths; the DPoly is assembled
    only in the phase-B fold. *)
         "  auto trace=[&](int k)->MPoly{\n",

@@ -1296,11 +1296,12 @@ ntCompileGenerator[genFile_, src_, o_, incDir_] :=
       If[useLib,
         " '" <> libPath <> "'",
         ""];
-    ntLog[
-      "[time]   generator engine: ",
-      If[useLib,
-        "linking " <> libPath,
-        "header-only (libNumTracer.a not found)"]];
+    ntLog["[time]   generator engine: ", If[useLib, "linking " <> libPath, "header-only"]];
+(* Not just a log line: a missing archive silently changes how the engine is built, and a stale one
+   once produced wrong traces (ODR mismatch), so the fallback is always announced. *)
+    If[!useLib,
+      Print["[warn]  libNumTracer.a not found (", libPath, "); compiling the engine header-only. ",
+            "Build it with: cmake --build <repo>/numtracer/build --target NumTracer"]];
     mainObj = bin <> "_main.o";
     unitObjs = Table[bin <> "_u" <> ToString[u - 1] <> ".o", {u, 1, Length[unitFiles]}];
     ntLog["[time]   generator main TU: ", mainOpt, " (nSub = ", src["NSub"], "; NT_GEN_MAIN_OPT=-O0 is a large win on SMALL flows, but see the \"MainOpt\" note in ntGenOptions)"];

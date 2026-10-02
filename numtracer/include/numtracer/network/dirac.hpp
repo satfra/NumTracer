@@ -200,6 +200,11 @@ namespace numtracer::network
                  "dirac_value: chain contains a TRANSPOSED token. The Wick-pairing recursion pairs "
                  "factors by the Clifford algebra and has no notion of a factor's index order, so it "
                  "would silently trace the untransposed factor. Use numeric_dirac.");
+      else if (d.kind == DFac::Gamma5)
+        NT_THROW(std::runtime_error,
+                 "dirac_value: chain contains a gamma5 token. The Wick-pairing recursion knows only "
+                 "the four Clifford generators — pair_factor would read gamma5's empty vlc as a "
+                 "zero slash and silently return a wrong trace. Use numeric_dirac.");
       else if (d.kind == DFac::C)
         NT_THROW(std::runtime_error,
                  "dirac_value: chain contains a charge-conjugation (C) token. The Wick-pairing "

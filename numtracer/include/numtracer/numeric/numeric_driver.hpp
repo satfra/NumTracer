@@ -9,7 +9,7 @@
 /// it and its `NumericNet` net type are gone.
 #pragma once
 
-#include "numtracer/numeric/numeric_contract.hpp"
+#include "numtracer/numeric/mpoly.hpp"
 #include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
 #include "numtracer/codegen/precision.hpp"
 

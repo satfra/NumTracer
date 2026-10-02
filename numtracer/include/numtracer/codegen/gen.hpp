@@ -516,21 +516,22 @@ namespace numtracer::network
     /// therefore untouched at this threshold — lowering it is what would put that claim in play, and
     /// that claim has never been reproduced. Re-measure it before moving the default.
 
-    /// Is this generation targeting device code? Authoritative signal is `NT_GEN_DEVICE` (set by
-    /// CodegenBuild.m from the same condition that chooses the decorator); the raw-CUDA spelling is
-    /// honoured as a fallback. Read once per process: emission must be consistent across every
+    /// Is this generation targeting device code? The only signal is `NT_GEN_DEVICE`, set by
+    /// CodegenBuild.m (online) or the numtrace manifest's "device" field (offline) from the same
+    /// condition that chooses the decorator, so an explicit `"DeviceTarget" -> False` is honoured even
+    /// with a `__device__` decorator. Read once per process: emission must be consistent across every
     /// function in a run.
-    inline bool device_target(const std::string &decor)
+    inline bool device_target()
     {
       static const bool envDevice = env_flag("NT_GEN_DEVICE");
-      return envDevice || decor.find("__device__") != std::string::npos;
+      return envDevice;
     }
 
     inline std::string eff_decor(const std::string &decor, std::size_t nInstr = 0)
     {
       std::string effDecor = decor;
       bool noinline = env_flag("NT_GEN_NOINLINE_TRACES");
-      if (!noinline && device_target(decor)) {
+      if (!noinline && device_target()) {
         static const std::size_t noinlineMinInstr = [] {
           const char *e = std::getenv("NT_GEN_NOINLINE_MIN");
           if (e == nullptr || *e == '\0') return static_cast<std::size_t>(500); // empty means unset,

@@ -113,13 +113,13 @@ int main(int argc, char** argv){
     for(int k: r) sdr[i].push_back(sdrV[k]); }
   auto atomDen = env.collect_atom_denoms(sln, comp);
   for(auto &a: atomDen) a = reduce_units(a, units);  // bare-loop k^2 -> monomial l1^2 -> cancels
-  const bool ntprof = (std::getenv("NT_GEN_PROFILE")!=nullptr);
+  const bool ntprof = numtracer::env_flag("NT_GEN_PROFILE");
   unsigned workersA=std::thread::hardware_concurrency(); if(!workersA)workersA=4u;
-  if(const char* mw=std::getenv("NT_GEN_MAXW")){int v=std::atoi(mw); if(v>0&&(unsigned)v<workersA)workersA=(unsigned)v;}
-  unsigned workersB=workersA; if(const char* mb=std::getenv("NT_GEN_MAXW_B")){int v=std::atoi(mb); if(v>0)workersB=(unsigned)v;}
+  if(const long v=numtracer::env_int("NT_GEN_MAXW",0); v>0&&(unsigned long)v<workersA) workersA=(unsigned)v;
+  unsigned workersB=workersA; if(const long v=numtracer::env_int("NT_GEN_MAXW_B",0); v>0) workersB=(unsigned)v;
   const long NSUB = 1320;
   long nCache = 1320;
-  if(const char* mm=std::getenv("NT_GEN_MEMO_MAX")){ long v=std::atol(mm); if(v>=0) nCache=std::min<long>(v,NSUB); }
+  if(const long v=numtracer::env_int("NT_GEN_MEMO_MAX",-1); v>=0) nCache=std::min<long>(v,NSUB);
   auto trace=[&](int k)->MPoly{
     return sdch[k].empty()
       ? env.numeric_value_netval(sdn[k], sln[k], comp, atomDen)

@@ -102,6 +102,8 @@ int main() {
     // physically 3 gammas (vanishing trace) — the old count said "even" and fell into trace_rec
     ok("dirac_value refuses {sigma,gamma}", refuses({dcomm(0, 1), dgamma(2)}));
     ok("dirac_value refuses a LoopSep chain", refuses({dgamma(0), dloopsep(), dgamma(1)}));
+    // tr(γ5 γγγγ) is nonzero; a γ5 read as an empty slash would silently return a wrong value.
+    ok("dirac_value refuses a gamma5 chain", refuses({dg5(), dgamma(0), dgamma(1), dgamma(2), dgamma(3)}));
 
     // plain gamma/slash chains must be completely unaffected by the guard + recount
     ok("even gamma chain still traces", !dirac_value({dgamma(0), dgamma(1)}, 900000).empty());
