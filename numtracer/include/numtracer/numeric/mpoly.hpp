@@ -387,6 +387,74 @@ namespace numtracer::numeric
       return true;
     }
 
+    /// One term of an atom-free product in key form: packed exponents and coefficient.
+    struct KeyedTerm {
+      std::uint64_t p0, p1;
+      Cx c;
+    };
+    using KeyedTerms = gch::small_vector<KeyedTerm, 16>;
+
+    /// The product `a·b` of atom-free, inline-exponent operands as sorted, like-terms-combined
+    /// @ref KeyedTerm s — exactly the terms @ref operator* returns, without building any Mono.
+    /// Returns false on a field carry (an exponent > 31), which needs the heap representation.
+    static bool keyedAtomFreeTerms(const MPoly &a, const MPoly &b, KeyedTerms &out)
+    {
+      const std::size_t na = a.terms.size(), nb = b.terms.size();
+      struct Key {
+        std::uint64_t p0, p1;
+        std::uint32_t idx;
+      };
+      gch::small_vector<Key, 16> keys;
+      gch::small_vector<Cx, 16> coeff;
+      keys.reserve(na * nb);
+      coeff.reserve(na * nb);
+      bool carry = false;
+      for (const auto &[ma, ca] : a.terms) {
+        for (const auto &[mb, cb] : b.terms) {
+          std::uint64_t sum[2];
+          for (int word = 0; word < 2; ++word) {
+            const std::uint64_t wa = ma.e.packed[word], wb = mb.e.packed[word];
+            sum[word] = wa + wb;
+            carry |= (((wa & wb) | ((wa | wb) & ~sum[word])) & MonoExp::kFieldTop) != 0;
+          }
+          keys.push_back({sum[0], sum[1], static_cast<std::uint32_t>(keys.size())});
+          coeff.push_back(ca * cb);
+        }
+        if (carry) return false;
+      }
+      NT_STAT_ADD(mul_keyed, 1);
+      auto less = [](const Key &x, const Key &y) { return x.p0 != y.p0 ? x.p0 < y.p0 : x.p1 < y.p1; };
+      bool sorted = true;
+      for (std::size_t k = 1; sorted && k < keys.size(); ++k)
+        sorted = less(keys[k - 1], keys[k]);
+      if (!sorted) std::sort(keys.begin(), keys.end(), less);
+      out.clear();
+      out.reserve(keys.size());
+      for (const Key &k : keys) {
+        const Cx c = coeff[k.idx];
+        if (c.re == 0 && c.im == 0) continue;
+        if (!out.empty() && out.back().p0 == k.p0 && out.back().p1 == k.p1) {
+          out.back().c = out.back().c + c;
+          if (out.back().c.re == 0 && out.back().c.im == 0) out.pop_back();
+        } else {
+          out.push_back({k.p0, k.p1, c});
+        }
+      }
+      return true;
+    }
+
+    /// Build the polynomial from key-form terms (atom-free, inline exponents).
+    static MPoly fromKeyed(int ns, const KeyedTerm *t, std::size_t n)
+    {
+      MPoly p(ns);
+      p.terms.resize(n);
+      for (std::size_t k = 0; k < n; ++k) {
+        p.terms[k].first.e.packed = {t[k].p0, t[k].p1};
+        p.terms[k].second = t[k].c;
+      }
+      return p;
+    }
+
     /// Keyed product for atom-free operands (see @ref operator*); `nullopt` on a field carry.
     [[gnu::noinline]] static std::optional<MPoly> mulKeyedAtomFree(const MPoly &a, const MPoly &b)
     {
@@ -445,6 +513,11 @@ namespace numtracer::numeric
       }
       return p;
     }
+
+    /// `x0·y0 + x1·y1`, bit-identical to evaluating it with @ref operator* and @ref operator+, for
+    /// the Dirac fold's 2×2 block products. With atom-free operands the two products stay in key form
+    /// and are merged there, so only the final terms are built as Monos.
+    [[gnu::noinline]] static MPoly mulAdd(const MPoly &x0, const MPoly &y0, const MPoly &x1, const MPoly &y1);
 
     /// Keyed product for operands that carry atoms: the distinct merged atom lists are built once and
     /// ranked in MonoAtoms order, and the key is (packed exponent sum, atom rank), which compares exactly
@@ -652,6 +725,10 @@ namespace numtracer::numeric
     static MPoly scaled(int ns, const MPoly &p, Cx c) { return MPoly::scaled(ns, p, c); }
     static MPoly atom(int ns, int aid) { return MPoly::atom(ns, aid); }
     static MPoly from_scratch(int ns, MPolyScratch s) { return MPoly::from_scratch(ns, std::move(s)); }
+    static MPoly mul_add(const MPoly &x0, const MPoly &y0, const MPoly &x1, const MPoly &y1)
+    {
+      return MPoly::mulAdd(x0, y0, x1, y1);
+    }
   };
 
   inline MPoly operator+(const MPoly &a, const MPoly &b)
@@ -868,6 +945,48 @@ namespace numtracer::numeric
       acc = acc.terms.empty() ? std::move(part) : acc + part;
     }
     return acc;
+  }
+
+  inline MPoly MPoly::mulAdd(const MPoly &x0, const MPoly &y0, const MPoly &x1, const MPoly &y1)
+  {
+    // Only a sum of two non-trivial products gains: an empty or constant factor already has a
+    // scratch-free path in operator*, and operator+ moves an empty side.
+    auto keyable = [](const MPoly &x, const MPoly &y) {
+      auto trivial = [](const MPoly &p) {
+        if (p.terms.size() > 1) return false;
+        if (p.terms.empty()) return true;
+        const Mono &m = p.terms[0].first;
+        return !m.e.overflow && m.e.packed[0] == 0 && m.e.packed[1] == 0 && m.atoms.empty();
+      };
+      return !trivial(x) && !trivial(y) && x.terms.size() * y.terms.size() <= kMulMaxScratch &&
+             atomFreeInline(x) && atomFreeInline(y);
+    };
+    KeyedTerms t0, t1;
+    if (!(keyable(x0, y0) && keyable(x1, y1) && keyedAtomFreeTerms(x0, y0, t0) && keyedAtomFreeTerms(x1, y1, t1)))
+      return x0 * y0 + x1 * y1;
+    const int ns = x0.nsym ? x0.nsym : (y0.nsym ? y0.nsym : (x1.nsym ? x1.nsym : y1.nsym));
+    if (t0.empty()) return fromKeyed(ns, t1.data(), t1.size());
+    if (t1.empty()) return fromKeyed(ns, t0.data(), t0.size());
+    NT_STAT_ADD(add_calls, 1);
+    KeyedTerms m; // operator+'s merge, in key form
+    m.reserve(t0.size() + t1.size());
+    std::size_t i = 0, j = 0;
+    while (i < t0.size() && j < t1.size()) {
+      const KeyedTerm &u = t0[i], &v = t1[j];
+      if (u.p0 != v.p0 ? u.p0 < v.p0 : u.p1 < v.p1)
+        m.push_back(t0[i++]);
+      else if (v.p0 != u.p0 ? v.p0 < u.p0 : v.p1 < u.p1)
+        m.push_back(t1[j++]);
+      else {
+        const Cx s = u.c + v.c;
+        if (!(s.re == 0 && s.im == 0)) m.push_back({u.p0, u.p1, s});
+        ++i;
+        ++j;
+      }
+    }
+    while (i < t0.size()) m.push_back(t0[i++]);
+    while (j < t1.size()) m.push_back(t1[j++]);
+    return fromKeyed(ns, m.data(), m.size());
   }
 
   /// @brief Cancel each numerator monomial against any atom whose denominator is a single monomial.
