@@ -73,11 +73,10 @@ namespace numtracer::numeric
   /// @brief Run `f(i)` for `i` in `[0, n)` across `W` threads, dispatched off one flat atomic counter.
   ///        Work-stealing rather than a static split: even a uniform work list has a long tail, and
   ///        this is also what lets phase A ignore the per-net skew entirely. Falls back to fewer
-  ///        threads (down to the caller's own) if the system refuses to spawn them. Returns the
-  ///        REQUESTED worker count `min(W, n)`, even when fewer threads could be spawned.
-  template <class F> unsigned parallel_flat(long n, unsigned W, F &&f)
+  ///        threads (down to the caller's own) if the system refuses to spawn them.
+  template <class F> void parallel_flat(long n, unsigned W, F &&f)
   {
-    if (n <= 0) return 0u;
+    if (n <= 0) return;
     const unsigned nw = static_cast<unsigned>(std::min<long>(std::max(1u, W), n));
     std::atomic<long> next{0};
     auto work = [&] {
@@ -96,7 +95,6 @@ namespace numtracer::numeric
     work();
     for (auto &t : pool)
       t.join();
-    return nw;
   }
 
 #if NT_PHASEA_STATS

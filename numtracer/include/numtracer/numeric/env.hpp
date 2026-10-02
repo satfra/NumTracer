@@ -4,11 +4,12 @@
 ///        @ref MPoly / @ref DPoly.
 ///
 /// Every polynomial fed into one trace must share an `nsym` (the length of each monomial's exponent
-/// vector). `LorentzEnv` captures `nsym` once so a wrong value is unconstructible at the API surface: `env.var(i)`, `env.constant(c)`,
-/// `env.numeric_value_netval(...)` all bake in the env's `nsym`. It is a construction-time factory only
-/// — the polynomials it mints still carry a bare inline `int nsym`, so the arithmetic hot path is
-/// unchanged (no env pointer is stored per object). It is a `friend` of @ref MPoly / @ref DPoly, so it
-/// reaches their (private) `nsym`-taking factories directly.
+/// vector). `LorentzEnv` captures `nsym` once so a wrong value is unconstructible at the API surface:
+/// `env.var(i)`, `env.constant(c)`, `env.numeric_value_netval(...)` all bake in the env's `nsym`. It
+/// is a construction-time factory only — the polynomials it mints still carry a bare inline
+/// `int nsym`, so the arithmetic hot path is unchanged (no env pointer is stored per object). It is a
+/// `friend` of @ref MPoly / @ref DPoly, so it reaches their (private) `nsym`-taking factories
+/// directly.
 ///
 /// The colour/flavour analogue is @ref numtracer::network::SUNEnv (binds the group rank), in
 /// `network/sun_net.hpp`.

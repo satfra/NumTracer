@@ -30,13 +30,11 @@
 
 #include <algorithm>
 #include <cassert>
-#include <cstdint>
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <memory>
 #include <cstdlib>
-#include <limits>
 #include <stdexcept>
 #include <string> // the open-index guard's diagnostic (assert_no_open_ids)
 #include <vector>
@@ -197,6 +195,9 @@ namespace numtracer::numeric
   ///        For each assignment of the free legs to concrete indices 0..3, build the slashed/free
   ///        γ chain as 4×4 @ref MPoly matrices and take the trace. Returns the free-leg ids and the
   ///        row-major tensor of trace polynomials (one entry per `4^f` assignment).
+  ///
+  /// @p chain is ONE closed loop (no `LoopSep`; @ref ndetail::dirac_loop_factors splits first): the
+  /// walk may start anywhere in it because the trace is cyclic.
 #if NUMTRACER_DEFINE_BODIES
   NUMTRACER_FUNC ndetail::Factor numeric_dirac(int nsym, const network::DiracNet &chainIn,
                                                const std::vector<std::array<MPoly, 4>> &comp)
@@ -937,9 +938,10 @@ namespace numtracer::numeric
     inline MPoly close_free_legs(int nsym, const Factor &T, const std::vector<MPoly> &atomDen = {},
                                  const std::vector<std::vector<int>> &units = {})
     {
-      if (T.ids.empty()) return T.entries.empty() ? MPolyFactory::constant(nsym, Cx{1, 0}) : T.entries[0];
+      const std::vector<MPoly> &entries = T.data();
+      if (T.ids.empty()) return entries.empty() ? MPolyFactory::constant(nsym, Cx{1, 0}) : entries[0];
       bool allZero = true;
-      for (const MPoly &v : T.entries)
+      for (const MPoly &v : entries)
         if (!v.empty()) {
           allZero = false;
           break;
@@ -1695,9 +1697,9 @@ namespace numtracer::numeric
   /// @brief Round @p v to @ref kCoeffSnapDigits significant decimal digits.
   ///
   /// Applied at the single point where a polynomial coefficient becomes a codegen `LMono::c` — i.e.
-  /// AFTER all polynomial arithmetic and after the noise-prune above — so it cannot perturb a
-  /// cancellation, only canonicalise what survived. Perturbation is ~1e-12 relative, three orders
-  /// below the numeric-vs-FORM correctness gate.
+  /// AFTER all polynomial arithmetic and after the noise prune (`ndetail::prune_tol`) — so it cannot
+  /// perturb a cancellation, only canonicalise what survived. Perturbation is ~1e-12 relative, three
+  /// orders below the numeric-vs-FORM correctness gate.
   ///
   /// It is also the chokepoint where a NON-FINITE coefficient is caught. Nothing downstream stops one:
   /// `RBuilder::ieq` (`codegen/real_cse.hpp`) compares constants with `==`, so a NaN never matches

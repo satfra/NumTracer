@@ -1,7 +1,7 @@
 #!/usr/bin/env wolframscript
 (* dressedNumDecompose must split a propagator numerator over its TENSOR structure only.
    (a) finite-T psdash shape: Zq-dressed γ_μ (q_μ − c e0_μ) — the γ sum must become separate slash
-       options, or the whole numerator stops being collectible (the reason for the Expand, 5c842c4);
+       options, or the whole numerator stops being collectible (the reason for the Expand);
    (b) a composite scalar dressing −(Zq[q] + Zq[k] RF/|q|) must stay ONE option coefficient. Expanding
        it splits every atom into its own dressing slot (za4_147 kernel 3.1 MB → 14.9 MB).
    Synthetic input, no FunKit needed. *)

@@ -131,8 +131,8 @@ namespace numtracer::network
       auto want = [&] { return orders.size() < maxOrders; };
       if (want()) orders.push_back(monos); // as-built (canonical)
       if (want()) orders.push_back(sortedBy([&](std::uint32_t x, std::uint32_t y) { return vp(x) < vp(y); }));
-      if (want()) {
-        auto v = sortedBy([&](std::uint32_t x, std::uint32_t y) { return vp(x) < vp(y); });
+      if (want()) { // the ascending order just built, reversed
+        auto v = orders.back();
         std::reverse(v.begin(), v.end());
         orders.push_back(std::move(v));
       }
@@ -477,9 +477,9 @@ namespace numtracer::network
                                                                                // NOT the very
                                                                                // aggressive 0 below
           // "off" / any negative value disables the gate outright (all-inline emission). It needs
-          // its own spelling because the natural guess, 0, means the OPPOSITE here: the test is `nInstr > N`, so 0 out-of-lines everything.
-          // Anything unparsable reads as "off" too: silently treating a typo as 0 would
-          // out-of-line every device function in the kernel.
+          // its own spelling because the natural guess, 0, means the OPPOSITE here: the test is
+          // `nInstr > N`, so 0 out-of-lines everything. Anything unparsable reads as "off" too:
+          // silently treating a typo as 0 would out-of-line every device function in the kernel.
           if (std::strcmp(e, "off") == 0) return SIZE_MAX;
           const long v = env_int("NT_GEN_NOINLINE_MIN", -1);
           return v < 0 ? SIZE_MAX : static_cast<std::size_t>(v);

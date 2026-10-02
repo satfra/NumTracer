@@ -2,9 +2,10 @@
 /// @brief Open-addressed interning index: maps a key to its position in a caller-owned vector.
 ///
 /// Used by @ref numtracer::network::GlobalEnv (`codegen/gen.hpp`, the shared `f[]` symbol table) and
-/// @ref numtracer::network::rdetail::RBuilder (`codegen/real_cse.hpp`, value numbering of the real SSA). Both own the key
-/// vector themselves, because the rest of the engine reads it directly (`syms`, `ins`); this index
-/// only adds the hash lookup on top.
+/// @ref numtracer::network::rdetail::RBuilder (`codegen/real_cse.hpp`, value numbering of the real
+/// SSA). Both own the key vector themselves, because the rest of the engine reads it directly
+/// (`syms`, `ins`); this index only adds the hash lookup on top. Keys must therefore be appended
+/// only through @ref InternTable::intern, or the index goes stale.
 ///
 /// Ids are positions in that vector, so they are assigned in first-seen order and do not depend on
 /// the hash at all.

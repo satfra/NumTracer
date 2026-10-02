@@ -86,7 +86,8 @@ using SUNNet = std::vector<SUNFac>;
 /// @brief One monomial of a dressed SU(N) value: a constant times a product of named dressing symbols.
 ///
 /// `dress` is a sorted list of dressing-ids — each names one runtime dressing `D^{dr}` (a
-/// `DiagFund`/`DiagAdj` component that survived the fold). A repeated id is a power. An empty `dress` is a plain constant.
+/// `DiagFund`/`DiagAdj` component that survived the fold). A repeated id is a power. An empty
+/// `dress` is a plain constant.
 /// The codegen maps each id to a scalar dressing symbol and emits the standard `name(scale)` token.
 struct SUNTerm {
   Cx coeff{1.0, 0.0};
@@ -145,8 +146,8 @@ namespace sun_net_detail {
 /// @brief A runtime-sized N×N complex matrix (row-major) for the cold generator path.
 ///
 /// The typed-out tables (`sun/sun_data.hpp`) use the stack-allocated, compile-time-sized
-/// @ref numtracer::Mat; here `N` is a runtime value, so a heap-backed dynamic matrix is used instead. Generator-only, so the heap
-/// allocation and lack of unrolling are irrelevant.
+/// @ref numtracer::Mat; here `N` is a runtime value, so a heap-backed dynamic matrix is used instead.
+/// Generator-only, so the heap allocation and lack of unrolling are irrelevant.
 struct DynMat {
   int n = 0;                                  ///< Dimension `N`.
   std::vector<std::complex<double>> data;     ///< Row-major element storage (`n*n`).
@@ -268,8 +269,8 @@ inline SUNDyn build_oracle(int N) {
 /// @brief The SU(N) data for rank `N`, built once and cached.
 ///
 /// Tabulated ranks (`N ∈ {2,3}`) are seeded byte-identically from the typed-out tables; any other
-/// `N` is built from the generalized-Gell-Mann oracle. Thread-safe (current callers are serial, but
-/// nothing here requires it): `std::map` node addresses are stable across inserts and a built @ref SUNDyn is never
+/// `N` is built from the generalized-Gell-Mann oracle. Thread-safe, although current callers are
+/// serial: `std::map` node addresses are stable across inserts and a built @ref SUNDyn is never
 /// mutated, so the returned reference stays valid for concurrent read-only use.
 inline const SUNDyn &sun_data_for(int N) {
   static std::mutex cacheMutex;

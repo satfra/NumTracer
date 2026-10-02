@@ -62,7 +62,10 @@ namespace numtracer::network
   /// @brief A single-factor network (one product term, coefficient 1).
   inline NetVal leaf(Elem el) { return {PTerm{Cx{1, 0}, {el}}}; }
   /// @brief A vector leg `vid` on Lorentz index `Lbl`.
-  inline NetVal vec(int Lbl, int Vid) { return leaf({.kind = Elem::Vector, .a = Lbl, .b = -1, .vid = -1, .inv = -1, .vlc = {{1.0, Vid}}}); }
+  inline NetVal vec(int Lbl, int Vid)
+  {
+    return leaf({.kind = Elem::Vector, .a = Lbl, .b = -1, .vid = -1, .inv = -1, .vlc = {{1.0, Vid}}});
+  }
   /// @brief A metric `δ_{Mu Nu}`.
   inline NetVal met(int Mu, int Nu) { return leaf({.kind = Elem::Metric, .a = Mu, .b = Nu, .vid = -1, .inv = -1}); }
   /// @brief A transverse projector `P_T(l)_{Mu Nu} = δ − l_Mu l_Nu/l²`, `l` = vector `Lvid`,

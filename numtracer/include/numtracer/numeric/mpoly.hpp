@@ -41,6 +41,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 #include <vector>
 #include <map>
@@ -372,6 +373,15 @@ namespace numtracer::numeric
       return true;
     }
 
+    /// True for a single constant term (inline all-zero exponents, no atoms): a factor that leaves
+    /// every monomial of the other factor unchanged.
+    static bool isConstant(const MPoly &p)
+    {
+      if (p.terms.size() != 1) return false;
+      const Mono &m = p.terms[0].first;
+      return !m.e.overflow && m.e.packed[0] == 0 && m.e.packed[1] == 0 && m.atoms.empty();
+    }
+
     /// One term of an atom-free product in key form: packed exponents and coefficient.
     struct KeyedTerm {
       std::uint64_t p0, p1;
@@ -379,18 +389,20 @@ namespace numtracer::numeric
     };
     using KeyedTerms = gch::small_vector<KeyedTerm, 16>;
 
-    /// The product `a·b` of atom-free, inline-exponent operands as sorted, like-terms-combined
-    /// @ref KeyedTerm s — exactly the terms @ref operator* returns, without building any Mono.
+    /// Sort key of one product term: its packed exponent sum and its index into the coefficients.
+    struct AtomFreeKey {
+      std::uint64_t p0, p1;
+      std::uint32_t idx;
+    };
+    using AtomFreeKeys = gch::small_vector<AtomFreeKey, 16>;
+    using ProductCoeffs = gch::small_vector<Cx, 16>;
+
+    /// The `|a|·|b|` product terms of atom-free, inline-exponent operands as keys sorted by packed
+    /// exponent (the order @ref from_scratch would put them in) plus coefficients in emission order.
     /// Returns false on a field carry (an exponent > 31), which needs the heap representation.
-    static bool keyedAtomFreeTerms(const MPoly &a, const MPoly &b, KeyedTerms &out)
+    static bool atomFreeProductKeys(const MPoly &a, const MPoly &b, AtomFreeKeys &keys, ProductCoeffs &coeff)
     {
       const std::size_t na = a.terms.size(), nb = b.terms.size();
-      struct Key {
-        std::uint64_t p0, p1;
-        std::uint32_t idx;
-      };
-      gch::small_vector<Key, 16> keys;
-      gch::small_vector<Cx, 16> coeff;
       keys.reserve(na * nb);
       coeff.reserve(na * nb);
       bool carry = false;
@@ -408,14 +420,27 @@ namespace numtracer::numeric
         if (carry) return false;
       }
       NT_STAT_ADD(mul_keyed, 1);
-      auto less = [](const Key &x, const Key &y) { return x.p0 != y.p0 ? x.p0 < y.p0 : x.p1 < y.p1; };
+      auto less = [](const AtomFreeKey &x, const AtomFreeKey &y) {
+        return x.p0 != y.p0 ? x.p0 < y.p0 : x.p1 < y.p1;
+      };
       bool sorted = true;
       for (std::size_t k = 1; sorted && k < keys.size(); ++k)
         sorted = less(keys[k - 1], keys[k]);
       if (!sorted) std::sort(keys.begin(), keys.end(), less);
+      return true;
+    }
+
+    /// The product `a·b` of atom-free, inline-exponent operands as sorted, like-terms-combined
+    /// @ref KeyedTerm s — exactly the terms @ref operator* returns, without building any Mono.
+    /// Returns false on a field carry.
+    static bool keyedAtomFreeTerms(const MPoly &a, const MPoly &b, KeyedTerms &out)
+    {
+      AtomFreeKeys keys;
+      ProductCoeffs coeff;
+      if (!atomFreeProductKeys(a, b, keys, coeff)) return false;
       out.clear();
       out.reserve(keys.size());
-      for (const Key &k : keys) {
+      for (const AtomFreeKey &k : keys) {
         const Cx c = coeff[k.idx];
         if (c.re == 0 && c.im == 0) continue;
         if (!out.empty() && out.back().p0 == k.p0 && out.back().p1 == k.p1) {
@@ -443,39 +468,13 @@ namespace numtracer::numeric
     /// Keyed product for atom-free operands (see @ref operator*); `nullopt` on a field carry.
     [[gnu::noinline]] static std::optional<MPoly> mulKeyedAtomFree(const MPoly &a, const MPoly &b)
     {
-      const std::size_t na = a.terms.size(), nb = b.terms.size();
-      struct Key {
-        std::uint64_t p0, p1;
-        std::uint32_t idx;
-      };
-      gch::small_vector<Key, 16> keys;
-      gch::small_vector<Cx, 16> coeff;
-      keys.reserve(na * nb);
-      coeff.reserve(na * nb);
-      bool carry = false;
-      for (const auto &[ma, ca] : a.terms) {
-        for (const auto &[mb, cb] : b.terms) {
-          std::uint64_t sum[2];
-          for (int word = 0; word < 2; ++word) {
-            const std::uint64_t wa = ma.e.packed[word], wb = mb.e.packed[word];
-            sum[word] = wa + wb;
-            carry |= (((wa & wb) | ((wa | wb) & ~sum[word])) & MonoExp::kFieldTop) != 0;
-          }
-          keys.push_back({sum[0], sum[1], static_cast<std::uint32_t>(keys.size())});
-          coeff.push_back(ca * cb);
-        }
-        if (carry) return std::nullopt;
-      }
-      NT_STAT_ADD(mul_keyed, 1);
-      auto less = [](const Key &x, const Key &y) { return x.p0 != y.p0 ? x.p0 < y.p0 : x.p1 < y.p1; };
-      bool sorted = true;
-      for (std::size_t k = 1; sorted && k < keys.size(); ++k)
-        sorted = less(keys[k - 1], keys[k]);
-      if (!sorted) std::sort(keys.begin(), keys.end(), less);
+      AtomFreeKeys keys;
+      ProductCoeffs coeff;
+      if (!atomFreeProductKeys(a, b, keys, coeff)) return std::nullopt;
       MPoly p(a.nsym);
       p.terms.reserve(keys.size());
       std::uint64_t back0 = 0, back1 = 0;
-      for (const Key &k : keys) {
+      for (const AtomFreeKey &k : keys) {
         const Cx c = coeff[k.idx];
         if (c.re == 0 && c.im == 0) continue;
         if (!p.terms.empty() && back0 == k.p0 && back1 == k.p1) {
@@ -847,12 +846,7 @@ namespace numtracer::numeric
     // monomial of the other factor unchanged, so the product is already sorted and distinct: copy the
     // terms, multiply the coefficients in the general path's operand order (ca·cb), and drop exact-zero
     // products as from_scratch would. Bit-identical to the scratch path, without the scratch.
-    auto isConstant = [](const MPoly &p) {
-      if (p.terms.size() != 1) return false;
-      const Mono &m = p.terms[0].first;
-      return !m.e.overflow && m.e.packed[0] == 0 && m.e.packed[1] == 0 && m.atoms.empty();
-    };
-    if (nb == 1 && isConstant(b)) {
+    if (nb == 1 && MPoly::isConstant(b)) {
       NT_STAT_ADD(mul_const, 1);
       MPoly r(ns);
       r.terms.reserve(na);
@@ -863,7 +857,7 @@ namespace numtracer::numeric
       }
       return r;
     }
-    if (na == 1 && isConstant(a)) {
+    if (na == 1 && MPoly::isConstant(a)) {
       NT_STAT_ADD(mul_const, 1);
       MPoly r(ns);
       r.terms.reserve(nb);
@@ -881,13 +875,14 @@ namespace numtracer::numeric
     // path's order and compared exactly as from_scratch compares atom-free inline monomials, so the
     // sort permutation and every like-term sum are identical. A field carry (an exponent > 31) needs
     // the heap representation and falls back to the scratch path below.
-    if (na * nb <= kMulMaxScratch && MPoly::atomFreeInline(a) && MPoly::atomFreeInline(b)) {
-      if (auto r = MPoly::mulKeyedAtomFree(a, b)) return std::move(*r);
-    }
-    // Operands carrying atoms: the same keyed product, with the atom multiset ranked (see mulKeyed).
-    // Its setup only pays off on larger products; small ones stay on the scratch path.
-    if (na * nb >= kMulKeyedMin && na * nb <= kMulMaxScratch) {
-      if (auto r = MPoly::mulKeyed(a, b)) return std::move(*r);
+    // Operands carrying atoms take the same keyed product with the atom multiset ranked (see
+    // mulKeyed); its setup only pays off on larger products, so small ones stay on the scratch path.
+    if (na * nb <= kMulMaxScratch) {
+      if (MPoly::atomFreeInline(a) && MPoly::atomFreeInline(b)) {
+        if (auto r = MPoly::mulKeyedAtomFree(a, b)) return std::move(*r);
+      } else if (na * nb >= kMulKeyedMin) {
+        if (auto r = MPoly::mulKeyed(a, b)) return std::move(*r);
+      }
     }
 
     if (na * nb <= kMulMaxScratch) { // unblocked path — the common case
@@ -922,12 +917,7 @@ namespace numtracer::numeric
     // Only a sum of two non-trivial products gains: an empty or constant factor already has a
     // scratch-free path in operator*, and operator+ moves an empty side.
     auto keyable = [](const MPoly &x, const MPoly &y) {
-      auto trivial = [](const MPoly &p) {
-        if (p.terms.size() > 1) return false;
-        if (p.terms.empty()) return true;
-        const Mono &m = p.terms[0].first;
-        return !m.e.overflow && m.e.packed[0] == 0 && m.e.packed[1] == 0 && m.atoms.empty();
-      };
+      auto trivial = [](const MPoly &p) { return p.terms.empty() || isConstant(p); };
       return !trivial(x) && !trivial(y) && x.terms.size() * y.terms.size() <= kMulMaxScratch &&
              atomFreeInline(x) && atomFreeInline(y);
     };
@@ -1055,8 +1045,8 @@ namespace numtracer::numeric
   /// atoms, so a work item is its packed exponents plus the index of the source term whose atoms it
   /// carries, and a Mono is built only per output term. Pushes, pops, the output emission order, the
   /// sort comparator and the like-term sums are exactly those of the generic rebuild, so the result is
-  /// bit-identical. Returns false (and leaves `r` unspecified) when an exponent would leave the inline
-  /// range; the caller then runs the generic rebuild.
+  /// bit-identical. Returns false (with `r` untouched: it is written only on success) when an exponent
+  /// would leave the inline range; the caller then runs the generic rebuild from scratch.
   inline bool reduceUnitsRebuildKeyed(const MPoly &p, const std::vector<std::vector<int>> &groups, MPoly &r)
   {
     for (const auto &g : groups)

@@ -9,9 +9,10 @@
 /// grades `numeric_dirac` against. It refuses every token kind it cannot trace.
 ///
 /// A chain is a list of trace-ordered tokens (already cyclically closed by the front-end's
-/// `orderDiracFacs`, mathematica/CodegenNets.m): each is either a FREE gluon leg `γ^μ` (an open Lorentz id `mu`, contracts the
-/// projector later), a SLASHED propagator `γ·p` (the momentum `p = Σ coeff·fund(vid)` as a `vlc`,
-/// mirroring @ref Elem's vector linear combination), or a γ5 marker.
+/// `orderDiracFacs`, mathematica/CodegenNets.m): each is either a FREE gluon leg `γ^μ` (an open
+/// Lorentz id `mu`, contracts the projector later), a SLASHED propagator `γ·p` (the momentum
+/// `p = Σ coeff·fund(vid)` as a `vlc`, mirroring @ref Elem's vector linear combination), or a γ5
+/// marker.
 ///
 /// The trace is the standard Wick pairing recursion
 ///   tr(t1 … t_{2n}) = Σ_{j≥2} (−1)^j  g(t1,t_j)  tr(t1 … t̂_j … t_{2n}),
