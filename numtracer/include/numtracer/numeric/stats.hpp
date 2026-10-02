@@ -34,6 +34,7 @@ namespace numtracer::numeric::stats
     nt_u64 mul_empty = 0;      ///< operator* short-circuits (an operand was the zero poly)
     nt_u64 mul_prod_terms = 0; ///< Σ |a|·|b| product monomials emitted into scratch
     nt_u64 mul_blocked = 0;    ///< operator* calls that took the chunked (>kMulMaxScratch) path
+    nt_u64 mul_keyed = 0;      ///< operator* calls on atom-free inline operands (key-only scratch)
     nt_u64 mul_const = 0;      ///< operator* calls with a single-constant factor (no scratch, no sort)
     nt_u64 add_calls = 0;      ///< operator+ invocations with both sides non-empty
     nt_u64 add_empty = 0;      ///< operator+ short-circuits that COPY the surviving side (lvalue)

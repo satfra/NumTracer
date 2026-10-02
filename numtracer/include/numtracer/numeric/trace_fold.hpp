@@ -157,8 +157,8 @@ namespace numtracer::numeric
                  ts * m.t_cf_score, pct(m.t_cf_score), ts * m.t_cf_reduce, pct(m.t_cf_reduce),
                  ts * (m.t_contract - std::min(m.t_contract, m.t_cf_score + m.t_cf_reduce)),
                  pct(m.t_contract - std::min(m.t_contract, m.t_cf_score + m.t_cf_reduce)), (unsigned long long)m.cf_steps);
-    std::fprintf(stderr, "[stats] mpoly: mul %llu (empty %llu, const %llu, blocked %llu, prod-terms %llu)  add %llu (empty-copied %llu, empty-moved %llu)  from_scratch %llu (terms-in %llu)\n",
-                 (unsigned long long)m.mul_calls, (unsigned long long)m.mul_empty, (unsigned long long)m.mul_const,
+    std::fprintf(stderr, "[stats] mpoly: mul %llu (empty %llu, const %llu, keyed %llu, blocked %llu, prod-terms %llu)  add %llu (empty-copied %llu, empty-moved %llu)  from_scratch %llu (terms-in %llu)\n",
+                 (unsigned long long)m.mul_calls, (unsigned long long)m.mul_empty, (unsigned long long)m.mul_const, (unsigned long long)m.mul_keyed,
                  (unsigned long long)m.mul_blocked,
                  (unsigned long long)m.mul_prod_terms, (unsigned long long)m.add_calls, (unsigned long long)m.add_empty,
                  (unsigned long long)m.add_moved, (unsigned long long)m.fs_calls, (unsigned long long)m.fs_terms_in);

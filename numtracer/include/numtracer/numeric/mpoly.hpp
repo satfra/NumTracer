@@ -377,6 +377,15 @@ namespace numtracer::numeric
       return p;
     }
 
+    /// True when no term carries inverse atoms or heap-stored exponents — the case @ref operator*
+    /// handles with packed keys alone.
+    static bool atomFreeInline(const MPoly &p)
+    {
+      for (const auto &kv : p.terms)
+        if (kv.first.e.overflow || !kv.first.atoms.empty()) return false;
+      return true;
+    }
+
     static MPoly constant(int ns, Cx c)
     {
       MPoly p(ns);
@@ -642,6 +651,70 @@ namespace numtracer::numeric
         if (!(c.re == 0 && c.im == 0)) r.terms.push_back({mb, c});
       }
       return r;
+    }
+
+    // Atom-free, inline-exponent operands (the Dirac fold and most contraction steps): a product
+    // monomial is fully described by its packed exponent sum, so emit 24-byte keys plus a coefficient
+    // array and build a Mono only for each surviving output term. The keys are emitted in the scratch
+    // path's order and compared exactly as from_scratch compares atom-free inline monomials, so the
+    // sort permutation and every like-term sum are identical. A field carry (an exponent > 31) needs
+    // the heap representation and falls back to the scratch path below.
+    if (na * nb <= kMulMaxScratch && MPoly::atomFreeInline(a) && MPoly::atomFreeInline(b)) {
+      struct Key {
+        std::uint64_t p0, p1;
+        std::uint32_t idx;
+      };
+      gch::small_vector<Key, 16> keys;
+      gch::small_vector<Cx, 16> coeff;
+      keys.reserve(na * nb);
+      coeff.reserve(na * nb);
+      bool carry = false;
+      for (const auto &[ma, ca] : a.terms) {
+        for (const auto &[mb, cb] : b.terms) {
+          std::uint64_t sum[2];
+          for (int word = 0; word < 2; ++word) {
+            const std::uint64_t wa = ma.e.packed[word], wb = mb.e.packed[word];
+            sum[word] = wa + wb;
+            carry |= (((wa & wb) | ((wa | wb) & ~sum[word])) & MonoExp::kFieldTop) != 0;
+          }
+          keys.push_back({sum[0], sum[1], static_cast<std::uint32_t>(keys.size())});
+          coeff.push_back(ca * cb);
+        }
+        if (carry) break;
+      }
+      if (!carry) {
+        NT_STAT_ADD(mul_keyed, 1);
+        auto less = [](const Key &x, const Key &y) { return x.p0 != y.p0 ? x.p0 < y.p0 : x.p1 < y.p1; };
+        bool sorted = true;
+        for (std::size_t k = 1; sorted && k < keys.size(); ++k)
+          sorted = less(keys[k - 1], keys[k]);
+        if (!sorted) std::sort(keys.begin(), keys.end(), less);
+        MPoly p(ns);
+        p.terms.reserve(keys.size());
+        std::uint64_t back0 = 0, back1 = 0;
+        for (const Key &k : keys) {
+          const Cx c = coeff[k.idx];
+          if (c.re == 0 && c.im == 0) continue;
+          if (!p.terms.empty() && back0 == k.p0 && back1 == k.p1) {
+            Cx &acc = p.terms.back().second;
+            acc = acc + c;
+            if (acc.re == 0 && acc.im == 0) {
+              p.terms.pop_back();
+              if (!p.terms.empty()) {
+                back0 = p.terms.back().first.e.packed[0];
+                back1 = p.terms.back().first.e.packed[1];
+              }
+            }
+          } else {
+            p.terms.emplace_back();
+            p.terms.back().first.e.packed = {k.p0, k.p1};
+            p.terms.back().second = c;
+            back0 = k.p0;
+            back1 = k.p1;
+          }
+        }
+        return p;
+      }
     }
 
     if (na * nb <= kMulMaxScratch) { // exact byte-for-byte path — the common case
