@@ -1345,7 +1345,7 @@ namespace numtracer::numeric
     // intermediate reductions used, or a numerator reduced mod ΣU²=1 will not divide by an unreduced D.
     if (!polydiv_enabled()) return result;
     NT_STAT_TIMER(t_divpoly);
-    return divThroughPolyAtoms(result, aden);
+    return divThroughPolyAtoms(std::move(result), aden);
   }
 #endif // NUMTRACER_DEFINE_BODIES
 

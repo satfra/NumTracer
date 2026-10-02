@@ -50,6 +50,7 @@ namespace numtracer::numeric::stats
     nt_u64 dpa_calls = 0;      ///< divThroughPolyAtoms invocations
     nt_u64 dpa_trials = 0;     ///< trial divisions attempted (each pays a Grp map copy today)
     nt_u64 dpa_exact = 0;      ///< trial divisions that were exact
+    nt_u64 dpa_noop = 0;       ///< divThroughPolyAtoms pass-throughs (no multi-term atom present)
     // Dirac fold (numeric_contract.hpp)
     nt_u64 nd_calls = 0;       ///< numeric_dirac invocations (spinor loops)
     nt_u64 nd_tokens = 0;      ///< Σ chain tokens

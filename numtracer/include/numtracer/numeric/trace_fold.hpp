@@ -162,9 +162,9 @@ namespace numtracer::numeric
                  (unsigned long long)m.mul_blocked,
                  (unsigned long long)m.mul_prod_terms, (unsigned long long)m.add_calls, (unsigned long long)m.add_empty,
                  (unsigned long long)m.add_moved, (unsigned long long)m.fs_calls, (unsigned long long)m.fs_terms_in);
-    std::fprintf(stderr, "[stats] reduce_units %llu calls (noop %llu) / %llu work-items  divmono %llu (noop %llu)  divpoly %llu (prefiltered %llu, trials %llu, exact %llu)\n",
+    std::fprintf(stderr, "[stats] reduce_units %llu calls (noop %llu) / %llu work-items  divmono %llu (noop %llu)  divpoly %llu (noop %llu, prefiltered %llu, trials %llu, exact %llu)\n",
                  (unsigned long long)m.ru_calls, (unsigned long long)m.ru_noop, (unsigned long long)m.ru_work,
-                 (unsigned long long)m.dma_calls, (unsigned long long)m.dma_noop, (unsigned long long)m.dpa_calls,
+                 (unsigned long long)m.dma_calls, (unsigned long long)m.dma_noop, (unsigned long long)m.dpa_calls, (unsigned long long)m.dpa_noop,
                  (unsigned long long)m.dpa_pref, (unsigned long long)m.dpa_trials, (unsigned long long)m.dpa_exact);
     std::fprintf(stderr, "[stats] dirac: loops %llu (odd-skip %llu)  tokens %llu  4^f assignments %llu  mul2 %llu\n",
                  (unsigned long long)m.nd_calls, (unsigned long long)m.nd_odd_skip, (unsigned long long)m.nd_tokens,

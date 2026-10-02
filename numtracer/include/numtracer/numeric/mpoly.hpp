@@ -1290,6 +1290,31 @@ namespace numtracer::numeric
   /// independent of that header.
   inline constexpr double kPolyDivRelTol = 1e-9;
 
+  /// The @ref divThroughPolyAtoms pass-through test: no term carries an atom whose denominator is
+  /// multi-term with an atom-free leading term, so no trial division can run. The full pass then only
+  /// regroups and re-sorts the (already canonical) terms and rebuilds each coefficient as `0 + c`.
+  inline bool dpaIsNoop(const MPoly &p, const std::vector<MPoly> &atomDen)
+  {
+    for (const auto &kv : p.terms)
+      for (const auto aid : kv.first.atoms)
+        if (aid >= 0 && aid < (int)atomDen.size()) {
+          const MPoly &D = atomDen[(std::size_t)aid];
+          if (D.terms.size() >= 2 && D.terms.back().first.atoms.empty()) return false;
+        }
+    return true;
+  }
+
+  /// Rvalue overload: on a pass-through, normalise the coefficients in place (`0 + c` turns a −0.0
+  /// component into +0.0, exactly as the full pass does) instead of regrouping and re-sorting.
+  inline MPoly divThroughPolyAtoms(MPoly &&p, const std::vector<MPoly> &atomDen)
+  {
+    if (!dpaIsNoop(p, atomDen)) return divThroughPolyAtoms(static_cast<const MPoly &>(p), atomDen);
+    NT_STAT_ADD(dpa_calls, 1);
+    NT_STAT_ADD(dpa_noop, 1);
+    for (auto &kv : p.terms) kv.second = Cx{0, 0} + kv.second;
+    return std::move(p);
+  }
+
   inline MPoly divThroughPolyAtoms(const MPoly &p, const std::vector<MPoly> &atomDen)
   {
     NT_STAT_ADD(dpa_calls, 1);
@@ -1299,8 +1324,8 @@ namespace numtracer::numeric
     // user symbols (`AtomGroup`), keyed by its exponent vector.
     using AtomGroup = std::map<MonoExp, Cx>;
     std::map<MonoAtoms, AtomGroup> byAtoms;
-    for (const auto &[m, c] : p.terms)
-      byAtoms[m.atoms][m.e] = byAtoms[m.atoms][m.e] + c;
+    for (const auto &[m, c] : p.terms) // monomials are unique, so each (atoms, e) slot is written once
+      byAtoms[m.atoms].emplace(m.e, Cx{0, 0} + c);
 
     auto cdiv = [](const Cx &z, const Cx &w) { // complex divide; the coefficients are Cx, not double
       const double d = w.re * w.re + w.im * w.im;
