@@ -326,22 +326,54 @@ namespace numtracer::numeric
     explicit MPoly(int ns) : nsym(ns) {}
 
     /// Build from an unsorted scratch list of (monomial, coeff): sort then combine adjacent equals.
+    ///
+    /// The sort runs `std::sort` over 24-byte proxies (packed exponents + scratch index), not over the
+    /// 72-byte terms themselves. `std::sort`'s permutation depends only on its comparison results, and
+    /// the proxy comparator reproduces `Mono::operator<` exactly, so the permutation — and with it the
+    /// order like terms are summed in — is identical to sorting `s` directly. A scratch that is
+    /// already strictly increasing (e.g. a product by a constant) skips the sort: with distinct keys
+    /// every sort is the identity.
     static MPoly from_scratch(int ns, MPolyScratch s)
     {
       NT_STAT_ADD(fs_calls, 1);
       NT_STAT_ADD(fs_terms_in, s.size());
       MPoly p(ns);
-      std::sort(s.begin(), s.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
       p.terms.reserve(s.size());
-      for (auto &kv : s) {
-        if (kv.second.re == 0 && kv.second.im == 0) continue;
+      auto absorb = [&p](std::pair<Mono, Cx> &kv) {
+        if (kv.second.re == 0 && kv.second.im == 0) return;
         if (!p.terms.empty() && p.terms.back().first == kv.first) {
           p.terms.back().second = p.terms.back().second + kv.second;
           if (p.terms.back().second.re == 0 && p.terms.back().second.im == 0) p.terms.pop_back();
         } else {
           p.terms.push_back(std::move(kv));
         }
+      };
+      bool sorted = true;
+      for (std::size_t i = 1; sorted && i < s.size(); ++i)
+        sorted = s[i - 1].first < s[i].first;
+      if (sorted) {
+        for (auto &kv : s) absorb(kv);
+        return p;
       }
+      struct Key {
+        std::uint64_t p0, p1;
+        std::uint32_t idx;
+        bool inlineExp; ///< false ⇒ heap exponents, compare through the full Mono
+      };
+      gch::small_vector<Key, 16> keys;
+      keys.reserve(s.size());
+      for (std::size_t i = 0; i < s.size(); ++i) {
+        const MonoExp &e = s[i].first.e;
+        keys.push_back({e.packed[0], e.packed[1], static_cast<std::uint32_t>(i), !e.overflow});
+      }
+      std::sort(keys.begin(), keys.end(), [&s](const Key &a, const Key &b) {
+        const Mono &ma = s[a.idx].first, &mb = s[b.idx].first;
+        if (!(a.inlineExp && b.inlineExp)) return ma < mb;
+        if (a.p0 != b.p0) return a.p0 < b.p0;
+        if (a.p1 != b.p1) return a.p1 < b.p1;
+        return ma.atoms < mb.atoms;
+      });
+      for (const Key &k : keys) absorb(s[k.idx]);
       return p;
     }
 
@@ -579,6 +611,38 @@ namespace numtracer::numeric
       while (i < ma.atoms.size()) m.atoms.push_back(ma.atoms[i++]);
       while (j < mb.atoms.size()) m.atoms.push_back(mb.atoms[j++]);
     };
+
+    // A factor that is a single constant term (a γ or C matrix entry in the Dirac fold) leaves every
+    // monomial of the other factor unchanged, so the product is already sorted and distinct: copy the
+    // terms, multiply the coefficients in the general path's operand order (ca·cb), and drop exact-zero
+    // products as from_scratch would. Bit-identical to the scratch path, without the scratch.
+    auto isConstant = [](const MPoly &p) {
+      if (p.terms.size() != 1) return false;
+      const Mono &m = p.terms[0].first;
+      return !m.e.overflow && m.e.packed[0] == 0 && m.e.packed[1] == 0 && m.atoms.empty();
+    };
+    if (nb == 1 && isConstant(b)) {
+      NT_STAT_ADD(mul_const, 1);
+      MPoly r(ns);
+      r.terms.reserve(na);
+      const Cx cb = b.terms[0].second;
+      for (const auto &[ma, ca] : a.terms) {
+        const Cx c = ca * cb;
+        if (!(c.re == 0 && c.im == 0)) r.terms.push_back({ma, c});
+      }
+      return r;
+    }
+    if (na == 1 && isConstant(a)) {
+      NT_STAT_ADD(mul_const, 1);
+      MPoly r(ns);
+      r.terms.reserve(nb);
+      const Cx ca = a.terms[0].second;
+      for (const auto &[mb, cb] : b.terms) {
+        const Cx c = ca * cb;
+        if (!(c.re == 0 && c.im == 0)) r.terms.push_back({mb, c});
+      }
+      return r;
+    }
 
     if (na * nb <= kMulMaxScratch) { // exact byte-for-byte path — the common case
       MPolyScratch s;
