@@ -1570,7 +1570,8 @@ namespace numtracer::numeric
   {
     return ndetail::dress_collect(
         nsym, chain, slots, [&](const network::DiracNet &d, const std::vector<network::Elem> &slotFacs) {
-          return numeric_value_netval(nsym, d, with_slot_facs(lor, slotFacs), comp, atomDen, units);
+          return slotFacs.empty() ? numeric_value_netval(nsym, d, lor, comp, atomDen, units)
+                                  : numeric_value_netval(nsym, d, with_slot_facs(lor, slotFacs), comp, atomDen, units);
         });
   }
 
@@ -1587,7 +1588,8 @@ namespace numtracer::numeric
   {
     return ndetail::dress_collect_mp(
         nsym, chain, slots, [&](const network::DiracNet &d, const std::vector<network::Elem> &slotFacs) {
-          return numeric_value_netval(nsym, d, with_slot_facs(lor, slotFacs), comp, atomDen, units);
+          return slotFacs.empty() ? numeric_value_netval(nsym, d, lor, comp, atomDen, units)
+                                  : numeric_value_netval(nsym, d, with_slot_facs(lor, slotFacs), comp, atomDen, units);
         });
   }
 
@@ -1599,7 +1601,8 @@ namespace numtracer::numeric
   {
     return ndetail::dress_collect(
         nsym, chain, slots, [&](const network::DiracNet &d, const std::vector<network::Elem> &slotFacs) {
-          return numeric_value(nsym, d, with_slot_facs(lorentz, slotFacs), comp, atomDen);
+          return slotFacs.empty() ? numeric_value(nsym, d, lorentz, comp, atomDen)
+                                  : numeric_value(nsym, d, with_slot_facs(lorentz, slotFacs), comp, atomDen);
         });
   }
 
