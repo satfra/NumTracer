@@ -150,14 +150,69 @@ namespace numtracer::numeric
   NUMTRACER_FUNC ndetail::Factor numeric_dirac(int nsym, const network::DiracNet &chain,
                                                const std::vector<std::array<MPoly, 4>> &comp);
 
+#if NUMTRACER_DEFINE_BODIES
+  namespace ndetail
+  {
+    /// The start token for walking a closed Dirac trace. The DFS in @ref numeric_dirac multiplies a
+    /// token that follows k free legs 4^k times, and only slash/C/commutator tokens cost a polynomial
+    /// multiply (a γ is a signed permutation), so the walk starts where Σ 4^k over those tokens is
+    /// smallest. The trace is cyclic, so every start gives the same value. Ties keep start 0.
+    inline std::size_t best_trace_start(const network::DiracNet &chain)
+    {
+      const std::size_t n = chain.size();
+      auto cost = [&](std::size_t start) {
+        double c = 0, w = 1;
+        for (std::size_t q = 0; q < n; ++q) {
+          const network::DFac &d = chain[(start + q) % n];
+          if (d.kind == network::DFac::Gamma) {
+            w *= 4;
+          } else if (d.kind == network::DFac::Comm) {
+            c += w;
+            if (d.mu >= 0) w *= 4;
+            if (d.nu >= 0) w *= 4;
+          } else if (d.kind == network::DFac::Slash || d.kind == network::DFac::C) {
+            c += w;
+          }
+        }
+        return c;
+      };
+      std::size_t best = 0;
+      double bestCost = cost(0);
+      for (std::size_t s = 1; s < n; ++s)
+        if (const double c = cost(s); c < bestCost) {
+          bestCost = c;
+          best = s;
+        }
+      return best;
+    }
+  } // namespace ndetail
+#endif // NUMTRACER_DEFINE_BODIES
+
   /// @brief Fold the closed Dirac chain into a tensor over its free gluon legs (the `dgamma` ids).
   ///        For each assignment of the free legs to concrete indices 0..3, build the slashed/free
   ///        γ chain as 4×4 @ref MPoly matrices and take the trace. Returns the free-leg ids and the
   ///        row-major tensor of trace polynomials (one entry per `4^f` assignment).
 #if NUMTRACER_DEFINE_BODIES
-  NUMTRACER_FUNC ndetail::Factor numeric_dirac(int nsym, const network::DiracNet &chain,
+  NUMTRACER_FUNC ndetail::Factor numeric_dirac(int nsym, const network::DiracNet &chainIn,
                                                const std::vector<std::array<MPoly, 4>> &comp)
   {
+    // Walk the trace from its cheapest start (see ndetail::best_trace_start). The free legs are then
+    // met in rotated order; `legsBefore` of them precede the start in the original chain, and the
+    // result tensor keeps the ORIGINAL leg order (F.ids and the flat index) by rotating them back.
+    const std::size_t start = ndetail::best_trace_start(chainIn);
+    network::DiracNet rotated;
+    int legsBefore = 0;
+    if (start != 0) {
+      rotated.reserve(chainIn.size());
+      rotated.insert(rotated.end(), chainIn.begin() + static_cast<long>(start), chainIn.end());
+      rotated.insert(rotated.end(), chainIn.begin(), chainIn.begin() + static_cast<long>(start));
+      for (std::size_t i = 0; i < start; ++i) {
+        const network::DFac &d = chainIn[i];
+        if (d.kind == network::DFac::Gamma) ++legsBefore;
+        if (d.kind == network::DFac::Comm) legsBefore += (d.mu >= 0) + (d.nu >= 0);
+      }
+    }
+    const network::DiracNet &chain = start == 0 ? chainIn : rotated;
     // Algorithm:
     //   1. Walk the chain once: record which tokens are FREE γ legs (open ids, summed below), build the
     //      fixed slash matrices, and split the commutator legs into free/slash. Precompute every factor's
@@ -210,6 +265,8 @@ namespace numtracer::numeric
       }
     }
     const int f = freeLegs.size();
+    // back to the original leg order: the walk met legs legsBefore..f-1, then 0..legsBefore-1
+    std::rotate(freeLegs.begin(), freeLegs.begin() + (f - legsBefore), freeLegs.end());
     NT_STAT_ADD(nd_calls, 1);
     NT_STAT_ADD(nd_tokens, chain.size());
     // Trace parity is set by the BLOCK-ANTIDIAGONAL factors only — Gamma and Slash. Gamma5, Comm
@@ -238,6 +295,10 @@ namespace numtracer::numeric
     for (int k = 0; k < f; ++k)
       total *= 4;
     F.entries.assign(total, MPolyFactory::zero(nsym));
+    int lowDigits = 1; // 4^legsBefore
+    for (int k = 0; k < legsBefore; ++k)
+      lowDigits *= 4;
+    const int highDigits = total / lowDigits; // 4^(f-legsBefore)
     if (nAntidiag % 2 == 1) {
       NT_STAT_ADD(nd_odd_skip, 1);
       return F; // odd → all zero
@@ -359,7 +420,10 @@ namespace numtracer::numeric
     auto walk = [&](auto &&self, std::size_t i, int flat, const B2 &m0, const B2 &m1, bool started,
                     bool antidiag) -> void {
       if (i == chain.size()) {
-        F.entries[static_cast<std::size_t>(flat)] = m0[0] + m0[3] + m1[0] + m1[3];
+        // `flat` has the walk's leg order (legs legsBefore..f-1 most significant); rotate its digits
+        // back to the original order.
+        const int orig = (flat % lowDigits) * highDigits + flat / lowDigits;
+        F.entries[static_cast<std::size_t>(orig)] = m0[0] + m0[3] + m1[0] + m1[3];
         return;
       }
       const network::DFac &d = chain[i];
