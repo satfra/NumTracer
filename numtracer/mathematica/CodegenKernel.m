@@ -911,15 +911,12 @@ ntKernelPreamble[angleDefs_, fillArgs_, drAtoms_, hasDr_, nsHome_, supportNs_] :
         $ntRealT <> " fenv[(" <> nsHome <> "::nenv) > 0 ? (" <> nsHome <> "::nenv) : 1];",
         Sequence @@
           If[hasDr,
-            MapIndexed[
-              Function[{atom, pos},
-                "const " <> $ntRealT <> " dr_" <> ToString[pos[[1]] - 1] <> " = " <> cppFlat[atom] <> ";"],
-              drAtoms],
+            ntDrDecls[drAtoms, cppFlat],
             {}],
         With[{
           fillCallArgs =
             If[hasDr,
-              Join[SymbolName /@ fillArgs, ("dr_" <> ToString[#])& /@ Range[0, Length[drAtoms] - 1]],
+              Join[SymbolName /@ fillArgs, ntDrArgNames[drAtoms]],
               SymbolName /@ fillArgs]},
           nsHome <> "::fill(fenv, " <> StringRiffle[fillCallArgs, ", "] <> ");"]};
 (* DRESSED: the dr_<id> dressing expressions can reference the derived kinematic angles, so the
@@ -946,7 +943,7 @@ ntMkParam[nm_, ty_] := <|
 (* Parameter lists of kernel(), constant() and ntHoisted(), and the fill() signature. Every
    dressing — including the named per-component diagonal dressings (ntSUNDiag{Fund,Adj}) — is an
    ordinary scalar interpolator kernel parameter. *)
-ntKernelSignature[o_, args_, fillArgs_, hoistCalls_, hoistSyms_, hasDr_, nDrAtoms_] :=
+ntKernelSignature[o_, args_, fillArgs_, hoistCalls_, hoistSyms_, hasDr_, drAtoms_] :=
   Module[{sigArgs, runtimeParams, kernelParams, constParams, hoistFnStr, fillArgSig,
           interpTy = o["DressingType"], scalarParamNames = o["ScalarParamNames"],
           adNames = o["ADNames"], parameterOrder = o["ParameterOrder"], dressTy},
@@ -1034,7 +1031,7 @@ ntKernelSignature[o_, args_, fillArgs_, hoistCalls_, hoistSyms_, hasDr_, nDrAtom
    computes the atom's value (regulators / interpolators in scope there) and passes it. *)
     fillArgSig = StringRiffle[("[[maybe_unused]] " <> $ntRealT <> " " <> SymbolName[#])& /@ fillArgs, ", "];
     If[hasDr,
-      fillArgSig = fillArgSig <> StringJoin[(", [[maybe_unused]] " <> $ntRealT <> " dr_" <> ToString[#])& /@ Range[0, nDrAtoms - 1]]];
+      fillArgSig = fillArgSig <> StringJoin[(", [[maybe_unused]] " <> $ntRealT <> " " <> #)& /@ ntDrArgNames[drAtoms]]];
     ntStageResult["ntKernelSignature", {"KernelParams", "ConstParams", "HoistFn", "FillArgSig"},
       <|"KernelParams" -> kernelParams, "ConstParams" -> constParams, "HoistFn" -> hoistFnStr,
         "FillArgSig" -> fillArgSig|>]];
@@ -1465,7 +1462,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
          $diagDrIntern = $diagDrIntern, $drIntern = $drIntern,
          $ctCache = <||>, $dsCache = <||>, $odCache = <||>, $dslCache = <||>},
   Module[{o, fr, ms, complexQ, nets, incDir, dd, grp, hoist, integrand, prune, nGrp,
-          hasDr, pre, sig, part, header, gen, probe},
+          hasDr, pre, sig, part, header, ncomp, gen, probe},
     Needs["FunKit`"];
 (* The integrand Sum and COEN's lowering recurse ~linearly in the number of trace groups (>1000 on
    large flows). Hitting $RecursionLimit does NOT abort: it returns a held expression and the kernel
@@ -1476,8 +1473,9 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
     ms = ntMatsubaraSymbol[o["MatsubaraVar"], fr["NComp"]["usyms"], fr["FillArgs"]];
 (* A syntactic `i` anywhere (e.g. projector i x imaginary non-abelian colour f^abc T^b T^c =
    (iN/2) T^a) makes the flow complexQ; the colour constant stays COMPLEX and the probe decides
-   whether the assembled integrand is actually real. *)
-    complexQ = !FreeQ[k["Diagrams"], Complex];
+   whether the assembled integrand is actually real. A complex FRAME (a quark frequency p0 - I muq)
+   makes the traces themselves complex, with no `i` in any diagram. *)
+    complexQ = !FreeQ[k["Diagrams"], Complex] || TrueQ[fr["NComp"]["complex"]];
     nets = ntBuildNets[k["Diagrams"], fr["Env"], fr["Mask"], fr["Frame"],
              ntResetGeneration[fr["Env"], fr["Mask"], fr["Frame"]]];
 (* the C++ headers are needed by the diagonal-dressing seam and by an online generator build *)
@@ -1509,19 +1507,21 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
     pre = ntKernelPreamble[o["AngleDefs"], fr["FillArgs"], nets["DrAtoms"], hasDr, o["NsHome"],
             o["SupportNamespace"]];
     sig = ntKernelSignature[o, fr["Args"], fr["FillArgs"], hoist["HoistCalls"], hoist["HoistSyms"],
-            hasDr, Length[nets["DrAtoms"]]];
+            hasDr, nets["DrAtoms"]];
     ntAssertNumericIntegrand[integrand];
     part = ntFiniteExtentPartition[integrand, ms["MatsubaraSym"], o["DecayingRegulators"],
              o["MatsubaraFiniteExtent"]];
     header = ntLowerKernel[o, integrand, part, sig, pre["Preamble"], complexQ, ms["MatsubaraSym"],
                ms["MVarIdx"], fr["SymDefs"], headerFile]["Header"];
-    gen = ntGenPass[nets["CoreNets"], nets["RestScalars"], dd["ColourNets"], grp["Groups"], fr["NComp"],
+    (* the generator also needs which dressing atoms are complex (see ntDrSplit) *)
+    ncomp = Append[fr["NComp"], "drComplex" -> (ntDrComplexQ /@ nets["DrAtoms"])];
+    gen = ntGenPass[nets["CoreNets"], nets["RestScalars"], dd["ColourNets"], grp["Groups"], ncomp,
             sig["FillArgSig"], complexQ, prune["realOnlyG"], ms["MVarIdx"], o, incDir, genFile, headerFile];
     probe = ntProbeAndReprune[o, integrand, fr["Args"], fr["FillArgs"], pre["AngleDecls"],
               nets["DrAtoms"], prune["pruneG"], complexQ, genFile, headerFile];
 (* the deferred PruneRealTraces pass: re-emit with the pruned groups *)
     If[probe["Reprune"],
-      gen = ntGenPass[nets["CoreNets"], nets["RestScalars"], dd["ColourNets"], grp["Groups"], fr["NComp"],
+      gen = ntGenPass[nets["CoreNets"], nets["RestScalars"], dd["ColourNets"], grp["Groups"], ncomp,
               sig["FillArgSig"], complexQ, prune["pruneG"], ms["MVarIdx"], o, incDir, genFile, headerFile]];
     ntWriteKernelAndManifest[o, header, kernelFile, genFile, headerFile, gen["UnitFiles"], complexQ,
       probe["ProbeFile"]];

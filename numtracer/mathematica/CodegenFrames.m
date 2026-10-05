@@ -254,5 +254,7 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
       (* default -1 (comp size 0) for a purely scalar integrand with an empty component env:
          Max[{}] is -Infinity, which would leak into the C++ as the comp() vector size *)
       "maxBase" -> Max[Append[#["Base"]& /@ Values[env], -1]],
-      "units" -> units
+      "units" -> units,
+      (* a finite-density frame (p0 - I muq): projector denominators may be complex *)
+      "complex" -> !FreeQ[Values[compExpr], Complex]
     |>];

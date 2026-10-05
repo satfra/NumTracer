@@ -169,6 +169,9 @@ DEFAULT_FLOWS=(
   # coefficient — so nothing there exercises a spatial momentum going through a Dirac trace. Emits
   # three kernels (two non-zero oracle checks plus the ntSPS-vs-leaf zero identity).
   gen_spatialvec_numeric
+  # COMPLEX FRAMES at finite density (ctest cplxenv_num): a complex projector denominator, a complex
+  # dressing atom and a complex Lorentz-sum coefficient. Cheap, hand-built.
+  gen_cplxenv_numeric
   # A spinor line closed on one head, the chiral condensate (ctest selftrace_num). Cheap, hand-built.
   gen_selftrace_numeric
 )

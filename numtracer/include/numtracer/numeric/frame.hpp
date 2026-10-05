@@ -339,15 +339,19 @@ namespace numtracer::inline numeric
     {
       std::vector<double> atoms(atomDen_.size(), std::nan(""));
       for (std::size_t i = 0; i < g.syms.size(); ++i)
-        if (std::get<0>(g.syms[i]) == SymKind::inv) atoms.at(static_cast<std::size_t>(std::get<1>(g.syms[i]))) = atom_value(checked(pt), std::get<1>(g.syms[i]));
+        if (std::get<0>(g.syms[i]) == SymKind::inv && !g.atom_cplx(std::get<1>(g.syms[i])))
+          atoms.at(static_cast<std::size_t>(std::get<1>(g.syms[i]))) = atom_value(checked(pt), std::get<1>(g.syms[i]));
       std::vector<double> f(g.syms.size());
       for (std::size_t i = 0; i < g.syms.size(); ++i) {
         const auto [kind, a, b] = g.syms[i];
         if (kind == SymKind::var)
           f[i] = pt.x.at(static_cast<std::size_t>(a));
-        else if (kind == SymKind::inv)
+        else if (kind == SymKind::inv && !g.atom_cplx(a))
           f[i] = atoms.at(static_cast<std::size_t>(a));
-        else
+        else if (kind == SymKind::inv || kind == SymKind::inv_im) {
+          const Cx z = cdiv(Cx{1.0, 0.0}, atom_denominator_value(checked(pt), a));
+          f[i] = kind == SymKind::inv ? z.re : z.im;
+        } else
           NT_THROW(std::invalid_argument, "Frame::fill_values: the program uses a dressing or scalar-product slot");
       }
       return f;
@@ -362,7 +366,11 @@ namespace numtracer::inline numeric
         const std::string &c = names_[static_cast<std::size_t>(from)];
         return "std::sqrt(1.0 - " + c + "*" + c + ")";
       };
-      fm.inv = [this](int id) { return "1.0/(" + denominator_cpp(id) + ")"; };
+      fm.inv = [this](int id) {
+        const Poly &d = atomDen_.at(static_cast<std::size_t>(id));
+        return poly_complex(d) ? inv_fill_cpp(d, names_, false) : "1.0/(" + denominator_cpp(id) + ")";
+      };
+      fm.invIm = [this](int id) { return inv_fill_cpp(atomDen_.at(static_cast<std::size_t>(id)), names_, true); };
       fm.dress = [](int) -> std::string {
         NT_THROW(std::invalid_argument, "Frame::fill_formulas: dressings are filled by generated kernels only");
         return {};
@@ -482,12 +490,23 @@ namespace numtracer::inline numeric
         NT_THROW(std::invalid_argument, "Frame::eval: the point belongs to another frame (use this frame's at())");
       return pt;
     }
-    /// `1/k²` of atom @p a at @p pt; refuses an unregistered atom and a vanishing denominator.
-    double atom_value(const Point &pt, int a) const
+    /// `k²` of atom @p a at @p pt, complex in a finite-density frame.
+    Cx atom_denominator_value(const Point &pt, int a) const
     {
       if (a < 0 || static_cast<std::size_t>(a) >= atomDen_.size() || atomDen_[static_cast<std::size_t>(a)].empty())
         NT_THROW(std::invalid_argument, ("Frame::eval: atom " + std::to_string(a) + " is not registered in this frame").c_str());
-      const double d = ndetail::eval(atomDen_[static_cast<std::size_t>(a)], pt.x, {}).re;
+      return ndetail::eval(atomDen_[static_cast<std::size_t>(a)], pt.x, {});
+    }
+    /// `1/k²` of atom @p a at @p pt; refuses an unregistered atom and a vanishing denominator.
+    double atom_value(const Point &pt, int a) const
+    {
+      const Cx dc = atom_denominator_value(pt, a);
+      if (std::abs(dc.im) > kRealCoeffTol * std::max(1.0, std::abs(dc.re)))
+        NT_THROW(std::invalid_argument, ("Frame::eval: projector denominator " + std::to_string(a) +
+                                         " is complex; evaluate through a lowered program (to_genprog + "
+                                         "mark_complex_atoms + fill_values) instead")
+                                            .c_str());
+      const double d = dc.re;
       if (d == 0.0)
         NT_THROW(std::domain_error, ("Frame::eval: projector denominator " + std::to_string(a) + " (k^2 = " +
                                      denominator_cpp(a) + ") vanishes at this point")

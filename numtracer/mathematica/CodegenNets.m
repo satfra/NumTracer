@@ -250,6 +250,45 @@ drDecompose[coeff_] := Module[{
       {f, factors}];
     {N[num, 17], Sort[ids]}];
 
+(* ---- complex dressing atoms (finite density) ---------------------------------------------------
+   An atom's runtime value is complex when it carries an explicit I, e.g. the scalar part
+   (q0 + I muq) of a quark numerator. The fill env is real, so such an atom is passed as the pair
+   dr_<id> / dr_<id>_im and the generator (GlobalEnv::cplxDress) expands its powers into the
+   coefficients. The split is by CONJUGATION (every runtime symbol is real), not ComplexExpand, which
+   would treat an interpolator call Zq[p0 - I muq] as real and drop muq. An atom that is not
+   "real + I real" (an interpolator AT a complex argument) has no real halves: abort. *)
+
+ntDrComplexQ[atom_] := !FreeQ[atom, Complex];
+
+ntDrSplit::residual = "The dressing atom `1` is complex but does not split into real + I real (Re = `2`, Im = `3`): an interpolator evaluated at a complex argument cannot be passed through the real fill env.";
+
+ntDrSplit[atom_] := Module[{conj = atom /. Complex[a_, b_] :> Complex[a, -b], re, im},
+    re = Expand[(atom + conj)/2];
+    im = Expand[(atom - conj)/(2 I)];
+    If[!FreeQ[{re, im}, Complex],
+      Message[ntDrSplit::residual, atom, re, im];
+      Abort[]];
+    {re, im}];
+
+(* The fill() argument names of the dressing atoms (id order): one per real atom, two per complex one. *)
+ntDrArgNames[drAtoms_List] :=
+  Flatten @ MapIndexed[
+    With[{nm = "dr_" <> ToString[#2[[1]] - 1]},
+      If[ntDrComplexQ[#1], {nm, nm <> "_im"}, {nm}]]&,
+    drAtoms];
+
+(* Their kernel-side declarations; `render` turns an expression into C++ (cppFlat, or the probe's
+   stubbed cppFlat). *)
+ntDrDecls[drAtoms_List, render_] :=
+  Flatten @ MapIndexed[
+    With[{nm = "dr_" <> ToString[#2[[1]] - 1]},
+      If[ntDrComplexQ[#1],
+        With[{parts = ntDrSplit[#1]},
+          {"const " <> $ntRealT <> " " <> nm <> " = " <> render[parts[[1]]] <> ";",
+           "const " <> $ntRealT <> " " <> nm <> "_im = " <> render[parts[[2]]] <> ";"}],
+        {"const " <> $ntRealT <> " " <> nm <> " = " <> render[#1] <> ";"}]]&,
+    drAtoms];
+
 (* Chunk a Lorentz polynomial into several Lorentz nets of <= $ntLorChunk top-level terms each, so no
    single generated net-builder function becomes a giant nested add() that blows up the g++ -O0
    compile (a quark box with the full quark-gluon vertex basis can be tens of thousands of nodes in

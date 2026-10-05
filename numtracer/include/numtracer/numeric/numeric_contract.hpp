@@ -1765,6 +1765,107 @@ namespace numtracer::inline numeric
       }
     }
 
+    /// @brief A complex env leaf in one monomial: the env ids of its real and imaginary halves and its
+    ///        power (see `network::GlobalEnv::cplxAtom`).
+    struct CxLeaf {
+      int re, im, n;
+    };
+
+    /// @brief Push `(idOf(a), multiplicity)` runs of @p atoms like @ref push_atom_runs, except that a
+    ///        run of a complex leaf (@p isCplx) goes to @p cx as its (Re, Im) slot pair instead.
+    template <class Atoms, class IsCplx, class IdOf, class ImIdOf>
+    void push_atom_runs_cplx(std::vector<std::pair<int, int>> &vp, std::vector<CxLeaf> &cx, const Atoms &atoms,
+                             IsCplx isCplx, IdOf idOf, ImIdOf imIdOf)
+    {
+      for (int i = 0; i < (int)atoms.size();) {
+        int j = i;
+        while (j < (int)atoms.size() && atoms[j] == atoms[i])
+          ++j;
+        if (isCplx(atoms[i]))
+          cx.push_back({idOf(atoms[i]), imIdOf(atoms[i]), j - i});
+        else
+          vp.push_back({idOf(atoms[i]), j - i});
+        i = j;
+      }
+    }
+
+    /// @brief @ref append_monos for an env with complex leaves.
+    ///
+    /// A monomial carrying complex leaves `(re_l + i im_l)^{n_l}` is expanded binomially into real
+    /// monomials, each with the complex coefficient `c · C(n,j) i^j`, so every `i` moves into the
+    /// coefficients and the trace bodies stay real arithmetic. A monomial with one complex leaf of power
+    /// n becomes n+1 monomials. Pieces whose half is an exact zero are dropped from that half.
+    inline void append_monos_cplx(const LowerChannel &ch, network::GlobalEnv &g, bool cplx,
+                                  std::vector<network::LMono> &monosRe, std::vector<network::LMono> &monosIm)
+    {
+      const Poly &mp = *ch.poly;
+      const double tol = prune_tol(mp);
+      std::vector<std::pair<int, int>> drvp;
+      std::vector<CxLeaf> drcx;
+      push_atom_runs_cplx(
+          drvp, drcx, *ch.dress, [&](int a) { return g.dress_cplx(a); }, [&](int a) { return g.dr_id(a); },
+          [&](int a) { return g.dr_im_id(a); });
+      std::vector<CxLeaf> cx;
+      std::vector<std::pair<Cx, std::vector<std::pair<int, int>>>> pieces, next;
+      for (const auto &[m, c] : mp.terms) {
+        if (!keep_coeff(c, tol)) continue;
+        std::vector<std::pair<int, int>> vp = drvp;
+        cx = drcx;
+        for (int k = 0; k < mp.nsym; ++k)
+          if (m.e[k] > 0) vp.push_back({g.var_id(k), m.e[k]});
+        push_atom_runs_cplx(
+            vp, cx, m.atoms, [&](int a) { return g.atom_cplx(a); }, [&](int a) { return g.inv_id(a); },
+            [&](int a) { return g.inv_im_id(a); });
+        pieces.assign(1, {c, std::move(vp)});
+        for (const CxLeaf &l : cx) {
+          next.clear();
+          for (const auto &[co, pvp] : pieces) {
+            // (re + i im)^n = Σ_j C(n,j) i^j re^(n-j) im^j; i^j cycles 1, i, -1, -i
+            double binom = 1.0;
+            for (int j = 0; j <= l.n; ++j) {
+              static constexpr Cx ipow[4] = {{1.0, 0.0}, {0.0, 1.0}, {-1.0, 0.0}, {0.0, -1.0}};
+              const Cx &ij = ipow[j & 3];
+              std::vector<std::pair<int, int>> v = pvp;
+              if (l.n - j > 0) v.push_back({l.re, l.n - j});
+              if (j > 0) v.push_back({l.im, j});
+              next.push_back({Cx{binom * (co.re * ij.re - co.im * ij.im), binom * (co.re * ij.im + co.im * ij.re)},
+                              std::move(v)});
+              binom = binom * static_cast<double>(l.n - j) / static_cast<double>(j + 1);
+            }
+          }
+          pieces.swap(next);
+        }
+        for (auto &[co, pvp] : pieces) {
+          std::sort(pvp.begin(), pvp.end());
+          const double reC = snap_coeff(co.re), imC = snap_coeff(co.im);
+          if (cplx && imC != 0.0) {
+            network::LMono lmIm;
+            lmIm.c = imC;
+            lmIm.vp = pvp; // copy — the re half may move it below
+            monosIm.push_back(std::move(lmIm));
+          }
+          if (reC == 0.0) continue;
+          network::LMono lm;
+          lm.c = reC;
+          lm.vp = std::move(pvp);
+          monosRe.push_back(std::move(lm));
+        }
+      }
+    }
+
+    /// @brief Does channel @p ch carry a complex leaf in a kept monomial? Such a monomial makes the
+    ///        trace complex even when its coefficient is real.
+    inline bool channel_has_cplx_leaf(const LowerChannel &ch, const network::GlobalEnv &g, double tol)
+    {
+      for (int a : *ch.dress)
+        if (g.dress_cplx(a)) return true;
+      for (const auto &[m, c] : ch.poly->terms)
+        if (keep_coeff(c, tol))
+          for (int a : m.atoms)
+            if (g.atom_cplx(a)) return true;
+      return false;
+    }
+
     /// @brief `NT_GEN_POLYSTATS` report of the monomials handed to the Horner lowering.
     ///
     /// Level 1: the input term count and the kept monomial count. Monomial count is canonical
@@ -1795,6 +1896,7 @@ namespace numtracer::inline numeric
     inline std::pair<int, int> lower_channels(const std::vector<LowerChannel> &chans, network::GlobalEnv &g,
                                               network::rdetail::RBuilder &builder, bool realOnly)
     {
+      const bool cplxLeaves = g.has_complex_leaves();
       bool cplx = false;
       if (!realOnly)
         for (const LowerChannel &ch : chans) {
@@ -1804,6 +1906,7 @@ namespace numtracer::inline numeric
               cplx = true;
               break;
             }
+          if (!cplx && cplxLeaves) cplx = channel_has_cplx_leaf(ch, g, tol);
           if (cplx) break;
         }
       std::size_t nTerms = 0;
@@ -1813,7 +1916,10 @@ namespace numtracer::inline numeric
       monosRe.reserve(nTerms);
       if (cplx) monosIm.reserve(nTerms);
       for (const LowerChannel &ch : chans)
-        append_monos(ch, g, cplx, monosRe, monosIm);
+        if (cplxLeaves)
+          append_monos_cplx(ch, g, cplx, monosRe, monosIm);
+        else
+          append_monos(ch, g, cplx, monosRe, monosIm);
       dump_polystats(nTerms, monosRe);
       const int reRoot = network::gdetail::best_into(std::move(monosRe), builder);
       if (!cplx) {

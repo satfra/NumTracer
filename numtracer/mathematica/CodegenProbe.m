@@ -66,12 +66,8 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
        probe has no runtime to compute them, so it evaluates each atom with the SAME stubbing as the
        integrand; without them the probe does not compile (too few args to fill). Atoms can reference
        the derived angles, so the angle decls precede them. *)
-    drDecls =
-      MapIndexed[
-        Function[{atom, pos},
-          "const " <> $ntRealT <> " dr_" <> ToString[pos[[1]] - 1] <> " = " <> cppFlat[stub[atom]] <> ";"],
-        drAtoms];
-    drFillArgs = ("dr_" <> ToString[#])& /@ Range[0, Length[drAtoms] - 1];
+    drDecls = ntDrDecls[drAtoms, cppFlat[stub[#]]&];
+    drFillArgs = ntDrArgNames[drAtoms];
     probePre =
       StringRiffle[
         Join[

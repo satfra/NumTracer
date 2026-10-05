@@ -40,6 +40,8 @@ namespace numtracer::inline network
     inv = 1,   ///< inverse `inv(id)` = `1/q_id²`
     dress = 2, ///< dressing / regulator call `dress(id)`
     var = 3,   ///< raw user symbol `var(id)` (numeric backend)
+    inv_im = 4,   ///< imaginary half of a complex `inv(id)` (see @ref GlobalEnv::cplxAtom)
+    dress_im = 5, ///< imaginary half of a complex `dress(id)` (see @ref GlobalEnv::cplxDress)
   };
 
   /// @brief A shared fundamental-symbol environment: assigns one global env id (`f[]` index) per
@@ -76,6 +78,20 @@ namespace numtracer::inline network
     /// lowers exactly like an `inv` symbol — the difference is purely how the kernel fills its slot
     /// (a dressing C++ expression vs `1/q²`); see @ref FillFormulas::dress.
     int dr_id(int id) { return intern(SymKind::dress, id, 0); }
+
+    /// COMPLEX leaves (a finite-density frame: a quark frequency p0 - i mu makes an internal `k²`, or
+    /// a dressing value, complex). Such a leaf rides a REAL slot pair, `inv`/`dress` holding its real
+    /// part and `inv_im`/`dress_im` its imaginary part; the lowering expands `(re + i im)^n`
+    /// binomially into the monomial coefficients, so every trace body stays real arithmetic.
+    /// Both vectors stay EMPTY unless some leaf is complex (see `numeric::mark_complex_atoms`), and
+    /// the lowering then takes exactly its real-only path.
+    std::vector<char> cplxAtom;  ///< inv atom id → 1 if its denominator `k²` is complex
+    std::vector<char> cplxDress; ///< dressing id → 1 if its runtime value is complex
+    bool has_complex_leaves() const { return !cplxAtom.empty() || !cplxDress.empty(); }
+    bool atom_cplx(int a) const { return a >= 0 && a < (int)cplxAtom.size() && cplxAtom[(std::size_t)a] != 0; }
+    bool dress_cplx(int a) const { return a >= 0 && a < (int)cplxDress.size() && cplxDress[(std::size_t)a] != 0; }
+    int inv_im_id(int v) { return intern(SymKind::inv_im, v, 0); }
+    int dr_im_id(int id) { return intern(SymKind::dress_im, id, 0); }
   };
 
   /// @brief Sentinel for @ref GenProg::rootIm: the program has no imaginary part (it is purely real).
@@ -567,6 +583,8 @@ namespace numtracer::inline network
       case SymKind::inv: out << "//   f[" << i << "] = inv(" << a << ")\n"; break;
       case SymKind::dress: out << "//   f[" << i << "] = dress(" << a << ")\n"; break;
       case SymKind::var: out << "//   f[" << i << "] = var(" << a << ")\n"; break;
+      case SymKind::inv_im: out << "//   f[" << i << "] = imag inv(" << a << ")\n"; break;
+      case SymKind::dress_im: out << "//   f[" << i << "] = imag dress(" << a << ")\n"; break;
       }
     }
   }
@@ -580,6 +598,10 @@ namespace numtracer::inline network
     std::function<std::string(int /*invId*/)> inv;       ///< C++ for the inverse `inv(invId)`.
     std::function<std::string(int /*drId*/)> dress;      ///< C++ for the dressing/regulator call `dress(drId)`.
     std::function<std::string(int /*varId*/)> var;       ///< C++ for a raw user symbol (numeric backend, SymKind::var).
+    /// Imaginary halves of complex leaves (`SymKind::inv_im` / `dress_im`); needed only when the env
+    /// flagged a leaf complex.
+    std::function<std::string(int /*invId*/)> invIm;
+    std::function<std::string(int /*drId*/)> dressIm;
   };
 
   NUMTRACER_FUNC void emit_fill(std::ostream &out, const GlobalEnv &g, const std::string &name,
@@ -603,7 +625,9 @@ namespace numtracer::inline network
           << (kind == SymKind::sp      ? fm.sp(a, b)
               : kind == SymKind::inv   ? fm.inv(a)
               : kind == SymKind::dress ? fm.dress(a)
-                                       : fm.var(a))
+              : kind == SymKind::var   ? fm.var(a)
+              : kind == SymKind::inv_im ? fm.invIm(a)
+                                        : fm.dressIm(a))
           << ";\n";
     }
     out << "}\n";
