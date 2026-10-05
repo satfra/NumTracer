@@ -25,23 +25,15 @@ namespace DiFfRG
       const double dr_0 = 0.7071067811865475;
       const double dr_1 = sqrt(rhoL);
       const double dr_2 = hSigL(l1);
-      const double dr_3 = powr<-1>(l1);
-      const double dr_4 = RF(powr<2>(k), powr<2>(l1));
-      const double dr_5 = Zq(k);
-      const double dr_6 = Zq(l1);
-      const double dr_7 = sqrt(powr<3>(rhoL));
+      const double dr_3 = -powr<-1>(l1) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1);
+      const double dr_4 = -0.3535533905932737 * sqrt(powr<3>(rhoL)) * powr<2>(hPiL(0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)))) * powr<2>(hSigL(l1)) * hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) - 0.7071067811865475 * powr<2>(l1) * sqrt(rhoL) * powr<2>(hPiL(0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)))) * hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * powr<2>(-powr<-1>(l1) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1)) + 0.7071067811865475 * sqrt(rhoL) * powr<2>(hPiL(0.816496580927726 * l1)) * hSigL(l1) * (0.5 * rhoL * powr<2>(hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))) + (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * powr<2>(-sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * RF(powr<2>(k), 1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * Zq(k) - Zq(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))));
+      const double dr_5 = hPiL(0.816496580927726 * l1);
+      const double dr_6 = 0.5 * rhoL * powr<2>(hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))) + (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * powr<2>(-sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * RF(powr<2>(k), 1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * Zq(k) - Zq(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))));
+      const double dr_7 = rhoL;
       const double dr_8 = hPiL(0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)));
-      const double dr_9 = hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-      const double dr_10 = hPiL(0.816496580927726 * l1);
-      const double dr_11 = rhoL;
-      const double dr_12 = sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-      const double dr_13 = RF(powr<2>(k), 1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1));
-      const double dr_14 = powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1));
-      const double dr_15 = cos1;
-      const double dr_16 = l1;
-      const double dr_17 = 1.414213562373095;
-      const double dr_18 = Zq(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-      DiFfRG::etapil_num::fill(fenv, l1, cos1, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10, dr_11, dr_12, dr_13, dr_14, dr_15, dr_16, dr_17, dr_18);
+      const double dr_9 = -sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * RF(powr<2>(k), 1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * Zq(k) - Zq(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
+      const double dr_10 = l1;
+      DiFfRG::etapil_num::fill(fenv, l1, cos1, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10);
       const auto _interp1 = ntRe(DiFfRG::etapil_num::tr0(fenv));
       const auto _interp2 = RFdot(powr<2>(k), powr<2>(l1));
       const auto _interp3 = Zq(k);
@@ -70,23 +62,15 @@ namespace DiFfRG
       const double dr_0 = 0.7071067811865475;
       const double dr_1 = sqrt(rhoL);
       const double dr_2 = hSigL(l1);
-      const double dr_3 = powr<-1>(l1);
-      const double dr_4 = RF(powr<2>(k), powr<2>(l1));
-      const double dr_5 = Zq(k);
-      const double dr_6 = Zq(l1);
-      const double dr_7 = sqrt(powr<3>(rhoL));
+      const double dr_3 = -powr<-1>(l1) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1);
+      const double dr_4 = -0.3535533905932737 * sqrt(powr<3>(rhoL)) * powr<2>(hPiL(0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)))) * powr<2>(hSigL(l1)) * hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) - 0.7071067811865475 * powr<2>(l1) * sqrt(rhoL) * powr<2>(hPiL(0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)))) * hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * powr<2>(-powr<-1>(l1) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1)) + 0.7071067811865475 * sqrt(rhoL) * powr<2>(hPiL(0.816496580927726 * l1)) * hSigL(l1) * (0.5 * rhoL * powr<2>(hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))) + (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * powr<2>(-sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * RF(powr<2>(k), 1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * Zq(k) - Zq(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))));
+      const double dr_5 = hPiL(0.816496580927726 * l1);
+      const double dr_6 = 0.5 * rhoL * powr<2>(hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))) + (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * powr<2>(-sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * RF(powr<2>(k), 1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * Zq(k) - Zq(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))));
+      const double dr_7 = rhoL;
       const double dr_8 = hPiL(0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)));
-      const double dr_9 = hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-      const double dr_10 = hPiL(0.816496580927726 * l1);
-      const double dr_11 = rhoL;
-      const double dr_12 = sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-      const double dr_13 = RF(powr<2>(k), 1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1));
-      const double dr_14 = powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1));
-      const double dr_15 = cos1;
-      const double dr_16 = l1;
-      const double dr_17 = 1.414213562373095;
-      const double dr_18 = Zq(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-      DiFfRG::etapil_num::fill(fenv, l1, cos1, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10, dr_11, dr_12, dr_13, dr_14, dr_15, dr_16, dr_17, dr_18);
+      const double dr_9 = -sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * RF(powr<2>(k), 1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * Zq(k) - Zq(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
+      const double dr_10 = l1;
+      DiFfRG::etapil_num::fill(fenv, l1, cos1, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10);
       const auto _interp1 = ntRe(DiFfRG::etapil_num::tr0(fenv));
       const auto _interp2 = RFdot(powr<2>(k), powr<2>(l1));
       const auto _interp3 = Zq(k);
@@ -115,23 +99,15 @@ namespace DiFfRG
       const double dr_0 = 0.7071067811865475;
       const double dr_1 = sqrt(rhoL);
       const double dr_2 = hSigL(l1);
-      const double dr_3 = powr<-1>(l1);
-      const double dr_4 = RF(powr<2>(k), powr<2>(l1));
-      const double dr_5 = Zq(k);
-      const double dr_6 = Zq(l1);
-      const double dr_7 = sqrt(powr<3>(rhoL));
+      const double dr_3 = -powr<-1>(l1) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1);
+      const double dr_4 = -0.3535533905932737 * sqrt(powr<3>(rhoL)) * powr<2>(hPiL(0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)))) * powr<2>(hSigL(l1)) * hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) - 0.7071067811865475 * powr<2>(l1) * sqrt(rhoL) * powr<2>(hPiL(0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)))) * hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * powr<2>(-powr<-1>(l1) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1)) + 0.7071067811865475 * sqrt(rhoL) * powr<2>(hPiL(0.816496580927726 * l1)) * hSigL(l1) * (0.5 * rhoL * powr<2>(hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))) + (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * powr<2>(-sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * RF(powr<2>(k), 1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * Zq(k) - Zq(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))));
+      const double dr_5 = hPiL(0.816496580927726 * l1);
+      const double dr_6 = 0.5 * rhoL * powr<2>(hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))) + (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * powr<2>(-sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * RF(powr<2>(k), 1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * Zq(k) - Zq(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))));
+      const double dr_7 = rhoL;
       const double dr_8 = hPiL(0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)));
-      const double dr_9 = hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-      const double dr_10 = hPiL(0.816496580927726 * l1);
-      const double dr_11 = rhoL;
-      const double dr_12 = sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-      const double dr_13 = RF(powr<2>(k), 1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1));
-      const double dr_14 = powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1));
-      const double dr_15 = cos1;
-      const double dr_16 = l1;
-      const double dr_17 = 1.414213562373095;
-      const double dr_18 = Zq(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-      DiFfRG::etapil_num::fill(fenv, l1, cos1, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10, dr_11, dr_12, dr_13, dr_14, dr_15, dr_16, dr_17, dr_18);
+      const double dr_9 = -sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * RF(powr<2>(k), 1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * Zq(k) - Zq(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
+      const double dr_10 = l1;
+      DiFfRG::etapil_num::fill(fenv, l1, cos1, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10);
       const auto _interp1 = RFdot(powr<2>(k), powr<2>(l1));
       const auto _interp2 = Zq(k);
       const auto _interp3 = RF(powr<2>(k), powr<2>(l1));
@@ -157,9 +133,11 @@ namespace DiFfRG
     }
     private:
     static inline double ntRe(double x) { return x; }
-    template <class T> static inline double ntRe(const T &z) { return z.real(); }
     static inline double ntIm(double) { return 0.0; }
-    template <class T> static inline double ntIm(const T &z) { return z.imag(); }
+    template <class T> static inline auto ntRe(const T &z) -> decltype(z.real()) { return z.real(); }
+    template <class T> static inline auto ntRe(const T &z) -> decltype(real(z)) requires (!requires { z.real(); }) { return real(z); }
+    template <class T> static inline auto ntIm(const T &z) -> decltype(z.imag()) { return z.imag(); }
+    template <class T> static inline auto ntIm(const T &z) -> decltype(imag(z)) requires (!requires { z.imag(); }) { return imag(z); }
   };
 }
 using DiFfRG::EtaPiL_num_kernel;

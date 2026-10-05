@@ -10,7 +10,7 @@ gen_qcd_za3_147_numeric	6
 gen_qcd_za4_147_numeric	294
 gen_qcd_aqbq147_numeric	108,108,108
 gen_ym_zacbc_numeric	6
-gen_qcd_etapil_numeric	8
+gen_qcd_etapil_numeric	2
 gen_zq_collect	2
 gen_multiterm_proj_numeric	1,0,1,1,1,1,1,2,1,1
 gen_ortho_numeric	5,175

@@ -5,42 +5,39 @@
 #define __device__
 #include <complex>
 #include <cmath>
+#include <algorithm>
 #include <random>
 #include <cstdio>
 #include <cstring>
 #include "EtaPiL_num_kernels.hh"
 template<int N, class T> static inline T powr(T x){ T r=T(1); int n=N<0?-N:N; for(int i=0;i<n;++i) r*=x; return N<0?T(1)/r:r; }
-using std::pow; using std::sqrt; using std::sin; using std::cos; using std::tan; using std::exp; using std::log; using std::fma; using std::fabs;
+using std::pow; using std::sqrt; using std::sin; using std::cos; using std::tan; using std::exp; using std::log; using std::fma; using std::fabs; using std::min; using std::max;
 static inline std::complex<double> fma(const std::complex<double>&a,const std::complex<double>&b,const std::complex<double>&c){return a*b+c;}
 template<class T> using complex = std::complex<T>;
 static inline double ntStub(double seed, double x){ double h = std::sin(seed*0.1031 + x*0.3127 + 1.7)*43758.5453; return 0.4 + 0.5*(h - std::floor(h)); }
 static inline double ntRe(double x) { return x; }
-template <class T> static inline double ntRe(const T &z) { return z.real(); }
 static inline double ntIm(double) { return 0.0; }
-template <class T> static inline double ntIm(const T &z) { return z.imag(); }
+template <class T> static inline auto ntRe(const T &z) -> decltype(z.real()) { return z.real(); }
+template <class T> static inline auto ntRe(const T &z) -> decltype(real(z)) requires (!requires { z.real(); }) { return real(z); }
+template <class T> static inline auto ntIm(const T &z) -> decltype(z.imag()) { return z.imag(); }
+template <class T> static inline auto ntIm(const T &z) -> decltype(imag(z)) requires (!requires { z.imag(); }) { return imag(z); }
 static inline auto probe_full(const double& l1, const double& cos1, const double& k)
 {
   double fenv[(DiFfRG::etapil_num::nenv) > 0 ? (DiFfRG::etapil_num::nenv) : 1];
   const double dr_0 = 0.7071067811865475;
   const double dr_1 = sqrt(ntStub(19694., 0.));
   const double dr_2 = ntStub(69647.99999999999, 1. * l1);
-  const double dr_3 = powr<-1>(l1);
-  const double dr_4 = ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1));
-  const double dr_5 = ntStub(85453., 1. * k);
-  const double dr_6 = ntStub(85453., 1. * l1);
-  const double dr_7 = sqrt(powr<3>(ntStub(19694., 0.)));
+  const double dr_3 = -powr<-1>(l1) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1)) * ntStub(85453., 1. * k) - ntStub(85453., 1. * l1);
+  // clang-format off
+  const double dr_4 = -0.3535533905932737 * sqrt(powr<3>(ntStub(19694., 0.))) * powr<2>(ntStub(69647.99999999999, 1. * l1)) * ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * powr<2>(ntStub(75561.00000000001, 0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)))) - 0.7071067811865475 * powr<2>(l1) * sqrt(ntStub(19694., 0.)) * ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * powr<2>(ntStub(75561.00000000001, 0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)))) * powr<2>(-powr<-1>(l1) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1)) * ntStub(85453., 1. * k) - ntStub(85453., 1. * l1)) + 0.7071067811865475 * sqrt(ntStub(19694., 0.)) * ntStub(69647.99999999999, 1. * l1) * powr<2>(ntStub(75561.00000000001, 0.816496580927726 * l1)) * (0.5 * ntStub(19694., 0.) * powr<2>(ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))) + (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * powr<2>(-sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(85453., 1. * k) - ntStub(85453., 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))));
+  // clang-format on
+  const double dr_5 = ntStub(75561.00000000001, 0.816496580927726 * l1);
+  const double dr_6 = 0.5 * ntStub(19694., 0.) * powr<2>(ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))) + (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * powr<2>(-sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(85453., 1. * k) - ntStub(85453., 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))));
+  const double dr_7 = ntStub(19694., 0.);
   const double dr_8 = ntStub(75561.00000000001, 0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)));
-  const double dr_9 = ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-  const double dr_10 = ntStub(75561.00000000001, 0.816496580927726 * l1);
-  const double dr_11 = ntStub(19694., 0.);
-  const double dr_12 = sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-  const double dr_13 = ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-  const double dr_14 = powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1));
-  const double dr_15 = cos1;
-  const double dr_16 = l1;
-  const double dr_17 = 1.414213562373095;
-  const double dr_18 = ntStub(85453., 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-  DiFfRG::etapil_num::fill(fenv, l1, cos1, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10, dr_11, dr_12, dr_13, dr_14, dr_15, dr_16, dr_17, dr_18);
+  const double dr_9 = -sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(85453., 1. * k) - ntStub(85453., 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
+  const double dr_10 = l1;
+  DiFfRG::etapil_num::fill(fenv, l1, cos1, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10);
   const auto _interp1 = ntStub(27191., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1));
   const auto _interp2 = ntStub(85453., 1. * k);
   const auto _interp3 = ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1));
@@ -63,23 +60,17 @@ static inline auto probe_proj(const double& l1, const double& cos1, const double
   const double dr_0 = 0.7071067811865475;
   const double dr_1 = sqrt(ntStub(19694., 0.));
   const double dr_2 = ntStub(69647.99999999999, 1. * l1);
-  const double dr_3 = powr<-1>(l1);
-  const double dr_4 = ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1));
-  const double dr_5 = ntStub(85453., 1. * k);
-  const double dr_6 = ntStub(85453., 1. * l1);
-  const double dr_7 = sqrt(powr<3>(ntStub(19694., 0.)));
+  const double dr_3 = -powr<-1>(l1) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1)) * ntStub(85453., 1. * k) - ntStub(85453., 1. * l1);
+  // clang-format off
+  const double dr_4 = -0.3535533905932737 * sqrt(powr<3>(ntStub(19694., 0.))) * powr<2>(ntStub(69647.99999999999, 1. * l1)) * ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * powr<2>(ntStub(75561.00000000001, 0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)))) - 0.7071067811865475 * powr<2>(l1) * sqrt(ntStub(19694., 0.)) * ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * powr<2>(ntStub(75561.00000000001, 0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)))) * powr<2>(-powr<-1>(l1) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1)) * ntStub(85453., 1. * k) - ntStub(85453., 1. * l1)) + 0.7071067811865475 * sqrt(ntStub(19694., 0.)) * ntStub(69647.99999999999, 1. * l1) * powr<2>(ntStub(75561.00000000001, 0.816496580927726 * l1)) * (0.5 * ntStub(19694., 0.) * powr<2>(ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))) + (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * powr<2>(-sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(85453., 1. * k) - ntStub(85453., 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))));
+  // clang-format on
+  const double dr_5 = ntStub(75561.00000000001, 0.816496580927726 * l1);
+  const double dr_6 = 0.5 * ntStub(19694., 0.) * powr<2>(ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))) + (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * powr<2>(-sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(85453., 1. * k) - ntStub(85453., 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))));
+  const double dr_7 = ntStub(19694., 0.);
   const double dr_8 = ntStub(75561.00000000001, 0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)));
-  const double dr_9 = ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-  const double dr_10 = ntStub(75561.00000000001, 0.816496580927726 * l1);
-  const double dr_11 = ntStub(19694., 0.);
-  const double dr_12 = sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-  const double dr_13 = ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-  const double dr_14 = powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1));
-  const double dr_15 = cos1;
-  const double dr_16 = l1;
-  const double dr_17 = 1.414213562373095;
-  const double dr_18 = ntStub(85453., 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-  DiFfRG::etapil_num::fill(fenv, l1, cos1, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10, dr_11, dr_12, dr_13, dr_14, dr_15, dr_16, dr_17, dr_18);
+  const double dr_9 = -sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(85453., 1. * k) - ntStub(85453., 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
+  const double dr_10 = l1;
+  DiFfRG::etapil_num::fill(fenv, l1, cos1, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10);
   const auto _interp1 = ntRe(DiFfRG::etapil_num::tr0(fenv));
   const auto _interp2 = ntStub(27191., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1));
   const auto _interp3 = ntStub(85453., 1. * k);
@@ -103,23 +94,17 @@ static inline auto probe_repart(const double& l1, const double& cos1, const doub
   const double dr_0 = 0.7071067811865475;
   const double dr_1 = sqrt(ntStub(19694., 0.));
   const double dr_2 = ntStub(69647.99999999999, 1. * l1);
-  const double dr_3 = powr<-1>(l1);
-  const double dr_4 = ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1));
-  const double dr_5 = ntStub(85453., 1. * k);
-  const double dr_6 = ntStub(85453., 1. * l1);
-  const double dr_7 = sqrt(powr<3>(ntStub(19694., 0.)));
+  const double dr_3 = -powr<-1>(l1) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1)) * ntStub(85453., 1. * k) - ntStub(85453., 1. * l1);
+  // clang-format off
+  const double dr_4 = -0.3535533905932737 * sqrt(powr<3>(ntStub(19694., 0.))) * powr<2>(ntStub(69647.99999999999, 1. * l1)) * ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * powr<2>(ntStub(75561.00000000001, 0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)))) - 0.7071067811865475 * powr<2>(l1) * sqrt(ntStub(19694., 0.)) * ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * powr<2>(ntStub(75561.00000000001, 0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)))) * powr<2>(-powr<-1>(l1) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1)) * ntStub(85453., 1. * k) - ntStub(85453., 1. * l1)) + 0.7071067811865475 * sqrt(ntStub(19694., 0.)) * ntStub(69647.99999999999, 1. * l1) * powr<2>(ntStub(75561.00000000001, 0.816496580927726 * l1)) * (0.5 * ntStub(19694., 0.) * powr<2>(ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))) + (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * powr<2>(-sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(85453., 1. * k) - ntStub(85453., 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))));
+  // clang-format on
+  const double dr_5 = ntStub(75561.00000000001, 0.816496580927726 * l1);
+  const double dr_6 = 0.5 * ntStub(19694., 0.) * powr<2>(ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)))) + (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)) * powr<2>(-sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(85453., 1. * k) - ntStub(85453., 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))));
+  const double dr_7 = ntStub(19694., 0.);
   const double dr_8 = ntStub(75561.00000000001, 0.816496580927726 * sqrt(1.e-6 - 0.001 * cos1 * l1 + powr<2>(l1)));
-  const double dr_9 = ntStub(69647.99999999999, 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-  const double dr_10 = ntStub(75561.00000000001, 0.816496580927726 * l1);
-  const double dr_11 = ntStub(19694., 0.);
-  const double dr_12 = sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-  const double dr_13 = ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-  const double dr_14 = powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1));
-  const double dr_15 = cos1;
-  const double dr_16 = l1;
-  const double dr_17 = 1.414213562373095;
-  const double dr_18 = ntStub(85453., 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
-  DiFfRG::etapil_num::fill(fenv, l1, cos1, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10, dr_11, dr_12, dr_13, dr_14, dr_15, dr_16, dr_17, dr_18);
+  const double dr_9 = -sqrt(powr<-1>(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(80376., 1. * powr<2>(k) + 1.618033988749895 * (1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1))) * ntStub(85453., 1. * k) - ntStub(85453., 1. * sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
+  const double dr_10 = l1;
+  DiFfRG::etapil_num::fill(fenv, l1, cos1, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5, dr_6, dr_7, dr_8, dr_9, dr_10);
   const auto _interp1 = ntRe(DiFfRG::etapil_num::tr0(fenv));
   const auto _interp2 = ntStub(27191., 1. * powr<2>(k) + 1.618033988749895 * powr<2>(l1));
   const auto _interp3 = ntStub(85453., 1. * k);
