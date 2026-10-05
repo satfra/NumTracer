@@ -169,6 +169,8 @@ DEFAULT_FLOWS=(
   # coefficient — so nothing there exercises a spatial momentum going through a Dirac trace. Emits
   # three kernels (two non-zero oracle checks plus the ntSPS-vs-leaf zero identity).
   gen_spatialvec_numeric
+  # A spinor line closed on one head, the chiral condensate (ctest selftrace_num). Cheap, hand-built.
+  gen_selftrace_numeric
 )
 FLOWS=("$@")
 [[ ${#FLOWS[@]} -eq 0 ]] && FLOWS=("${DEFAULT_FLOWS[@]}")

@@ -178,7 +178,10 @@ allSpinorLabels[e_] := DeleteDuplicates @ Flatten @ Cases[e, h_?tensorQ :> spino
    contracts pairwise BETWEEN tensors and never self-contracts one, so we relabel
    the second occurrence and insert the matching identity (Lorentz metric for a
    Lorentz index, adjoint delta for a colour index): P^mu_mu = P^{mu nu} d_{mu nu}.
-   This keeps every index appearing on two distinct tensors, as the engine needs. *)
+   This keeps every index appearing on two distinct tensors, as the engine needs.
+   The identity follows the sector of the repeated LABEL, not of the head: a Dirac head carries
+   Lorentz and spinor labels, and a spinor line closed on one head (gamma[mu, a, a] in tr S, the
+   chiral condensate) must close with ntDeltaDirac. *)
 (* A SUM vertex (tensorQ[Plus] is False) passes through untouched, so a repeated index INSIDE a
    summand is never split. No flow produces one, and labelCensus's Plus branch would flag it; fixing
    it here would need every summand's free-index set kept aligned, which this local rewrite cannot see. *)
@@ -186,15 +189,15 @@ splitSelfTraces[factors_List] := Module[{res = {}, conns = {}},
   Function[f, If[! tensorQ[f], AppendTo[res, f],
     (* The connecting identity reuses the SAME group rank N as the head it closes: an
        adjoint group self-trace closes with ntSUNDeltaAdj[N,..], a fundamental one with
-       ntSUNDeltaFund[N,..], a Lorentz/Dirac one with the metric. *)
+       ntSUNDeltaFund[N,..], a Lorentz label with the metric, a spinor label with ntDeltaDirac. *)
     Module[{dups, relabeled = f, conn = Which[
         adjointSUNQ[f],     With[{n = sunRankOf[f]}, ntSUNDeltaAdj[n, ##] &],
         fundamentalSUNQ[f], With[{n = sunRankOf[f]}, ntSUNDeltaFund[n, ##] &],
-        True,               ntMetric]},                          (* Lorentz/Dirac (unchanged) *)
+        True,               ntMetric]},                          (* Lorentz labels of any head *)
       dups = Cases[Tally[labelsOf[f]], {l_, c_} /; c >= 2 :> l];
       Do[With[{fresh = Unique["st"]},
            relabeled = ReplacePart[relabeled, Last[Position[relabeled, l, {1}]] -> fresh];  (* relabel 2nd occurrence *)
-           AppendTo[conns, conn[l, fresh]]], {l, dups}];
+           AppendTo[conns, If[MemberQ[spinorLabelsHead[f], l], ntDeltaDirac, conn][l, fresh]]], {l, dups}];
       AppendTo[res, relabeled]]]] /@ factors;
   Join[res, conns]
 ];
