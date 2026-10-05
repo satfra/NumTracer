@@ -69,6 +69,11 @@ scaleStr[str_, 1] := str;
 
 scaleStr[str_, 1.] := str;
 
+(* a complex s is emitted as Cx{Re, Im}; a real s keeps its exact spelling (unit TUs are packed by
+   text length). The FreeQ guard keeps the real case nearly free. *)
+scaleStr[str_, s_ /; !FreeQ[s, Complex] && ntCplxQ[s]] :=
+  "sc<numtracer::Lit<numtracer::Cx{" <> cppNum[Re[s]] <> ", " <> cppNum[Im[s]] <> "}>>(" <> str <> ")";
+
 scaleStr[str_, s_] := "sc<numtracer::Lit<numtracer::Cx{" <> cppNum[s] <> ", 0.0}>>(" <> str <> ")";
 
 (* no tensor factor at all (a pure-scalar product): no net, like compileLorentz's scalar branch *)
@@ -258,7 +263,9 @@ chunkLorentz[lorExpr_, ids_, env_, nonzeroCompMask_] := Which[
     lorExpr === 0,
       {},
     scalarQ[lorExpr],
-      {{"konst(" <> cppNum[lorExpr] <> ")", 1}},
+      {{If[!FreeQ[lorExpr, Complex] && ntCplxQ[lorExpr],
+          "LorentzNet{LorentzTerm{numtracer::Cx{" <> cppNum[Re[lorExpr]] <> "," <> cppNum[Im[lorExpr]] <> "}, {}}}",
+          "konst(" <> cppNum[lorExpr] <> ")"], 1}},
     True,
       Module[{
         terms =

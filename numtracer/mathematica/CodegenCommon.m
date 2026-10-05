@@ -42,6 +42,12 @@ ntWolframRssMB[] := Quiet @ Check[
 
 cppNum[x_] := ToString[CForm[If[MachineNumberQ[x], SetPrecision[x, 17], N[x, 17]]]];
 
+(* Whether a number about to be emitted has an imaginary part. A complex momentum component (a quark
+   frequency p0 - I muq) or an explicit I in a vertex makes coefficients complex, and cppNum of a
+   Complex prints CForm's `Complex(a,b)`, which is not C++. Numeric-only: anything symbolic keeps the
+   call site's existing handling. *)
+ntCplxQ[x_] := NumericQ[x] && TrueQ[Im[N[x]] != 0];
+
 (* ---- sub-term scalars as PACKED machine complex ------------------------------------------------
    Dense flows carry hundreds of millions of sub-term scalars; mixed exact/precision-17 numbers do not
    pack (~125 vs 16 bytes each). cppNum prints a machine double exactly, so values survive, but the
@@ -127,8 +133,10 @@ $ntCppLeakPatterns =
     "Missing[",
     (* A CForm'd Mathematica List: the generic signature of an unresolved consumer-side head (a
        FunKit `dressing[...]`, anything the flow forgot to map), which cannot be enumerated. Lowered
-       C++ builds aggregates with braces and has no identifier `List`. *)
-    RegularExpression["(?<![A-Za-z0-9_])List\\("],
+       C++ builds aggregates with braces and has no identifier `List`. Complex( is CForm's spelling
+       of a complex number that reached a slot assuming a real one (see ntCplxQ); merged into one
+       alternative, since every extra alternative slows the scan measurably. *)
+    RegularExpression["(?<![A-Za-z0-9_])(?:List|Complex)\\("],
     (* A scoped symbol (`rho$1767`, `tr$2994`, `ntRad$3`): nullary, so the List( rule misses it, and
        GCC/Clang ACCEPT `$` in identifiers, so it can compile into a wrong kernel. Producers include
        ntSplitRealImag's imaginary-unit stand-in, ntProjectIntegrand's `Unique["tr$"]` placeholders
