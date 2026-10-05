@@ -616,6 +616,14 @@ if(NUMTRACER_BUILD_TESTS)
                      -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_flavour_contract.wls")
     set_tests_properties(wolfram_flavour_contract PROPERTIES LABELS wolfram TIMEOUT 300)
 
+    # k-only lookup hoisting: ntPatchHoistWrappers must patch DiFfRG's CT_get.cc for ANY coordinate
+    # list (none, p0, p0 p, ...) and abort on a wrapper it cannot recognise; an unpatched wrapper only
+    # fails much later, when the model is compiled.
+    add_test(NAME wolfram_hoist_wrappers
+             COMMAND "${NT_WOLFRAM_EXE}" -noprompt
+                     -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_hoist_wrappers.wls")
+    set_tests_properties(wolfram_hoist_wrappers PROPERTIES LABELS wolfram TIMEOUT 300)
+
     # Spinor-loop ORIENTATION. A closed loop is emitted as a left-to-right 4x4 matrix product, and
     # orderDiracFacs recovers its order by walking the loop UNDIRECTED — so the walk always closes
     # and the pre-existing "loop did not close" guard cannot see an INCONSISTENT arrow structure

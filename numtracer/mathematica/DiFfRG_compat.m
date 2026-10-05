@@ -208,15 +208,20 @@ MakeNTKernelDiFfRG::mixtype = "Parameters declare more than one interpolator typ
      CT_map_*.cc:  return integrator.map(dest, coordinates, <tail>);
        ->          const auto _nth = <name>_kernel<Regulator>::ntHoisted(<tail>);
                    return integrator.map(dest, coordinates, <tail>, _nth[0], ..., _nth[M-1]);
-     CT_get.cc:    integrator.get(dest, p, <tail>);              (same treatment)
+     CT_get.cc:    integrator.get(dest, <coordinates...>, <tail>);   (same treatment)
 
-   <tail> is exactly (k, scalars..., dressings...) — ntHoisted's parameter list by construction.
+   <tail> is exactly (k, scalars..., dressings...) — ntHoisted's parameter list by construction. The
+   coordinates are the flow's "CoordinateArguments" (none, `p`, `p0, p`, ...), so the get form is
+   anchored on `k`. A wrapper left unpatched would only fail when the MODEL compiles, inside a DiFfRG
+   integrator header ("too few arguments"), so an unrecognised wrapper aborts here instead.
    `Regulator` is the public alias the scaffold puts in the integrator class; the wrapper body
    resolves <name>_kernel through the class's enclosing namespace (DiFfRG). The patch is
    idempotent by the ntHoisted guard (a re-run of the scaffold rewrites the files fresh anyway). *)
 
+ntPatchHoistWrappers::unpatched = "k-only hoist: the wrapper(s) `1` hold no integrator call of the form `integrator.map(dest, coordinates, k, ...)` / `integrator.get(dest, <coordinates...>, k, ...)`, so they cannot pass the `2` hoisted lookup(s) the kernel now expects. The model would fail to compile inside the DiFfRG integrator. Rerun with \"HoistLoopConstLookups\" -> False, or adapt the patterns in ntPatchHoistWrappers.";
+
 ntPatchHoistWrappers[kernelDir_String, name_String, m_Integer] :=
-  Module[{kcls = name <> "_kernel<Regulator>", idxs, files, txt, patched, nPatched = 0, hdr, hdrTxt, hdrPatched},
+  Module[{kcls = name <> "_kernel<Regulator>", idxs, files, txt, patched, nPatched = 0, unpatched = {}, hdr, hdrTxt, hdrPatched},
     idxs = StringRiffle[("_nth[" <> ToString[#] <> "]")& /@ Range[0, m - 1], ", "];
 (* Make the <name>.hh tuple forwarders take the dressings by reference (`const auto&...t`), so
    ntHoisted gets no interpolator copies. A pure cost fix (DiFfRG interpolators are shallow-copyable);
@@ -241,12 +246,18 @@ ntPatchHoistWrappers[kernelDir_String, name_String, m_Integer] :=
       patched = StringReplace[txt, {
         RegularExpression["return (integrator\\w*)\\.map\\(dest, coordinates,\\s*(.*?)\\);"] :>
           "const auto _nth = " <> kcls <> "::ntHoisted($2);\n  return $1.map(dest, coordinates, $2, " <> idxs <> ");",
-        RegularExpression["(integrator\\w*)\\.get\\(dest, p,\\s*(.*?)\\);"] :>
-          "const auto _nth = " <> kcls <> "::ntHoisted($2);\n  $1.get(dest, p, $2, " <> idxs <> ");"}];
+        (* $2 = the coordinates, each with its leading whitespace (the scaffold puts two spaces
+           before k); re-emitted single-spaced, so `get(dest, p, k, ...)` is spelled as before *)
+        RegularExpression["(integrator\\w*)\\.get\\(dest,((?:\\s*\\w+,)*?)\\s*k,\\s*(.*?)\\);"] :>
+          "const auto _nth = " <> kcls <> "::ntHoisted(k, $3);\n  $1.get(dest,$2 k, $3, " <> idxs <> ");"}];
       If[patched =!= txt,
         Export[f, patched, "Text"];
-        nPatched++],
+        nPatched++,
+        AppendTo[unpatched, FileNameTake[f]]],
       {f, files}];
+    If[unpatched =!= {},
+      Message[ntPatchHoistWrappers::unpatched, StringRiffle[unpatched, ", "], m];
+      Abort[]];
     Print["[NumTracer] ", name, ": k-only hoist — ", m, " lookup(s) hoisted; ", nPatched,
       " wrapper TU(s) patched to pass host-evaluated values."]];
 
