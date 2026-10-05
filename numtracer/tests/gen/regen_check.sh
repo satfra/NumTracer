@@ -174,6 +174,8 @@ DEFAULT_FLOWS=(
   gen_cplxenv_numeric
   # A spinor line closed on one head, the chiral condensate (ctest selftrace_num). Cheap, hand-built.
   gen_selftrace_numeric
+  # Trace fusion of diag-dressed diagrams (ctest diagfuse_num). Cheap, hand-built.
+  gen_diagfuse_numeric
 )
 FLOWS=("$@")
 [[ ${#FLOWS[@]} -eq 0 ]] && FLOWS=("${DEFAULT_FLOWS[@]}")

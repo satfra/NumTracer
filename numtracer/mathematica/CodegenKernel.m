@@ -782,34 +782,45 @@ ntDiagDressedQ[colourNets_] := AnyTrue[colourNets, StringContainsQ[#, ".diag"]&]
    constant baked into the trace: instead we (a) replace the diagram's colour net by the IDENTITY
    (so the generator folds colv=1 and the trace stays colour-free), and (b) build a runtime token
    `Σ_t coeff_t Π name(scale)` — ordinary scalar-dressing tokens — multiplied into the integrand.
-   The Dirac/Lorentz trace is still computed ONCE, not a diagram per component. *)
-ntApplyDiagDressings[colourNets_, diagDrExprs_, frame_, incDir_] :=
-  Module[{nets = colourNets, drx = diagDrExprs, colourDressingToken = Table[1, {Length[colourNets]}], dressedIdx},
+   The Dirac/Lorentz trace is still computed ONCE, not a diagram per component.
+   A token that comes back as a plain NUMBER (a pure pin such as {1 -> 1/2, 2 -> -1/2}) is no runtime
+   dressing: it is folded into the net's coefficient and the token reset to 1, so the net groups like
+   an undressed one. FACTOR nets are excluded: their coefficient is 1 by construction and their token
+   is applied through FactorGroupsOf (ntAssembleIntegrand), so folding it would drop it. *)
+ntApplyDiagDressings[colourNets_, diagDrExprs_, netCoeff_, factorNets_, frame_, incDir_] :=
+  Module[{nets = colourNets, drx = diagDrExprs, coeff = netCoeff,
+          colourDressingToken = Table[1, {Length[colourNets]}], dressedIdx, folded},
     dressedIdx = Select[Range[Length[nets]], StringContainsQ[nets[[#]], ".diag"]&];
     If[dressedIdx =!= {},
-      MapThread[
-        Function[{d, p},
-          colourDressingToken[[d]] =
-            Total[
-              Function[term,
-                  (term[[1]] + I term[[2]]) *
-                    (Times @@ (ntResolveFrame[drx[[# + 1]], frame]& /@ term[[3]]))
-                ] /@ p];
-          nets[[d]] = "SUNNet{}"],
-        {dressedIdx, ntFoldDiagColourNets[nets[[dressedIdx]], incDir]}];
-      ntLog["[prof] diagonal-dressed diagrams: ", Length[dressedIdx], " (per-component colour-sum folded via sun_value_dressed seam)"]
+      (* whole-list Part assignments: a per-net write into the unpacked token list is O(n^2) *)
+      colourDressingToken[[dressedIdx]] =
+        Function[p,
+          Total[
+            Function[term,
+                (term[[1]] + I term[[2]]) *
+                  (Times @@ (ntResolveFrame[drx[[# + 1]], frame]& /@ term[[3]]))
+              ] /@ p]] /@ ntFoldDiagColourNets[nets[[dressedIdx]], incDir];
+      nets[[dressedIdx]] = "SUNNet{}";
+      folded = Complement[Select[dressedIdx, NumericQ[colourDressingToken[[#]]]&], factorNets + 1];
+      If[folded =!= {},
+        coeff[[folded]] = coeff[[folded]] colourDressingToken[[folded]];
+        colourDressingToken[[folded]] = 1];
+      ntLog["[prof] diagonal-dressed diagrams: ", Length[dressedIdx], " (per-component colour-sum folded via sun_value_dressed seam; ",
+        Length[folded], " constant token(s) folded into the coefficient)"]
     ];
-    ntStageResult["ntApplyDiagDressings", {"ColourNets", "ColourDressingToken"},
-      <|"ColourNets" -> nets, "ColourDressingToken" -> colourDressingToken|>]];
+    ntStageResult["ntApplyDiagDressings", {"ColourNets", "ColourDressingToken", "NetCoeff"},
+      <|"ColourNets" -> nets, "ColourDressingToken" -> colourDressingToken, "NetCoeff" -> coeff|>]];
 
 (* ---- STAGE 5: trace grouping ------------------------------------------------------------------
    Group diagrams (0-based) into traces. Colour is folded numerically into the generator polynomial,
-   so diagrams FUSE by identical dressing coeff and the kernel evaluates ~one polynomial per Feynman
-   graph. Exceptions stay singletons: diag-dressed diagrams (colourDressingToken =!= 1) carry a
-   per-diagram RUNTIME colour-sum token (they cannot fuse by dressing coefficient alone, the token differs).
-   factored diagrams (factorIdsOf =!= None — a trace times disconnected factor components)
-   likewise stay singletons: each carries a per-diagram multiplicative trace, so it must not fuse
-   with another diagram's entries.
+   so diagrams FUSE and the kernel evaluates ~one polynomial per Feynman graph. ntAssembleIntegrand
+   multiplies each group's trace by its REPRESENTATIVE's coefficient and colour token, so diagrams
+   fuse exactly when they share both: the key is {netCoeff, colourDressingToken} (a diag-dressed
+   diagram's runtime colour-sum token rides the key). GatherBy is stable, so with no tokens the
+   partition and its order are those of netCoeff alone.
+   Factored diagrams (factorIdsOf =!= None — a trace times disconnected factor components) stay
+   singletons: each carries a per-diagram multiplicative trace, so it must not fuse with another
+   diagram's entries.
    The FACTOR nets (P, indices in factorNets) are EXCLUDED from the additive groups and appended as
    their own trace groups at the tail — generated as traces but referenced only multiplicatively via
    factorIdsOf, never summed into the integrand. NAdditiveGroups marks the additive/factor boundary;
@@ -820,9 +831,15 @@ ntGroupTraces[netCoeff_, colourDressingToken_, factorIdsOf_, factorNets_, factor
   Module[{fusable, singletons, additivePos, factorPos = (# + 1)& /@ factorNets, additiveGroups,
           factorGroups, nAdditiveGroups},
     additivePos = Complement[Range[Length[netCoeff]], factorPos];
-    fusable = Select[additivePos, colourDressingToken[[#]] === 1 && factorIdsOf[[#]] === None&];
-    singletons = Select[additivePos, colourDressingToken[[#]] =!= 1 || factorIdsOf[[#]] =!= None&];
-    additiveGroups = Join[(# - 1)& /@ GatherBy[fusable, netCoeff[[#]]&], List /@ (singletons - 1)];
+    fusable = Select[additivePos, factorIdsOf[[#]] === None&];
+    singletons = Select[additivePos, factorIdsOf[[#]] =!= None&];
+    additiveGroups =
+      Join[
+        (# - 1)& /@
+          If[colourDressingToken === ConstantArray[1, Length[colourDressingToken]],
+            GatherBy[fusable, netCoeff[[#]]&],   (* no token anywhere: the single key is 2.4x cheaper *)
+            GatherBy[fusable, {netCoeff[[#]], colourDressingToken[[#]]}&]],
+        List /@ (singletons - 1)];
 (* Each disconnected factor COMPONENT fuses into trace groups gathered by {component, COLOUR
    TOKEN}. A diag-dressed entry carries a runtime colour-sum token, which the assembly can only
    apply to a whole group; gathering by component alone would silently drop it. Per component:
@@ -1483,18 +1500,19 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
       If[o["RunOnline"] || ntDiagDressedQ[nets["ColourNets"]],
         ntResolveIncludeDir[o["IncludeDir"]],
         None];
-    dd = ntApplyDiagDressings[nets["ColourNets"], nets["DiagDrExprs"], fr["Frame"], incDir];
-    grp = ntGroupTraces[nets["NetCoeff"], dd["ColourDressingToken"], nets["FactorIdsOf"], nets["FactorNets"],
+    dd = ntApplyDiagDressings[nets["ColourNets"], nets["DiagDrExprs"], nets["NetCoeff"], nets["FactorNets"],
+           fr["Frame"], incDir];
+    grp = ntGroupTraces[dd["NetCoeff"], dd["ColourDressingToken"], nets["FactorIdsOf"], nets["FactorNets"],
             nets["FactorCompOf"]];
     hoist = ntHoistLoopConstLookups[
-              ntAssembleIntegrand[grp["Groups"], grp["NAdditiveGroups"], grp["FactorGroupsOf"], nets["NetCoeff"],
+              ntAssembleIntegrand[grp["Groups"], grp["NAdditiveGroups"], grp["FactorGroupsOf"], dd["NetCoeff"],
                 dd["ColourDressingToken"], nets["FactorIdsOf"], ntTraceRef[o["NsHome"]]]["Integrand"],
               fr["Args"], o["Dressings"], o["HoistLoopConstLookups"]];
     integrand = hoist["Integrand"];
 (* a package global read several call layers down (ntPureIntegrand/ntRePartIntegrand ->
    ntProjectIntegrand); assigned unconditionally so a flow never inherits another's setting. *)
     $ntComplexRuntimeProjection = o["ComplexRuntimeProjection"];
-    prune = ntPruneSpec[nets["NetCoeff"], grp["Groups"], complexQ, o["Offline"],
+    prune = ntPruneSpec[dd["NetCoeff"], grp["Groups"], complexQ, o["Offline"],
               o["PruneRealTraces"], o["RealProbe"], o["RunGenerator"]];
     nGrp = Length[grp["Groups"]];
 (* surface the post-net-build shape, and abort on empty nets / empty grouping rather than emit a

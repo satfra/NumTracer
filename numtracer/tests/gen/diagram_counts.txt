@@ -37,3 +37,4 @@ gen_sigl_dirac	1
 gen_spatialvec_numeric	1,1,2,1
 gen_cplxenv_numeric	1,1,1
 gen_selftrace_numeric	1,1
+gen_diagfuse_numeric	4,4,4,4

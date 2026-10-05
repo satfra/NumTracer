@@ -226,7 +226,7 @@ ntRunProbe[srcFile_String, tracesDir_String, verdictFile_ : None, macro_ : None]
 ntFoldDiagColourNets::fail = "Diagonal colour-dressing helper `1` failed (rc=`2`):\n`3`";
 
 ntFoldDiagColourNets[colnetStrs_, includeDir_] :=
-  Module[{cxx = resolveGenCxx[], src, cppFile, bin, rc, out, lines, res = {}, cur = Null, num},
+  Module[{cxx = resolveGenCxx[], src, cppFile, bin, rc, out, lines, num},
     num[s_] := ToExpression[StringReplace[s, {"e+" -> "*^", "e-" -> "*^-", "e" -> "*^"}]];
     src =
       StringJoin[
@@ -263,24 +263,11 @@ ntFoldDiagColourNets[colnetStrs_, includeDir_] :=
     out = Import[bin <> ".out", "Text"];
     Quiet[DeleteFile /@ Select[{cppFile, bin, bin <> ".cerr", bin <> ".out"}, FileExistsQ]];
     lines = Select[StringSplit[StringTrim[out], "\n"], # =!= ""&];
-    Do[
-      Module[{tk = StringSplit[ln]},
-        Which[
-          tk[[1]] === "NET",
-            If[cur =!= Null,
-              AppendTo[res, cur]];
-            cur = {},
-          tk[[1]] === "T",
-            Module[{re = num[tk[[2]]], im = num[tk[[3]]], m = ToExpression[tk[[4]]]},
-              AppendTo[
-                cur,
-                {
-                  re,
-                  im,
-                  If[m === 0,
-                    {},
-                    ToExpression /@ tk[[5 ;; 4 + m]]]}]]]],
-      {ln, lines}];
-    If[cur =!= Null,
-      AppendTo[res, cur]];
-    res];
+    (* one block per "NET" line, holding its "T" term lines; parsed whole, not appended per line *)
+    Map[
+      Function[ln,
+        Module[{tk = StringSplit[ln], m},
+          m = ToExpression[tk[[4]]];
+          {num[tk[[2]]], num[tk[[3]]], If[m === 0, {}, ToExpression /@ tk[[5 ;; 4 + m]]]}]],
+      Rest /@ Split[lines, !StringStartsQ[#2, "NET"]&],
+      {2}]];
