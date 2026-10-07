@@ -12,7 +12,7 @@
           plain class with consumer-supplied regulators).
      UpdateNTFlows[name]
         = DiFfRG UpdateFlows[name]  +  an idempotent flows/CMakeLists.txt patch (find_package +
-          NumTracer link libs + UNITY_BUILD OFF), bundled so the patch can never be left un-applied.
+          NumTracer link libs + numtrace target), bundled so the patch can never be left un-applied.
 
    Loaded by NumTracer.m inside Begin["`Private`"]; the public symbols are declared there. DiFfRG
    symbols are referenced by explicit context so they bind to DiFfRG's whether it is loaded before
@@ -164,6 +164,9 @@ Options[MakeNTKernelDiFfRG] =
     "ComputeType" -> "double",
     "ctype" -> Automatic, (* deprecated spelling of "ComputeType" *)
     "Type" -> "double",
+    (* Forwarded to DiFfRG's MakeKernel: also emit map_points(dest, args...), the integral at many points in one
+       launch, for a model's batched evaluate_batch. *)
+    "MapPoints" -> False,
     "Decorator" -> Automatic, (* Automatic -> derived from Device *)
     "FlowDirectory" -> Automatic, (* Automatic -> DiFfRG`CodeTools`flowDir *)
     "GenDirectory" -> Automatic, (* Automatic -> a "gen" sibling of the flow directory *)
@@ -209,6 +212,9 @@ MakeNTKernelDiFfRG::mixtype = "Parameters declare more than one interpolator typ
        ->          const auto _nth = <name>_kernel<Regulator>::ntHoisted(<tail>);
                    return integrator.map(dest, coordinates, <tail>, _nth[0], ..., _nth[M-1]);
      CT_get.cc:    integrator.get(dest, <coordinates...>, <tail>);   (same treatment)
+     CT_map_points.cc: integrator.map_points(dest, <args>);
+       ->          the hoisted values once, or per point if any argument is per point (a PointArg), appended
+                   as further PointArgs.
 
    <tail> is exactly (k, scalars..., dressings...) — ntHoisted's parameter list by construction. The
    coordinates are the flow's "CoordinateArguments" (none, `p`, `p0, p`, ...), so the get form is
@@ -240,10 +246,13 @@ ntPatchHoistWrappers[kernelDir_String, name_String, m_Integer] :=
             hdr, "; the hoisted-lookup host evaluation may receive interpolator copies (a cost, ",
             "not an error)."]]];
     files = FileNames[{"CT_map_*.cc", "CT_get.cc"}, FileNameJoin[{kernelDir, "src"}]];
+    (* CT_map_*.cc also matches CT_map_points.cc, which gets its own pattern below. *)
     Do[
       txt = Import[f, "Text"];
       If[StringContainsQ[txt, "ntHoisted"], Continue[]];
       patched = StringReplace[txt, {
+        RegularExpression["(integrator\\w*)\\.map_points\\(dest,\\s*(.*?)\\);"] :>
+          ntHoistMapPoints["$1", "$2", kcls, m],
         RegularExpression["return (integrator\\w*)\\.map\\(dest, coordinates,\\s*(.*?)\\);"] :>
           "const auto _nth = " <> kcls <> "::ntHoisted($2);\n  return $1.map(dest, coordinates, $2, " <> idxs <> ");",
         (* $2 = the coordinates, each with its leading whitespace (the scaffold puts two spaces
@@ -260,6 +269,23 @@ ntPatchHoistWrappers[kernelDir_String, name_String, m_Integer] :=
       Abort[]];
     Print["[NumTracer] ", name, ": k-only hoist — ", m, " lookup(s) hoisted; ", nPatched,
       " wrapper TU(s) patched to pass host-evaluated values."]];
+
+(* The body of a patched map_points wrapper: ntHoisted evaluated once if all of its arguments are shared, otherwise at
+   every point (each argument is a DiFfRG::PointArg, whose [i] is the shared value or that of point i), its m values
+   then passed on as m further arguments. *)
+ntHoistMapPoints[integrator_String, argString_String, kcls_String, m_Integer] :=
+  Module[{args = StringTrim /@ StringSplit[argString, ","], tail, at, perPoint, cols, pass},
+    (* ntHoisted takes (k, scalars..., dressings...): drop the coordinate arguments in front of k, as for get. *)
+    tail = Drop[args, First[FirstPosition[args, "k", {1}]] - 1];
+    at[i_] := StringRiffle[(# <> "[" <> i <> "]")& /@ tail, ", "];
+    perPoint = StringRiffle[(# <> ".per_point()")& /@ tail, " || "];
+    cols = StringJoin[Table["  std::vector<double> _nth" <> ToString[j] <> "(_m);\n", {j, 0, m - 1}]];
+    pass = StringRiffle[Table["_m == 1 ? DiFfRG::PointArg<double>(_nth" <> ToString[j] <> "[0]) : DiFfRG::PointArg<double>(_nth" <> ToString[j] <> ")", {j, 0, m - 1}], ", "];
+    "const size_t _m = (" <> perPoint <> ") ? dest.size() : 1;\n" <> cols <>
+    "  for (size_t _i = 0; _i < _m; ++_i) {\n    const auto _nth = " <> kcls <> "::ntHoisted(" <> at["_i"] <> ");\n" <>
+    StringJoin[Table["    _nth" <> ToString[j] <> "[_i] = _nth[" <> ToString[j] <> "];\n", {j, 0, m - 1}]] <>
+    "  }\n  " <> integrator <> ".map_points(dest, " <> StringRiffle[args, ", "] <> ", " <> pass <> ");"
+  ];
 
 (* A plain real scalar parameter (k, T, etaQ, ...), as opposed to a dressing's interpolator type. *)
 ntScalarTypeQ[t_] := MemberQ[{"double", "float"}, t];
@@ -391,7 +417,8 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
       "Coordinates" -> OptionValue["Coordinates"],
       "CoordinateArguments" -> OptionValue["CoordinateArguments"],
       "Regulator" -> OptionValue["Regulator"],
-      "RegulatorOpts" -> OptionValue["RegulatorOpts"]};
+      "RegulatorOpts" -> OptionValue["RegulatorOpts"],
+      "MapPoints" -> OptionValue["MapPoints"]};
     Internal`InheritedBlock[{DiFfRG`CodeTools`Directory`flowDir},
       DiFfRG`CodeTools`Directory`flowDir = flowDir;
       ntReportDiFfRG[name, flowDir, Last @ ntCapturePrint[DiFfRG`CodeTools`MakeKernel`MakeKernel[body, Sequence @@ diffrgOpts]]]];
@@ -508,7 +535,7 @@ NTFlowSelectionReport[] :=
    UpdateNTFlows — DiFfRG UpdateFlows + idempotent NumTracer CMake patch (atomic).
    ============================================================================================ *)
 
-Options[UpdateNTFlows] = {"FlowDirectory" -> Automatic, "NumTracerHints" -> "~/.local/share/NumTracer", "UnityBuild" -> False};
+Options[UpdateNTFlows] = {"FlowDirectory" -> Automatic, "NumTracerHints" -> "~/.local/share/NumTracer"};
 
 UpdateNTFlows::nocmake = "Expected the flows CMakeLists at `1` (generate a flow first).";
 
@@ -527,13 +554,10 @@ UpdateNTFlows[name_String, opts : OptionsPattern[]] :=
       Abort[]
     ];
     txt = Import[f, "Text"];
-    (* (2) idempotent patch: find_package(NumTracer) + link NumTracer::* + UNITY_BUILD OFF *)
+    (* (2) idempotent patch: find_package(NumTracer) + link NumTracer::* *)
     If[!StringContainsQ[txt, "find_package(NumTracer"],
       txt = StringReplace[txt, "add_library(" <> name <> " STATIC ${" <> name <> "_SOURCES})" -> "find_package(NumTracer REQUIRED HINTS " <> OptionValue["NumTracerHints"] <> ")\n\n" <> "add_library(" <> name <> " STATIC ${" <> name <> "_SOURCES})"];
       txt = StringReplace[txt, "target_link_libraries(" <> name <> " DiFfRG::DiFfRG " <> name <> "_nowarn)" -> "target_link_libraries(" <> name <> " DiFfRG::DiFfRG " <> name <> "_nowarn NumTracer::NumTracer)"]
-    ];
-    If[!TrueQ[OptionValue["UnityBuild"]],
-      txt = StringReplace[txt, "UNITY_BUILD ON" -> "UNITY_BUILD OFF"]
     ];
     (* (2b) the `numtrace` target: reads every flows/<Name>/numtrace.json, builds and runs the
        generator (and probe) of each flow whose switch is still 0, and makes the flows library depend
@@ -550,11 +574,7 @@ UpdateNTFlows[name_String, opts : OptionsPattern[]] :=
     ];
     (* (4) NumTracer-native confirmation, in place of DiFfRG's captured chatter *)
     Print[
-      "[NumTracer] " <> name <> ": flows/CMakeLists.txt regenerated + NumTracer patch applied " <> "(find_package + NumTracer::* link" <>
-        If[!TrueQ[OptionValue["UnityBuild"]],
-          " + UNITY_BUILD OFF",
-          ""
-        ] <> ")"
+      "[NumTracer] " <> name <> ": flows/CMakeLists.txt regenerated + NumTracer patch applied " <> "(find_package + NumTracer::* link + numtrace target)"
     ];
     f
   ];
