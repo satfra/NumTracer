@@ -224,7 +224,8 @@ Options[mkGenerateKernel] =
     "KernelNamespace" -> "numtracer_kernels",
 (* Where `complex`/`compute` are looked up via `using`. *)
     "SupportNamespace" -> "numtracer",
-(* Dressing-parameter type: Automatic = `const auto&`, or a concrete type string. *)
+(* Dressing-parameter type: Automatic = `const auto&`, or a concrete type string, which also makes
+   parameters typed in their own entry use that type. *)
     "DressingType" -> Automatic,
 (* Opt-in: share one coordinate transform among lookups at the same argument (see
    ntShareInterpIndices). Needs index()/at() on the interpolator, a DiFfRG property. *)
@@ -295,11 +296,15 @@ ntRuntimeParamType[entry_, adNames_List, scalarNames_List, dressTy_] :=
   With[{nm = ntParamName[If[AssociationQ[entry], entry["Name"], entry]]},
     Which[
 (* `auto` is not cosmetic: it makes the emitted function an abbreviated template, which is the only
-   reason kernel()/constant() can bind autodiff::real from DiFfRG's integrator_AD twin. *)
+   reason kernel()/constant() can bind autodiff::real from DiFfRG's integrator_AD twin. Dressings are
+   `auto` too unless "DressingType" names a type: DiFfRG's integrators pass a kernel the compact
+   handle of each interpolator, in the kernel's precision, while the host-side ntHoisted() receives
+   the interpolators themselves. *)
       MemberQ[adNames, nm], "auto",
       MemberQ[scalarNames, nm], $ntRealT,
+      dressTy === "auto", "auto",
       AssociationQ[entry], entry["Type"],
-      True, dressTy[nm]]];
+      True, dressTy]];
 
 MakeNTKernel::adtype = "ntRuntimeParamType: `1` runtime parameter(s) named in ADParams were not typed auto (const double& instead of const auto&). The kernel would still compile and run, but its autodiff twin (AD_get.cc in the consumer) cannot bind autodiff::real. Usual cause: the AD name did not survive the ToString/SymbolName normalisation, or ADParams names something that is not a runtime parameter. Offending name(s) and their types:\n`2`";
 
@@ -961,18 +966,8 @@ ntMkParam[nm_, ty_] := <|
    dressing — including the named per-component diagonal dressings (ntSUNDiag{Fund,Adj}) — is an
    ordinary scalar interpolator kernel parameter. *)
 ntKernelSignature[o_, args_, fillArgs_, hoistCalls_, hoistSyms_, hasDr_, drAtoms_] :=
-  Module[{sigArgs, runtimeParams, kernelParams, constParams, hoistFnStr, fillArgSig,
-          interpTy = o["DressingType"], scalarParamNames = o["ScalarParamNames"],
-          adNames = o["ADNames"], parameterOrder = o["ParameterOrder"], dressTy},
-(* interpTy is normally one type string shared by every dressing. It may instead be an Association
-   name -> type, for a flow that mixes 1-D momentum-grid interpolators with a 3-D vertex grid; a
-   name not in the map (e.g. a NumTracer-internal ntSUNDiag dressing) falls back to the first
-   declared type. *)
-    dressTy =
-      Function[nm,
-        If[AssociationQ[interpTy],
-          Lookup[interpTy, If[StringQ[nm], nm, ToString[nm]], First[Values[interpTy]]],
-          interpTy]];
+  Module[{sigArgs, runtimeParams, kernelParams, constParams, hoistFnStr, fillArgSig, dressTy = o["DressingType"],
+          scalarParamNames = o["ScalarParamNames"], adNames = o["ADNames"], parameterOrder = o["ParameterOrder"]},
 (* the hoisted k-only lookup values ride at the END of the parameter list, so the DiFfRG wrapper
    can append them after the dressings without disturbing any existing argument position. The
    loop-independent constant() is called with the same argument tail (tuple_cat(pos, m_args)), so
