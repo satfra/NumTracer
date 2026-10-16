@@ -61,7 +61,7 @@ ntGridOf[d_, groups_List] :=
     Replace[FirstPosition[groups, g_List /; MemberQ[ntParamName /@ g, nm], None, {1}], None -> nm]];
 
 ntShareGridLookups[drAtoms_List, integrand_, dress_List, groups_List] :=
-  Module[{dressPat, calls, uses, keys, sharedKeys, gix = <||>, glk = <||>, decls = {}, nIdx = 0, nVal = 0},
+  Module[{dressPat, calls, uses, keys, sharedKeys, gix = <||>, glk = <||>, idxDecls = {}, valDecls = {}, nIdx = 0, nVal = 0},
     If[dress === {}, Return[<|"Decls" -> {}, "Rules" -> {}|>]];
     dressPat = Alternatives @@ (If[StringQ[#], Symbol["Global`" <> #], #]& /@ dress);
     calls = DeleteDuplicates @ Cases[{drAtoms, integrand}, (_?(MatchQ[#, dressPat]&))[__], {0, Infinity}];
@@ -75,20 +75,19 @@ ntShareGridLookups[drAtoms_List, integrand_, dress_List, groups_List] :=
         With[{key = keys[c], d = SymbolName[Head[c]]},
           If[KeyExistsQ[sharedKeys, key] && !KeyExistsQ[gix, key],
             gix[key] = "ntgix" <> ToString[nIdx++];
-            AppendTo[decls, "[[maybe_unused]] const auto " <> gix[key] <> " = " <> d <> ".index(" <>
+            AppendTo[idxDecls, "[[maybe_unused]] const auto " <> gix[key] <> " = " <> d <> ".index(" <>
               StringRiffle[cppFlat /@ (List @@ c), ", "] <> ");"]];
           If[KeyExistsQ[gix, key] || uses[c] > 1,
             glk[c] = "ntglk" <> ToString[nVal++];
-            AppendTo[decls, "[[maybe_unused]] const auto " <> glk[c] <> " = " <>
+            AppendTo[valDecls, "[[maybe_unused]] const auto " <> glk[c] <> " = " <>
               If[KeyExistsQ[gix, key],
                 d <> ".at(" <> gix[key] <> ")",
                 d <> "(" <> StringRiffle[cppFlat /@ (List @@ c), ", "] <> ")"] <> ";"]]]],
       calls];
-(* index declarations first: the values read them *)
-    decls = SortBy[decls, !StringContainsQ[#, ".index("]&];
     ntLog["[interp] ", Length[calls], " distinct lookups: ", nIdx, " shared coordinate transform(s), ",
       nVal, " shared value(s)"];
-    <|"Decls" -> decls,
+    (* the index declarations first: the values read them *)
+    <|"Decls" -> Join[idxDecls, valDecls],
       "Rules" -> Dispatch @ KeyValueMap[#1 -> Symbol["Global`" <> #2]&, glk]|>];
 
 (* FINITE MATSUBARA EXTENT. Each term of a finite-T kernel carries one dR/dt insertion. Where the

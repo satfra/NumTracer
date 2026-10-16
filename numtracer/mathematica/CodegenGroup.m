@@ -10,12 +10,13 @@
    of integrands).
 
    What stays per member: its trace functions (its own namespace) and its constant. The members are
-   traced in turn in ONE fenv buffer, each one's trace values taken as scalars right after its fill:
-   keeping one buffer per member live instead tripled the stack (29 KB vs 16 KB per thread on
-   lambda4L2-4) and made the group slower than separate flows.
+   traced in turn in one fenv buffer, each one's trace values copied to scalars right after its fill;
+   a buffer per member, all live at once, costs more stack than the sharing saves.
    ============================================================================================ *)
 
 MakeNTKernelGroupDiFfRG::differ = "The members of kernel group \"`1`\" differ in `2`; group only flows that are projections of the same loop with the same parameters, frame and Matsubara traits.";
+
+MakeNTKernelGroupDiFfRG::split = "A member of kernel group \"`1`\" splits into a finite-extent and a tail part (matsubara_split); kernel groups do not support that, generate it as a separate flow.";
 
 (* The dressing atoms of all members, each distinct one declared once. Returns the declarations and,
    per member, the fill() arguments in that member's atom order. *)
@@ -36,7 +37,7 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
               groupDir_String, kernelFile_String] :=
   Block[{$ntComplexRuntimeProjection = fronts[[1, "Options"]]["ComplexRuntimeProjection"]},
   Module[{o = fronts[[1, "Options"]], n = Length[fronts], sig = fronts[[1, "Signature"]], groupName, macros,
-          complexQ, evens, parts, lookups, dr, ints, traceDecls, preamble, body, bodies, kernelFn, constFn,
+          complexQ, evens, parts, lookups, dr, ints, traceDecls, nenv, preamble, body, kernelFn, constFn,
           traits, tracesIncludes, verdictIncludes, header},
     groupName = StringReplace[className, "_kernel" ~~ EndOfString -> ""];
     (* -- the members must agree in everything but their projection -- *)
@@ -48,7 +49,8 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
        {"being real or complex", fronts[[All, "ComplexQ"]]}}];
     complexQ = fronts[[1, "ComplexQ"]];
     parts = fronts[[All, "Partition"]];
-    If[AnyTrue[parts, #["Split"]&] || !SameQ @@ Map[#["FiniteExtent"]&, parts],
+    If[AnyTrue[parts, #["Split"]&], Message[MakeNTKernelGroupDiFfRG::split, groupName]; Abort[]];
+    If[!SameQ @@ Map[#["FiniteExtent"]&, parts],
       Message[MakeNTKernelGroupDiFfRG::differ, groupName, "their Matsubara finite-extent classification"]; Abort[]];
     evens = Map[ntMatsubaraEvenQ[#["Integrand"], #["MatsubaraSym"], #["MVarIdx"], #["SymDefs"]]&, fronts];
     If[!SameQ @@ evens,
@@ -58,7 +60,7 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
     (* -- the shared lookups, over the dressing atoms and integrands of all members -- *)
     lookups =
       If[shareDress =!= {},
-        ntShareGridLookups[Join @@ Map[If[#["HasDr"], #["DrAtoms"], {}]&, fronts], fronts[[All, "Integrand"]],
+        ntShareGridLookups[DeleteDuplicates[Join @@ Map[If[#["HasDr"], #["DrAtoms"], {}]&, fronts]], fronts[[All, "Integrand"]],
           shareDress, sharedGrids],
         <|"Decls" -> {}, "Rules" -> {}|>];
     dr = ntGroupDrAtoms[fronts, cppFlat[# /. lookups["Rules"]]&];
@@ -66,20 +68,24 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
     (* -- each member's integrand reads its trace values from scalars taken right after its fill -- *)
     traceDecls = ConstantArray[{}, n];
     ints = Table[
-      Module[{refs = DeleteDuplicates @ Cases[fronts[[j, "Integrand"]], s_String /; StringContainsQ[s, "::tr"], {0, Infinity}],
+      Module[{refs = DeleteDuplicates @ Cases[fronts[[j, "Integrand"]],
+                s_String /; StringStartsQ[s, fronts[[j, "Options"]]["NsHome"] <> "::tr"], {0, Infinity}],
               syms},
         syms = Table["ntt" <> ToString[j - 1] <> "_" <> ToString[i - 1], {i, Length[refs]}];
         traceDecls[[j]] = MapThread["[[maybe_unused]] const auto " <> #2 <> " = " <> #1 <> ";"&, {refs, syms}];
         fronts[[j, "Integrand"]] /. Dispatch[Thread[refs -> syms]]],
       {j, n}];
 
+    (* the buffer is as large as the largest member's: ntnenv<n-1> = max(1, nenv_1, ..., nenv_n) *)
+    nenv = Table["constexpr auto ntnenv" <> ToString[j] <> " = " <>
+        If[j == 0, "1", "ntnenv" <> ToString[j - 1] <> " > " <> fronts[[j, "Options"]]["NsHome"] <> "::nenv ? ntnenv" <>
+          ToString[j - 1] <> " : " <> fronts[[j, "Options"]]["NsHome"] <> "::nenv"] <> ";", {j, 0, n}];
     preamble = StringRiffle[Join[
         ntSupportUsings[o["SupportNamespace"]],
         ("const " <> $ntRealT <> " " <> SymbolName[First[#]] <> " = " <> cppFlat[Last[#]] <> ";")& /@ o["AngleDefs"],
         lookups["Decls"],
-        (* one buffer, as large as the largest member's *)
-        {$ntRealT <> " fenv[" <> Fold["((" <> #1 <> ") > (" <> #2 <> ") ? (" <> #1 <> ") : (" <> #2 <> "))"&, "1",
-           Map[#["Options"]["NsHome"] <> "::nenv"&, fronts]] <> "];"},
+        nenv,
+        {$ntRealT <> " fenv[ntnenv" <> ToString[n] <> "];"},
         dr["Decls"],
         Flatten @ Table[{
             fronts[[j, "Options"]]["NsHome"] <> "::fill(fenv, " <>
@@ -88,36 +94,36 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
       "\n"];
 
     (* -- the kernel: one body per probe verdict, each member taking the same branch -- *)
-    body = Function[{label, proj},
+    body = Function[{proj},
       FunKit`MakeCppFunction[Map[proj[#] /. lookups["Rules"]&, ints], "Name" -> "kernel", "Prefix" -> o["Decorator"],
         "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> sig["KernelParams"], "Body" -> preamble,
         "MultiReturn" -> multiReturn]];
     kernelFn =
       Which[
-        !complexQ, body["real", Identity],
-        o["ComplexEndProjection"], body["EndRe", Global`ntRe[#]&],
+        !complexQ, body[Identity],
+        o["ComplexEndProjection"], body[Global`ntRe[#]&],
         o["RealOutput"],
+(* RePart is exact for a Pure (verdict 2) member too, so any mix of verdicts takes it; only verdict 0
+   (genuinely complex) loses its imaginary part *)
           StringRiffle[{
             "#if " <> ntGroupVerdict[macros, "2"],
-            body["Pure", ntPureIntegrand],
-            "#elif " <> StringRiffle[("(" <> # <> " != 2)")& /@ macros, " && "],
+            body[ntPureIntegrand],
+            "#else",
             "#  if " <> StringRiffle[("(" <> # <> " == 0)")& /@ macros, " || "],
             "#    warning \"NumTracer: a member of kernel group '" <> groupName <> "' probed GENUINELY COMPLEX (verdict 0) but was generated with RealOutput -> True; its imaginary part is discarded.\"",
             "#  endif",
-            body["RePart", ntRePartIntegrand],
-            "#else",
-            "#error \"NumTracer: the members of kernel group '" <> groupName <> "' differ in their probe verdict; generate them as separate flows.\"",
+            body[ntRePartIntegrand],
             "#endif"}, "\n"],
         True,
           StringRiffle[{
             "#if " <> ntGroupVerdict[macros, "2"] <> "   // Pure: the Complex -> Re projection is exact",
-            body["Pure", ntPureIntegrand],
-            "#elif " <> ntGroupVerdict[macros, "1"] <> "   // RePart",
-            body["RePart", ntRePartIntegrand],
+            body[ntPureIntegrand],
+            "#elif " <> StringRiffle[("(" <> # <> " != 0)")& /@ macros, " && "] <> "   // RePart, exact for every real member",
+            body[ntRePartIntegrand],
             "#elif " <> ntGroupVerdict[macros, "0"] <> "   // genuinely complex",
-            body["Complex", Identity],
+            body[Identity],
             "#else",
-            "#error \"NumTracer: the members of kernel group '" <> groupName <> "' differ in their probe verdict; generate them as separate flows.\"",
+            "#error \"NumTracer: kernel group '" <> groupName <> "' mixes genuinely complex (verdict 0) and real members; generate them as separate flows.\"",
             "#endif"}, "\n"]];
     constFn = FunKit`MakeCppFunction[consts, "Name" -> "constant", "Prefix" -> o["Decorator"], "Return" -> "auto",
       "CodeParser" -> "Cpp", "Parameters" -> sig["ConstParams"], "MultiReturn" -> multiReturn,
@@ -126,7 +132,7 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
     traits = Join[
       If[First[evens],
         {"static constexpr bool matsubara_even = " <>
-          StringRiffle[Map[If[#["MVarIdx"] >= 0, o["KernelNamespace"] <> "::" <> #["Options"]["Namespace"] <> "::matsubara_even", "true"]&, fronts], " && "] <> ";"},
+          StringRiffle[Map[If[#["MVarIdx"] >= 0, #["Options"]["NsHome"] <> "::matsubara_even", "true"]&, fronts], " && "] <> ";"},
         {}],
       If[parts[[1, "FiniteExtent"]], {"static constexpr bool matsubara_finite_extent = true;"}, {}]];
 
