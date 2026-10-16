@@ -130,7 +130,7 @@ Options[MakeNTKernelDiFfRG] =
     "ShareInterpolatorIndex" -> Automatic,
     "HoistLoopConstLookups" -> Automatic,
     "IntegrationVariables" -> Automatic, (* REQUIRED, e.g. {"l1","cos1"} *)
-    "Parameters" -> Automatic, (* REQUIRED kernelParameterList; also the source of Dressings/DressingType *)
+    "Parameters" -> Automatic, (* REQUIRED kernelParameterList; also the source of Dressings *)
     "ParameterOrder" -> Automatic, (* positional runtime ABI; Automatic follows Parameters order *)
     "Namespace" -> Automatic, (* C++ gen namespace tag; Automatic -> ToLowerCase[Name] *)
     "SymbolDefs" -> <||>, (* derived frame symbols -> closed form, forwarded to MakeNTKernel's "SymbolDefs" (fill) *)
@@ -298,7 +298,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, constExpr_ /; Head[constExpr] =!= Rule && Head[
   MakeNTKernelDiFfRG[ntk, "Constant" -> constExpr, opts];
 
 MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
-  Module[{computeType, name, nsTag, params, parameterOrder, dress, dressTys, dressTy, shareInterpIdx, shareIdxOpt, hoistOpt, hoistCount, diffrgOpts, ntOpts, scalarParams, adParams, device, decor, body, flowDir, genDir, kernelDir, genFile, kernelFile, tracesFile},
+  Module[{computeType, name, nsTag, params, parameterOrder, dress, dressTys, shareInterpIdx, shareIdxOpt, hoistOpt, hoistCount, diffrgOpts, ntOpts, scalarParams, adParams, device, decor, body, flowDir, genDir, kernelDir, genFile, kernelFile, tracesFile},
     computeType = OptionValue["ComputeType"];
     If[OptionValue["ctype"] =!= Automatic,
       Message[MakeNTKernelDiFfRG::ctypedeprecated, ToString[OptionValue["ctype"], InputForm]];
@@ -347,20 +347,6 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
                 "LinearInterpolator2D" | "LinearInterpolator3D") ~~ "<" ~~ ___] &];
     shareIdxOpt = Replace[OptionValue["ShareInterpolatorIndex"], Automatic -> shareInterpIdx];
     hoistOpt = Replace[OptionValue["HoistLoopConstLookups"], Automatic -> shareInterpIdx];
-    dressTy =
-      Switch[Length[dressTys],
-        0,
-          Automatic,
-        1,
-          First[dressTys],
-        _,
-(* Mixed interpolator types (e.g. 1-D momentum grids plus a 3-D vertex grid) are passed through PER
-   PARAMETER. `const auto&` would also bind them, but makes the kernel an abbreviated function
-   template inside a class template, which crashes nvcc's front end (internal error in
-   check_name_hiding_by_template_parameters). *)
-          Association[Cases[params, a_?AssociationQ /; !ntScalarTypeQ[a["Type"]] :>
-            (ntParamName[a["Name"]] -> a["Type"])]]
-      ];
 (* scalar "double" params (etaPiL, d1V, rhoL, ...) beyond k/p: these are forwarded by DiFfRG's
    integrator between k and the interpolators, so NumTracer must declare them in the kernel /
    constant signature (k and p are already supplied through the NumTrace Args). *)
@@ -437,7 +423,6 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
       "Decorator" -> decor,
       "DeviceTarget" -> (device === "GPU"),
       "Dressings" -> dress,
-      "DressingType" -> dressTy,
       "ShareInterpolatorIndex" -> shareIdxOpt,
       "HoistLoopConstLookups" -> hoistOpt,
       "RealOutput" -> OptionValue["RealOutput"],
