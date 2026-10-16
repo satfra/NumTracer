@@ -476,7 +476,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
 Options[MakeNTKernelGroupDiFfRG] =
   Join[
     DeleteCases[Options[MakeNTKernelDiFfRG], ("Constant" | "Namespace" | "HoistLoopConstLookups") -> _],
-    {"Outputs" -> Automatic, "Constants" -> Automatic, "Namespaces" -> Automatic, "FenvReuse" -> False}];
+    {"Outputs" -> Automatic, "Constants" -> Automatic, "Namespaces" -> Automatic}];
 
 MakeNTKernelGroupDiFfRG::outputs = "\"Outputs\" must be a list of distinct names, one per NTKernel (`1` kernels given).";
 
@@ -550,7 +550,7 @@ MakeNTKernelGroupDiFfRG[ntks : {__NTKernel}, opts : OptionsPattern[]] :=
         multiReturn = "DiFfRG::MultiValue<" <> computeType <> ", " <> ToString[n] <> ">";
         Block[{$ntRealT = realT, FunKit`Private`$codePrecision = If[realT === "float", "single", FunKit`Private`$codePrecision]},
           ntGroupKernel[fronts, name <> "_kernel", consts, multiReturn, shareDress, OptionValue["SharedGrids"],
-            OptionValue["FenvReuse"], groupDir, kernelFile]];
+            groupDir, kernelFile]];
         True,
         False],
       Export[kernelFile, "#error NumTracer generation for kernel group \"" <> name <> "\" did not complete; this kernel.hh is the DiFfRG placeholder, not a traced kernel.\n", "Text"];

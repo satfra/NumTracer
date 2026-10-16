@@ -9,13 +9,13 @@
    dressing atom, and the common subexpressions of the integrands (one COEN function over the list
    of integrands).
 
-   What stays per member: its trace functions (its own namespace and fenv buffer) and its constant.
+   What stays per member: its trace functions (its own namespace) and its constant. The members are
+   traced in turn in ONE fenv buffer, each one's trace values taken as scalars right after its fill:
+   keeping one buffer per member live instead tripled the stack (29 KB vs 16 KB per thread on
+   lambda4L2-4) and made the group slower than separate flows.
    ============================================================================================ *)
 
 MakeNTKernelGroupDiFfRG::differ = "The members of kernel group \"`1`\" differ in `2`; group only flows that are projections of the same loop with the same parameters, frame and Matsubara traits.";
-
-(* The fenv buffer of member j; with "FenvReuse" all members share one, filled and traced in turn. *)
-ntGroupFenv[j_Integer, reuse_] := If[TrueQ[reuse], "fenv", "fenv" <> ToString[j - 1]];
 
 (* The dressing atoms of all members, each distinct one declared once. Returns the declarations and,
    per member, the fill() arguments in that member's atom order. *)
@@ -33,7 +33,7 @@ ntGroupDrAtoms[fronts_List, render_] :=
 ntGroupVerdict[macros_List, v_String] := StringRiffle[("(" <> # <> " == " <> v <> ")")& /@ macros, " && "];
 
 ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, shareDress_List, sharedGrids_List,
-              fenvReuse_, groupDir_String, kernelFile_String] :=
+              groupDir_String, kernelFile_String] :=
   Block[{$ntComplexRuntimeProjection = fronts[[1, "Options"]]["ComplexRuntimeProjection"]},
   Module[{o = fronts[[1, "Options"]], n = Length[fronts], sig = fronts[[1, "Signature"]], groupName, macros,
           complexQ, evens, parts, lookups, dr, ints, traceDecls, preamble, body, bodies, kernelFn, constFn,
@@ -63,32 +63,26 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
         <|"Decls" -> {}, "Rules" -> {}|>];
     dr = ntGroupDrAtoms[fronts, cppFlat[# /. lookups["Rules"]]&];
 
-    (* -- each member's integrand reads its traces from its own buffer, or, reusing one buffer, from
-          scalars taken right after its fill -- *)
+    (* -- each member's integrand reads its trace values from scalars taken right after its fill -- *)
     traceDecls = ConstantArray[{}, n];
     ints = Table[
-      With[{fenv = ntGroupFenv[j, fenvReuse]},
-        If[TrueQ[fenvReuse],
-          Module[{refs = DeleteDuplicates @ Cases[fronts[[j, "Integrand"]], s_String /; StringContainsQ[s, "::tr"], {0, Infinity}],
-                  syms},
-            syms = Table["ntt" <> ToString[j - 1] <> "_" <> ToString[i - 1], {i, Length[refs]}];
-            traceDecls[[j]] = MapThread["[[maybe_unused]] const auto " <> #2 <> " = " <> #1 <> ";"&, {refs, syms}];
-            fronts[[j, "Integrand"]] /. Dispatch[Thread[refs -> syms]]],
-          fronts[[j, "Integrand"]] /. s_String :> StringReplace[s, "(fenv)" -> "(" <> fenv <> ")"]]],
+      Module[{refs = DeleteDuplicates @ Cases[fronts[[j, "Integrand"]], s_String /; StringContainsQ[s, "::tr"], {0, Infinity}],
+              syms},
+        syms = Table["ntt" <> ToString[j - 1] <> "_" <> ToString[i - 1], {i, Length[refs]}];
+        traceDecls[[j]] = MapThread["[[maybe_unused]] const auto " <> #2 <> " = " <> #1 <> ";"&, {refs, syms}];
+        fronts[[j, "Integrand"]] /. Dispatch[Thread[refs -> syms]]],
       {j, n}];
 
     preamble = StringRiffle[Join[
         ntSupportUsings[o["SupportNamespace"]],
         ("const " <> $ntRealT <> " " <> SymbolName[First[#]] <> " = " <> cppFlat[Last[#]] <> ";")& /@ o["AngleDefs"],
         lookups["Decls"],
-        If[TrueQ[fenvReuse],
-          {$ntRealT <> " fenv[" <> Fold["((" <> #1 <> ") > (" <> #2 <> ") ? (" <> #1 <> ") : (" <> #2 <> "))"&, "1",
-             Map[#["Options"]["NsHome"] <> "::nenv"&, fronts]] <> "];"},
-          Table[$ntRealT <> " " <> ntGroupFenv[j, False] <> "[(" <> fronts[[j, "Options"]]["NsHome"] <> "::nenv) > 0 ? (" <>
-            fronts[[j, "Options"]]["NsHome"] <> "::nenv) : 1];", {j, n}]],
+        (* one buffer, as large as the largest member's *)
+        {$ntRealT <> " fenv[" <> Fold["((" <> #1 <> ") > (" <> #2 <> ") ? (" <> #1 <> ") : (" <> #2 <> "))"&, "1",
+           Map[#["Options"]["NsHome"] <> "::nenv"&, fronts]] <> "];"},
         dr["Decls"],
         Flatten @ Table[{
-            fronts[[j, "Options"]]["NsHome"] <> "::fill(" <> ntGroupFenv[j, fenvReuse] <> ", " <>
+            fronts[[j, "Options"]]["NsHome"] <> "::fill(fenv, " <>
               StringRiffle[Join[SymbolName /@ fronts[[j, "FillArgs"]], dr["FillArgs"][[j]]], ", "] <> ");",
             traceDecls[[j]]}, {j, n}]],
       "\n"];
