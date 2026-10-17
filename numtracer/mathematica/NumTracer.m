@@ -36,6 +36,8 @@ FromFunKit::usage = "FromFunKit[flow, \"FlavourGroup\"->n] rewrites a FunKit tra
 
 MakeNTKernelDiFfRG::usage = "MakeNTKernelDiFfRG[ntk, \"Name\"->\"ZA\", \"Integrator\"->\"Integrator_p2_1ang\", \"Parameters\"->kernelParameterList, \"IntegrationVariables\"->{\"l1\",\"cos1\"}, \"AngleDefs\"->{...}] scaffolds the DiFfRG flows/<Name>/ plumbing (MakeKernel on a placeholder body) and overwrites kernel.hh/kernels.hh with the NumTracer-traced numeric kernel. Dressings and their interpolator type are auto-derived from Parameters; the Regulator alias and the DiFfRG emission constants (namespace, includes, support API) are baked in. A loop-independent term flat-added to the integral (DiFfRG's constExpr) can be passed either positionally — MakeNTKernelDiFfRG[ntk, constExpr, opts] — or as \"Constant\"->expr; it populates constant(p,k,dressings) and is a plain expression (e.g. ZA[p]), not an NTKernel. \"ComputeType\" -> \"float\" makes the whole runtime path (traces, kernel body, DiFfRG integrator) single precision while map()/get() keep double results; \"ctype\" is its deprecated spelling. Pair with UpdateNTFlows. Requires DiFfRG to be loaded.";
 
+MakeNTKernelGroupDiFfRG::usage = "MakeNTKernelGroupDiFfRG[{ntk1, ntk2, ...}, \"Name\"->\"G\", \"Outputs\"->{\"o1\", \"o2\", ...}, opts] generates ONE DiFfRG flow G that computes several projections of the same loop at once and returns them as a DiFfRG::MultiValue: map() takes one destination per output (flows.G.map({&res[i], &res[j]}, coordinates, args...)), get() a DiFfRG::MultiValue<double, N>&. Everything the members share -- angles, dressing lookups and their coordinate transforms, dressing atoms, common subexpressions -- is computed once, which makes the group cheaper than separate flows. Each member keeps its own traces, generated as an ordinary flow under flows/G/<output>/. \"Constants\" -> {c1, c2, ...} gives one loop-independent constant per output; the other options are those of MakeNTKernelDiFfRG and apply to all members, and \"Namespaces\" -> {...} names the members' C++ namespaces (default ToLowerCase[<output>_<G>]). The members must agree in parameters, frame and Matsubara traits, and must not mix genuinely complex and real probe verdicts, which the generated kernel checks at compile time. Requires DiFfRG with MakeKernelGroup and FunKit with \"MultiReturn\".";
+
 UpdateNTFlows::usage = "UpdateNTFlows[name] runs DiFfRG's UpdateFlows[name] then idempotently patches flows/CMakeLists.txt (find_package(NumTracer), NumTracer link, numtrace target). Bundling the two makes the CMake patch atomic, so it can never be left un-applied after an UpdateFlows regenerates the file. Requires DiFfRG to be loaded.";
 
 NTFlowSelectedQ::usage = "NTFlowSelectedQ[name] is True when the flow `name` is part of the current selection. The selection comes from the NT_FLOWS environment variable (a comma-separated list of flow names); unset or empty selects EVERY flow, so an ungated script is unaffected. Read fresh on every call, so SetEnvironment[\"NT_FLOWS\" -> ...] works from a .wls that has already loaded the package.";
@@ -181,6 +183,8 @@ ntLoadPart["CodegenProbe.m"];
 ntLoadPart["CodegenGenerator.m"];
 
 ntLoadPart["CodegenKernel.m"];
+
+ntLoadPart["CodegenGroup.m"];
 
 ntLoadPart["FunKitAdapter.m"];
 

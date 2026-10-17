@@ -40,54 +40,55 @@ ntReImAccessors[decor_] :=
     "template <class T> " <> decor <> " auto ntIm(const T &z) -> decltype(z.imag()) { return z.imag(); }",
     "template <class T> " <> decor <> " auto ntIm(const T &z) -> decltype(imag(z)) requires (!requires { z.imag(); }) { return imag(z); }"}, "\n"];
 
-(* ---- interpolator index sharing --------------------------------------------------------------
-   COEN hoists every dressing lookup into `const auto _interpN = <Interp>(<arg>);`, and several
-   dressings are often evaluated at the SAME argument. The coordinate transform inside a lookup is
-   expensive (an fp64 log1p) and the compiler cannot share it across interpolators, so each such
-   group is rewritten to pay it once (1.13-1.26x end to end on YangMills, bit-identical):
+(* ---- interpolator lookup sharing ------------------------------------------------------------
+   A dressing lookup D(x) is D.at(D.index(x)), and index() -- the coordinate transform, an fp64 log1p
+   or log+asinh -- is the expensive half. The same lookups appear in many places: in several dressing
+   atoms (each its own `dr_<id>` declaration, which COEN never sees) and in the kernel body. Pay each
+   coordinate transform and each lookup once:
 
-     const auto _interp3 = ZA3(<arg>);        ->   const auto _ix0 = ZA3.index(<arg>);
-     const auto _interp7 = ZAcbc(<arg>);           const auto _interp3 = ZA3.at(_ix0);
-                                                   const auto _interp7 = ZAcbc.at(_ix0);
+     [[maybe_unused]] const auto ntgix0 = ZA3.index(<x>);    one per argument and grid,
+     [[maybe_unused]] const auto ntglk0 = ZA3.at(ntgix0);    one per lookup used more than once
+     [[maybe_unused]] const auto ntglk1 = ZAcbc.at(ntgix0);  or sharing an index,
 
-   Legal only because index() depends solely on the coordinate system (clamping lives in at()) and
-   all interpolators of one flow share the consumer's coordinate object — a DiFfRG property, hence
-   opt-in via "ShareInterpolatorIndex". Applied per kernel BODY, so a hoist never crosses an #if
-   branch. Callees are restricted to `dress`: regulator calls and ntRe(...) have the same
-   `const auto _interpN = f(...)` shape and must NOT be rewritten. *)
-ntInterpLine[ln_String] :=
-  Module[{m = StringCases[ln,
-      RegularExpression["^(\\s*)const auto (_interp\\d+) = (\\w+)\\((.*)\\);\\s*$"] :> {"$1", "$2", "$3", "$4"}]},
-    If[m === {}, None, First[m]]];
+   and render the atoms and bodies with the ntglk values in place of the calls. Sharing an index is
+   legal only between interpolators on one grid: by default that means one interpolator (all its
+   lookups at <x> share the transform), "SharedGrids" -> {{ZA3, ZAcbc, ...}, ...} declares groups.
+   Applied only where code is rendered (ntKernelPreamble, ntKernelFn), never to the integrand the probe,
+   the evenness proof and the finite-extent classification read: those need the calls, a hidden
+   ZQ[f0 + p0] would look even in f0. *)
+ntGridOf[d_, groups_List] :=
+  With[{nm = ntParamName[d]},
+    Replace[FirstPosition[groups, g_List /; MemberQ[ntParamName /@ g, nm], None, {1}], None -> nm]];
 
-ntShareInterpIndices[text_String, splines_List] :=
-  Module[{lines, parsed, counts, shared, idxName, emitted, out, nrw = 0},
-    If[splines === {}, Return[text]];
-    lines = StringSplit[text, "\n", All];
-    parsed = ntInterpLine /@ lines;
-(* count arguments over interpolator lookups only *)
-    counts = Counts[Cases[parsed, p_List /; MemberQ[splines, p[[3]]] :> StringTrim[p[[4]]]]];
-    shared = Select[Keys[counts], counts[#] >= 2 &];
-    If[shared === {}, Return[text]];
-    idxName = AssociationThread[Sort[shared] -> ("_ix" <> ToString[#] & /@ Range[0, Length[shared] - 1])];
-    emitted = <||>;
-    out = Reap[
-        MapThread[
-          Function[{ln, p},
-            If[p === None || !MemberQ[splines, p[[3]]] || !KeyExistsQ[idxName, StringTrim[p[[4]]]],
-              Sow[ln],
-              Module[{ind = p[[1]], nm = p[[2]], cal = p[[3]], arg = StringTrim[p[[4]]], ix},
-                ix = idxName[arg];
-(* the first user of an argument owns the transform; every later one reuses the index *)
-                If[!KeyExistsQ[emitted, arg],
-                  emitted[arg] = True;
-                  Sow[ind <> "const auto " <> ix <> " = " <> cal <> ".index(" <> arg <> ");"]];
-                nrw++;
-                Sow[ind <> "const auto " <> nm <> " = " <> cal <> ".at(" <> ix <> ");"]]]],
-          {lines, parsed}]][[2]];
-    ntLog["[interp] shared ", Length[shared], " of ", Length[counts],
-      " distinct interpolator arguments (", nrw, " lookups rewritten)"];
-    StringRiffle[If[out === {}, lines, First[out]], "\n"]];
+ntShareGridLookups[drAtoms_List, integrand_, dress_List, groups_List] :=
+  Module[{dressPat, calls, uses, keys, sharedKeys, gix = <||>, glk = <||>, idxDecls = {}, valDecls = {}, nIdx = 0, nVal = 0},
+    If[dress === {}, Return[<|"Decls" -> {}, "Rules" -> {}|>]];
+    dressPat = Alternatives @@ (If[StringQ[#], Symbol["Global`" <> #], #]& /@ dress);
+    calls = DeleteDuplicates @ Cases[{drAtoms, integrand}, (_?(MatchQ[#, dressPat]&))[__], {0, Infinity}];
+(* a dressing atom is rendered on its own, so every occurrence in the atoms is a separate lookup; COEN
+   already shares the body's own repeats *)
+    uses = AssociationMap[Count[drAtoms, #, {0, Infinity}] + Boole[!FreeQ[integrand, #]]&, calls];
+    keys = AssociationMap[{ntGridOf[Head[#], groups], List @@ #}&, calls];
+    sharedKeys = Select[Counts[Values[keys]], # > 1&];
+    Scan[
+      Function[c,
+        With[{key = keys[c], d = SymbolName[Head[c]]},
+          If[KeyExistsQ[sharedKeys, key] && !KeyExistsQ[gix, key],
+            gix[key] = "ntgix" <> ToString[nIdx++];
+            AppendTo[idxDecls, "[[maybe_unused]] const auto " <> gix[key] <> " = " <> d <> ".index(" <>
+              StringRiffle[cppFlat /@ (List @@ c), ", "] <> ");"]];
+          If[KeyExistsQ[gix, key] || uses[c] > 1,
+            glk[c] = "ntglk" <> ToString[nVal++];
+            AppendTo[valDecls, "[[maybe_unused]] const auto " <> glk[c] <> " = " <>
+              If[KeyExistsQ[gix, key],
+                d <> ".at(" <> gix[key] <> ")",
+                d <> "(" <> StringRiffle[cppFlat /@ (List @@ c), ", "] <> ")"] <> ";"]]]],
+      calls];
+    ntLog["[interp] ", Length[calls], " distinct lookups: ", nIdx, " shared coordinate transform(s), ",
+      nVal, " shared value(s)"];
+    (* the index declarations first: the values read them *)
+    <|"Decls" -> Join[idxDecls, valDecls],
+      "Rules" -> Dispatch @ KeyValueMap[#1 -> Symbol["Global`" <> #2]&, glk]|>];
 
 (* FINITE MATSUBARA EXTENT. Each term of a finite-T kernel carries one dR/dt insertion. Where the
    insertion's ARGUMENT is coercive in the Matsubara symbol, the term dies super-polynomially in it,
@@ -227,9 +228,13 @@ Options[mkGenerateKernel] =
 (* Dressing-parameter type: Automatic = `const auto&`, or a concrete type string, which also makes
    parameters typed in their own entry use that type. *)
     "DressingType" -> Automatic,
-(* Opt-in: share one coordinate transform among lookups at the same argument (see
-   ntShareInterpIndices). Needs index()/at() on the interpolator, a DiFfRG property. *)
+(* Opt-in: compute every coordinate transform and every dressing lookup once (see ntShareGridLookups).
+   Needs index()/at() on the interpolator, a DiFfRG property. True = all dressings, or the list of the
+   dressings that have them. *)
     "ShareInterpolatorIndex" -> False,
+(* {{D1, D2, ...}, ...}: dressings that live on ONE grid and may share a coordinate transform. Without
+   it a transform is only shared between the lookups of one dressing. *)
+    "SharedGrids" -> {},
 (* Opt-in: turn launch-constant dressing lookups into host-evaluated kernel parameters. *)
     "HoistLoopConstLookups" -> False,
 (* Kernel class shape; see ntKernelClass. RegulatorAlias implies RegulatorTemplate. *)
@@ -435,7 +440,7 @@ ntGenOptions[OptionsPattern[mkGenerateKernel]] :=
        "RunGenerator", "RunOnline", "MainOpt", "IncludeDir", "RuntimeInclude", "ExtraIncludes",
        "RegulatorTemplate", "RegulatorAlias", "Components", "SymbolDefs", "MatsubaraVar",
        "DecayingRegulators", "MatsubaraFiniteExtent", "HoistLoopConstLookups",
-       "ShareInterpolatorIndex", "RealProbe", "PruneRealTraces", "ComplexRuntimeProjection",
+       "ShareInterpolatorIndex", "SharedGrids", "RealProbe", "PruneRealTraces", "ComplexRuntimeProjection",
        "ComplexEndProjection", "RealOutput", "Constant"},
       <|"Name" -> name,
         "Namespace" -> ns,
@@ -490,7 +495,10 @@ ntGenOptions[OptionsPattern[mkGenerateKernel]] :=
           Replace[OptionValue["DecayingRegulators"], Automatic -> $ntDefaultDecayingRegulators],
         "MatsubaraFiniteExtent" -> OptionValue["MatsubaraFiniteExtent"],
         "HoistLoopConstLookups" -> TrueQ[OptionValue["HoistLoopConstLookups"]],
-        "ShareInterpolatorIndex" -> TrueQ[OptionValue["ShareInterpolatorIndex"]],
+        "ShareInterpolatorIndex" ->
+          With[{v = OptionValue["ShareInterpolatorIndex"]},
+            Which[ListQ[v], v, TrueQ[v], OptionValue["Dressings"], True, {}]],
+        "SharedGrids" -> OptionValue["SharedGrids"],
         "RealProbe" -> TrueQ[OptionValue["RealProbe"]],
         "PruneRealTraces" -> TrueQ[OptionValue["PruneRealTraces"]],
         "ComplexRuntimeProjection" -> (TrueQ[OptionValue["ComplexRuntimeProjection"]] || endProject),
@@ -925,7 +933,7 @@ ntHoistLoopConstLookups[integrand_, args_, dress_, enabled_] :=
    The fenv setup block: declare fenv, (dressed only) compute each dressing atom into dr_<id>,
    and fill. Kinematic angle defs (kept symbolic in the
    dressing) are emitted once as named temporaries. *)
-ntKernelPreamble[angleDefs_, fillArgs_, drAtoms_, hasDr_, nsHome_, supportNs_] :=
+ntKernelPreamble[angleDefs_, fillArgs_, drAtoms_, hasDr_, nsHome_, supportNs_, lookups_] :=
   Module[{angleDecls, coreBlock},
     angleDecls = ("const " <> $ntRealT <> " " <> SymbolName[First[#]] <> " = " <> cppFlat[Last[#]] <> ";")& /@ angleDefs;
     coreBlock =
@@ -933,7 +941,7 @@ ntKernelPreamble[angleDefs_, fillArgs_, drAtoms_, hasDr_, nsHome_, supportNs_] :
         $ntRealT <> " fenv[(" <> nsHome <> "::nenv) > 0 ? (" <> nsHome <> "::nenv) : 1];",
         Sequence @@
           If[hasDr,
-            ntDrDecls[drAtoms, cppFlat],
+            ntDrDecls[drAtoms, cppFlat[# /. lookups["Rules"]]&],
             {}],
         With[{
           fillCallArgs =
@@ -946,9 +954,11 @@ ntKernelPreamble[angleDefs_, fillArgs_, drAtoms_, hasDr_, nsHome_, supportNs_] :
     ntStageResult["ntKernelPreamble", {"Preamble", "AngleDecls"},
       <|"Preamble" ->
           StringRiffle[
+(* the shared lookups (ntShareGridLookups) can take the angles as arguments, so they follow them; they
+   are not part of "AngleDecls", which the probe reuses without any interpolators in scope *)
             If[hasDr,
-              Join[ntSupportUsings[supportNs], angleDecls, coreBlock],
-              Join[ntSupportUsings[supportNs], coreBlock, angleDecls]],
+              Join[ntSupportUsings[supportNs], angleDecls, lookups["Decls"], coreBlock],
+              Join[ntSupportUsings[supportNs], coreBlock, angleDecls, lookups["Decls"]]],
             "\n"],
         "AngleDecls" -> angleDecls|>]];
 
@@ -1099,10 +1109,8 @@ ntFiniteExtentPartition[integrand_, matsubaraSym_, decayRegs_, forced_] :=
    constant(), the class and the header, so the cost of one BODY (what "RealOutput" removes) is
    invisible in it. *)
 ntKernelFn[nm_, expr_, o_, kernelParams_, preamble_] :=
-  ntShareInterpIndices[
-    FunKit`MakeCppFunction[expr, "Name" -> nm, "Prefix" -> o["Decorator"], "Return" -> "auto",
-      "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble],
-    If[o["ShareInterpolatorIndex"], o["Dressings"], {}]];
+  FunKit`MakeCppFunction[expr /. o["LookupRules"], "Name" -> nm, "Prefix" -> o["Decorator"], "Return" -> "auto",
+    "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble];
 
 ntTimedKernelFn[nm_, label_, expr_, o_, kernelParams_, preamble_] :=
   Module[{t, res},
@@ -1474,7 +1482,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
          $diagDrIntern = $diagDrIntern, $drIntern = $drIntern,
          $ctCache = <||>, $dsCache = <||>, $odCache = <||>, $dslCache = <||>},
   Module[{o, fr, ms, complexQ, nets, incDir, dd, grp, hoist, integrand, prune, nGrp,
-          hasDr, pre, sig, part, header, ncomp, gen, probe},
+          hasDr, lookups, pre, sig, part, header, ncomp, gen, probe},
     Needs["FunKit`"];
 (* The integrand Sum and COEN's lowering recurse ~linearly in the number of trace groups (>1000 on
    large flows). Hitting $RecursionLimit does NOT abort: it returns a held expression and the kernel
@@ -1517,8 +1525,13 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
       Message[mkGenerateKernel::emptynets, o["Name"], Length[nets["CoreNets"]], nGrp];
       Abort[]];
     hasDr = !FreeQ[nets["CoreNets"], _ntDressedCore];
+    lookups =
+      If[o["ShareInterpolatorIndex"] =!= {},
+        ntShareGridLookups[If[hasDr, nets["DrAtoms"], {}], integrand, o["ShareInterpolatorIndex"], o["SharedGrids"]],
+        <|"Decls" -> {}, "Rules" -> {}|>];
+    o["LookupRules"] = lookups["Rules"];
     pre = ntKernelPreamble[o["AngleDefs"], fr["FillArgs"], nets["DrAtoms"], hasDr, o["NsHome"],
-            o["SupportNamespace"]];
+            o["SupportNamespace"], lookups];
     sig = ntKernelSignature[o, fr["Args"], fr["FillArgs"], hoist["HoistCalls"], hoist["HoistSyms"],
             hasDr, nets["DrAtoms"]];
     ntAssertNumericIntegrand[integrand];
@@ -1538,7 +1551,12 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
               sig["FillArgSig"], complexQ, prune["pruneG"], ms["MVarIdx"], o, incDir, genFile, headerFile]];
     ntWriteKernelAndManifest[o, header, kernelFile, genFile, headerFile, gen["UnitFiles"], complexQ,
       probe["ProbeFile"]];
-    <|"KernelFile" -> kernelFile, "HoistCount" -> Length[hoist["HoistCalls"]]|>]];
+(* "Front": what a kernel group (MakeNTKernelGroupDiFfRG) needs to lower this flow together with others *)
+    <|"KernelFile" -> kernelFile, "HoistCount" -> Length[hoist["HoistCalls"]],
+      "Front" -> <|"Options" -> o, "Integrand" -> integrand, "DrAtoms" -> nets["DrAtoms"], "HasDr" -> hasDr,
+        "Args" -> fr["Args"], "FillArgs" -> fr["FillArgs"], "SymDefs" -> fr["SymDefs"], "Signature" -> sig,
+        "Partition" -> part, "MatsubaraSym" -> ms["MatsubaraSym"], "MVarIdx" -> ms["MVarIdx"],
+        "ComplexQ" -> complexQ, "TracesFile" -> headerFile|>|>]];
 
 (* ---- MakeNTKernel: the public kernel emitter. --------------------------------------
    MakeNTKernel[ntk, genFile, kernelFile, tracesFile] emits the numeric matrix-product kernel:

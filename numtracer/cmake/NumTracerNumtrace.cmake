@@ -67,7 +67,8 @@ function(numtracer_add_numtrace flows_target flow_dir)
     message(FATAL_ERROR "numtrace: driver script not found at ${_driver}")
   endif()
 
-  file(GLOB _manifests "${flow_dir}/*/numtrace.json")
+  # One level deeper too: the members of a kernel group (MakeNTKernelGroupDiFfRG) live in flows/<group>/<output>/.
+  file(GLOB _manifests "${flow_dir}/*/numtrace.json" "${flow_dir}/*/*/numtrace.json")
 
   # Sorted, because the flows are now run in this order and a glob-order chain would shuffle a long
   # sequential build from machine to machine.

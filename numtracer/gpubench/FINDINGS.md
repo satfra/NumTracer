@@ -68,6 +68,8 @@ into `index()` would silently break sharing between interpolators of different l
 The consumer then hoists one `index()` per distinct argument. `tools/interpshare.py` performs that
 rewrite on an emitted `kernel.hh`.
 
+**Superseded (2026-10):** the regex pass described below is replaced by `ntShareGridLookups` (CodegenKernel.m), which also covers the dressing atoms, shares per dressing type instead of all-or-nothing, and takes `"SharedGrids"` for interpolators on one grid.
+
 **Now emitted natively.** `Codegen.m` performs the rewrite (`ntShareInterpIndices`), gated on a new
 `MakeNTKernel` option `"ShareInterpolatorIndex"` (default **False**) that `DiFfRG_compat.m` turns on
 after checking the dressing types. The layering matters: `index()`/`at()` is a *DiFfRG* property, not

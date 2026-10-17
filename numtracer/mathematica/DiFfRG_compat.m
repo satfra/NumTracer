@@ -124,11 +124,15 @@ Options[MakeNTKernelDiFfRG] =
    with the exact sum over the modes inside the regulator's support. *)
     "DecayingRegulators" -> Automatic,
     "MatsubaraFiniteExtent" -> Automatic,
-(* MakeNTKernel's "ShareInterpolatorIndex" / "HoistLoopConstLookups". Automatic = on exactly when every
-   dressing is a DiFfRG interpolator with a split index() (see shareInterpIdx below); False turns the
-   pass off; True forces it on. *)
+(* MakeNTKernel's "ShareInterpolatorIndex" / "HoistLoopConstLookups". Automatic: lookups are shared
+   among the dressings that are DiFfRG interpolators with a split index() (see ntShareableDressings),
+   and k-only lookups are hoisted when every dressing is one of the 1-D/2-D/3-D linear or spline
+   interpolators; False turns a pass off, True forces it on for all dressings. *)
     "ShareInterpolatorIndex" -> Automatic,
     "HoistLoopConstLookups" -> Automatic,
+(* {{D1, D2, ...}, ...}: dressings on one grid, which may share a coordinate transform (see
+   ntShareGridLookups). Default: only the lookups of one dressing share it. *)
+    "SharedGrids" -> {},
     "IntegrationVariables" -> Automatic, (* REQUIRED, e.g. {"l1","cos1"} *)
     "Parameters" -> Automatic, (* REQUIRED kernelParameterList; also the source of Dressings *)
     "ParameterOrder" -> Automatic, (* positional runtime ABI; Automatic follows Parameters order *)
@@ -290,6 +294,21 @@ ntHoistMapPoints[integrator_String, argString_String, kcls_String, m_Integer] :=
 (* A plain real scalar parameter (k, T, etaQ, ...), as opposed to a dressing's interpolator type. *)
 ntScalarTypeQ[t_] := MemberQ[{"double", "float"}, t];
 
+(* A DiFfRG interpolator type with the split index()/at() interface that lookup sharing needs. *)
+ntShareableInterpTypeQ[t_] :=
+  StringQ[t] &&
+    StringMatchQ[t,
+      ("SplineInterpolator1D" | "SplineInterpolator1DStack" | "LinearInterpolator1D" | "LinearInterpolator2D" |
+        "LinearInterpolator3D" | "PeriodicCubicInterpolator3D") ~~ "<" ~~ ___];
+
+(* The dressings that share lookups under "ShareInterpolatorIndex" -> Automatic: those of a shareable type. *)
+ntShareableDressings[params_List] :=
+  Cases[params, a_?AssociationQ /; !ntScalarTypeQ[a["Type"]] && ntShareableInterpTypeQ[a["Type"]] :> a["Name"]];
+
+(* "SharedGrids" for DiFfRG's MakeKernel/MakeKernelGroup, which emit the run-time grid check. Passed only when
+   set, so that a DiFfRG without the option keeps working. *)
+ntSharedGridsOpt[groups_] := If[groups === {}, {}, {"SharedGrids" -> groups}];
+
 (* Positional second argument: the constant, mirroring DiFfRG's MakeKernel[kernelExpr, constExpr, ...].
    `constExpr` is a plain expression in p/k and the dressing names (e.g. ZA[p]), NOT an NTKernel.
    If it is also given as "Constant", the positional argument wins (it is spliced ahead of opts). *)
@@ -298,7 +317,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, constExpr_ /; Head[constExpr] =!= Rule && Head[
   MakeNTKernelDiFfRG[ntk, "Constant" -> constExpr, opts];
 
 MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
-  Module[{computeType, name, nsTag, params, parameterOrder, dress, dressTys, shareInterpIdx, shareIdxOpt, hoistOpt, hoistCount, diffrgOpts, ntOpts, scalarParams, adParams, device, decor, body, flowDir, genDir, kernelDir, genFile, kernelFile, tracesFile},
+  Module[{computeType, name, nsTag, params, parameterOrder, dress, dressTys, hoistableQ, shareIdxOpt, hoistOpt, hoistCount, diffrgOpts, ntOpts, scalarParams, adParams, device, decor, body, flowDir, genDir, kernelDir, genFile, kernelFile, tracesFile},
     computeType = OptionValue["ComputeType"];
     If[OptionValue["ctype"] =!= Automatic,
       Message[MakeNTKernelDiFfRG::ctypedeprecated, ToString[OptionValue["ctype"], InputForm]];
@@ -334,19 +353,19 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
     (* auto-derive the dressing names + their common interpolator type from the non-scalar params *)
     dress = Cases[params, a_?AssociationQ /; !ntScalarTypeQ[a["Type"]] :> a["Name"]];
     dressTys = DeleteDuplicates[Cases[params, a_?AssociationQ /; !ntScalarTypeQ[a["Type"]] :> a["Type"]]];
-(* Interpolator index sharing (NumTracer's "ShareInterpolatorIndex"): dressings evaluated at the SAME
-   momentum share one coordinate transform (a fp64 log1p, the bulk of a lookup's cost; 1.13-1.26x on
-   the YangMills flows). It needs DiFfRG's split index()/at() interface, which all five interpolators
-   below provide; the pass is all-or-nothing per kernel, so any other dressing type opts it out. *)
-    shareInterpIdx =
+(* Lookup sharing (NumTracer's "ShareInterpolatorIndex", see ntShareGridLookups): each coordinate
+   transform (an fp64 log1p, the bulk of a lookup's cost) and each lookup computed once, among the
+   dressings of a type with DiFfRG's split index()/at(); the others keep their plain lookups. *)
+(* k-only hoisting evaluates the lookups on the host; it is on only if every dressing is one of these types *)
+    hoistableQ =
       dressTys =!= {} &&
         AllTrue[dressTys,
           StringQ[#] &&
             StringMatchQ[#,
               ("SplineInterpolator1D" | "SplineInterpolator1DStack" | "LinearInterpolator1D" |
                 "LinearInterpolator2D" | "LinearInterpolator3D") ~~ "<" ~~ ___] &];
-    shareIdxOpt = Replace[OptionValue["ShareInterpolatorIndex"], Automatic -> shareInterpIdx];
-    hoistOpt = Replace[OptionValue["HoistLoopConstLookups"], Automatic -> shareInterpIdx];
+    shareIdxOpt = Replace[OptionValue["ShareInterpolatorIndex"], Automatic :> ntShareableDressings[params]];
+    hoistOpt = Replace[OptionValue["HoistLoopConstLookups"], Automatic -> hoistableQ];
 (* scalar "double" params (etaPiL, d1V, rhoL, ...) beyond k/p: these are forwarded by DiFfRG's
    integrator between k and the interpolators, so NumTracer must declare them in the kernel /
    constant signature (k and p are already supplied through the NumTrace Args). *)
@@ -404,7 +423,8 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
       "CoordinateArguments" -> OptionValue["CoordinateArguments"],
       "Regulator" -> OptionValue["Regulator"],
       "RegulatorOpts" -> OptionValue["RegulatorOpts"],
-      "MapPoints" -> OptionValue["MapPoints"]};
+      "MapPoints" -> OptionValue["MapPoints"],
+      Sequence @@ ntSharedGridsOpt[OptionValue["SharedGrids"]]};
     Internal`InheritedBlock[{DiFfRG`CodeTools`Directory`flowDir},
       DiFfRG`CodeTools`Directory`flowDir = flowDir;
       ntReportDiFfRG[name, flowDir, Last @ ntCapturePrint[DiFfRG`CodeTools`MakeKernel`MakeKernel[body, Sequence @@ diffrgOpts]]]];
@@ -424,6 +444,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
       "DeviceTarget" -> (device === "GPU"),
       "Dressings" -> dress,
       "ShareInterpolatorIndex" -> shareIdxOpt,
+      "SharedGrids" -> OptionValue["SharedGrids"],
       "HoistLoopConstLookups" -> hoistOpt,
       "RealOutput" -> OptionValue["RealOutput"],
       "ComplexRuntimeProjection" -> OptionValue["ComplexRuntimeProjection"],
@@ -454,6 +475,98 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
 (* (3) wire the hoisted k-only lookups through the scaffold's wrapper TUs (no-op when none). *)
     If[hoistCount > 0,
       ntPatchHoistWrappers[kernelDir, name, hoistCount]];
+    kernelFile
+  ];
+
+(* ============================================================================================
+   MakeNTKernelGroupDiFfRG — several projections of one loop as one flow; see CodegenGroup.m.
+   ============================================================================================ *)
+
+Options[MakeNTKernelGroupDiFfRG] =
+  Join[
+    DeleteCases[Options[MakeNTKernelDiFfRG], ("Constant" | "Namespace" | "HoistLoopConstLookups" | "ParameterOrder" | "ctype") -> _],
+    {"Outputs" -> Automatic, "Constants" -> Automatic, "Namespaces" -> Automatic}];
+
+MakeNTKernelGroupDiFfRG::outputs = "A kernel group needs at least two NTKernels and \"Outputs\" as a list of as many distinct name strings (`1` kernels given).";
+
+MakeNTKernelGroupDiFfRG::perout = "\"`1`\" must be a list with one entry per output (`2` outputs)`3`.";
+
+MakeNTKernelGroupDiFfRG[ntks : {__NTKernel}, opts : OptionsPattern[]] :=
+  Module[{name, outputs, n, consts, namespaces, computeType, params, flowDir, groupDir, genDir, dressParams, shareDress,
+          memberOpts, fronts, multiReturn, kernelFile, realT},
+    name = OptionValue["Name"];
+    If[name === Automatic, Message[MakeNTKernelDiFfRG::noname]; Abort[]];
+    params = OptionValue["Parameters"];
+    If[params === Automatic, Message[MakeNTKernelDiFfRG::noparams]; Abort[]];
+    If[OptionValue["Integrator"] === Automatic || OptionValue["IntegrationVariables"] === Automatic,
+      Message[MakeNTKernelDiFfRG::nointeg]; Abort[]];
+    n = Length[ntks];
+    outputs = OptionValue["Outputs"];
+    If[n < 2 || !ListQ[outputs] || Length[outputs] =!= n || !AllTrue[outputs, StringQ] || !DuplicateFreeQ[outputs],
+      Message[MakeNTKernelGroupDiFfRG::outputs, n]; Abort[]];
+    consts = Replace[OptionValue["Constants"], Automatic -> ConstantArray[0., n]];
+    If[!ListQ[consts] || Length[consts] =!= n, Message[MakeNTKernelGroupDiFfRG::perout, "Constants", n, ""]; Abort[]];
+    namespaces = Replace[OptionValue["Namespaces"], Automatic -> Map[ToLowerCase[# <> "_" <> name]&, outputs]];
+    If[!ListQ[namespaces] || Length[namespaces] =!= n || !AllTrue[namespaces, StringQ] || !DuplicateFreeQ[namespaces],
+      Message[MakeNTKernelGroupDiFfRG::perout, "Namespaces", n, ", distinct strings"]; Abort[]];
+    computeType = OptionValue["ComputeType"];
+    realT = ntRealTypeOf[computeType];
+    flowDir = ntFlowDir[OptionValue["FlowDirectory"]];
+    groupDir = FileNameJoin[{flowDir, name}];
+    genDir = OptionValue["GenDirectory"] /. Automatic :> FileNameJoin[{FileNameDrop[flowDir, -1], "gen"}];
+    Scan[If[!DirectoryQ[#], CreateDirectory[#, CreateIntermediateDirectories -> True]]&, {flowDir, groupDir, genDir}];
+
+    (* (1) the DiFfRG scaffold: the integrator class, map()/get() wrappers and a placeholder kernel.hh *)
+    Internal`InheritedBlock[{DiFfRG`CodeTools`Directory`flowDir},
+      DiFfRG`CodeTools`Directory`flowDir = flowDir;
+      ntReportDiFfRG[name, flowDir, Last @ ntCapturePrint[
+        DiFfRG`CodeTools`MakeKernel`MakeKernelGroup[Map[{0., 0., #}&, outputs],
+          "Name" -> name, "Integrator" -> OptionValue["Integrator"], "d" -> OptionValue["d"], "AD" -> OptionValue["AD"],
+          "ComputeType" -> computeType, "Device" -> OptionValue["Device"], "Type" -> OptionValue["Type"],
+          "Parameters" -> params, "IntegrationVariables" -> OptionValue["IntegrationVariables"],
+          "Coordinates" -> OptionValue["Coordinates"], "CoordinateArguments" -> OptionValue["CoordinateArguments"],
+          "Regulator" -> OptionValue["Regulator"], "RegulatorOpts" -> OptionValue["RegulatorOpts"],
+          "MapPoints" -> OptionValue["MapPoints"], Sequence @@ ntSharedGridsOpt[OptionValue["SharedGrids"]]]]]];
+
+    (* (2) every member as an ordinary flow under flows/<name>/<output>/: traces, generator, probe and manifest.
+       Lookups are shared, and k-only lookups never hoisted, at the group level. *)
+    dressParams = Cases[params, a_?AssociationQ /; !ntScalarTypeQ[a["Type"]] :> a];
+    shareDress =
+      Replace[OptionValue["ShareInterpolatorIndex"], {
+        Automatic :> ntShareableDressings[params], True :> dressParams[[All, "Name"]], False -> {}}];
+    memberOpts = Function[j, {
+      "ComputeType" -> computeType, "Name" -> name <> "_" <> outputs[[j]] <> "_kernel", "Namespace" -> namespaces[[j]],
+      "AngleDefs" -> OptionValue["AngleDefs"], "SymbolDefs" -> OptionValue["SymbolDefs"],
+      "Decorator" -> (OptionValue["Decorator"] /. Automatic :> If[OptionValue["Device"] === "GPU", "static KOKKOS_INLINE_FUNCTION", "static inline"]),
+      "DeviceTarget" -> (OptionValue["Device"] === "GPU"), "Dressings" -> dressParams[[All, "Name"]],
+      "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False,
+      "RealOutput" -> OptionValue["RealOutput"], "ComplexRuntimeProjection" -> OptionValue["ComplexRuntimeProjection"],
+      "ComplexEndProjection" -> OptionValue["ComplexEndProjection"],
+      "ScalarParams" -> Cases[params, a_?AssociationQ /; ntScalarTypeQ[a["Type"]] && !MemberQ[{"k", "p"}, ntParamName[a["Name"]]] :> a["Name"]],
+      "ADParams" -> {}, "ParameterOrder" -> Cases[params, a_?AssociationQ :> a], "Constant" -> 0.,
+      "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"],
+      "MatsubaraVar" -> ntMatsubaraVar[OptionValue["MatsubaraVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]],
+      "DecayingRegulators" -> OptionValue["DecayingRegulators"], "MatsubaraFiniteExtent" -> OptionValue["MatsubaraFiniteExtent"],
+      "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"},
+      "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True}];
+    kernelFile = FileNameJoin[{groupDir, "kernel.hh"}];
+    If[!TrueQ @ CheckAbort[
+        fronts = Table[
+          With[{dir = FileNameJoin[{groupDir, outputs[[j]]}]},
+            If[!DirectoryQ[dir], CreateDirectory[dir]];
+            ntMakeNTKernel[ntks[[j]], FileNameJoin[{genDir, "gen_" <> namespaces[[j]] <> "_num.cpp"}],
+              FileNameJoin[{dir, "kernel.hh"}], FileNameJoin[{dir, "kernels.hh"}], Sequence @@ memberOpts[j]]["Front"]],
+          {j, n}];
+        (* (3) the group kernel *)
+        multiReturn = "DiFfRG::MultiValue<" <> computeType <> ", " <> ToString[n] <> ">";
+        Block[{$ntRealT = realT, FunKit`Private`$codePrecision = If[realT === "float", "single", FunKit`Private`$codePrecision]},
+          ntGroupKernel[fronts, name <> "_kernel", consts, multiReturn, shareDress, OptionValue["SharedGrids"],
+            groupDir, kernelFile]];
+        True,
+        False],
+      Export[kernelFile, "#error NumTracer generation for kernel group \"" <> name <> "\" did not complete; this kernel.hh is the DiFfRG placeholder, not a traced kernel.\n", "Text"];
+      Print["[NumTracer] ", name, ": generation ABORTED — ", kernelFile, " poisoned with #error."];
+      Abort[]];
     kernelFile
   ];
 
