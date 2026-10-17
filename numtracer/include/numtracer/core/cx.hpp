@@ -7,8 +7,7 @@
 /// complex type instead. It is a *structural type* (all members are public and of literal
 /// type), which C++20 lets us pass as a non-type template parameter — that is
 /// what makes a compile-time complex literal such as `numtracer::Lit<Cx{0,1}>`
-/// possible. This header is foundational and intentionally has no dependency on
-/// the Lorentz/Dirac/SU(N) sector headers.
+/// possible.
 #pragma once
 
 namespace numtracer
@@ -17,30 +16,36 @@ namespace numtracer
   /// @brief A complex number with `double` components, fully usable at compile time.
   ///
   /// Defined as a structural type so a `Cx` value can appear as a non-type template
-  /// parameter (see @ref numtracer::Lit). Only addition and multiplication are
-  /// provided as operators; division is @ref cdiv.
+  /// parameter (see @ref numtracer::Lit). Addition, multiplication and division are
+  /// provided as operators.
   struct Cx {
     double re = 0; ///< Real part.
     double im = 0; ///< Imaginary part.
+
     /// @brief Complex addition.
     /// @param o The right-hand operand.
     /// @return The sum `(re+o.re, im+o.im)`.
     constexpr Cx operator+(Cx o) const { return {re + o.re, im + o.im}; }
+
+    /// @brief Complex subtraction.
+    /// @param o The right-hand operand.
+    /// @return The difference `(re-o.re, im-o.im)`.
+    constexpr Cx operator-(Cx o) const { return {re - o.re, im - o.im}; }
+
     /// @brief Complex multiplication.
     /// @param o The right-hand operand.
     /// @return The product `(re*o.re - im*o.im, re*o.im + im*o.re)`.
     constexpr Cx operator*(Cx o) const { return {re * o.re - im * o.im, re * o.im + im * o.re}; }
-  };
 
-  /// @brief Complex division `z / w = z·conj(w) / |w|²`.
-  /// @param z Numerator.
-  /// @param w Denominator (nonzero).
-  /// @return The quotient. The operation order is fixed: emitted kernels depend on it bit-for-bit.
-  constexpr Cx cdiv(Cx z, Cx w)
-  {
-    const double d = w.re * w.re + w.im * w.im;
-    return Cx{(z.re * w.re + z.im * w.im) / d, (z.im * w.re - z.re * w.im) / d};
-  }
+    /// @brief Complex division.
+    /// @param o The right-hand operand.
+    /// @return The product `z / w = z·conj(w) / |w|²`.
+    constexpr Cx operator/(Cx o) const
+    {
+      const double d = o.re * o.re + o.im * o.im;
+      return {(re * o.re + im * o.im) / d, (im * o.re - re * o.im) / d};
+    }
+  };
 
   /// @brief Absolute value of a real number (a `constexpr` `std::abs` for `double`).
   /// @param x The input value.

@@ -15,6 +15,7 @@ namespace numtracer
 
   /// @brief A compile-time complex constant carried as a non-type template parameter.
   /// @tparam C The constant value.
-  template <Cx C> struct Lit {};
+  template <Cx C> struct Lit {
+  };
 
 } // namespace numtracer
