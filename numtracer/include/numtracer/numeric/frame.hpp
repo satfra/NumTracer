@@ -159,30 +159,51 @@ namespace numtracer::inline numeric
     const std::vector<std::vector<int>> &units() const { return units_; }
 
     // ── polynomials (these freeze the symbol list) ─────────────────────────────────────────────────
+
+    /// Returns a zero polynomial in all symbols.
+    /// @warning Freezes the symbol list
     Poly zero() const { return Poly(frozen_nsym()); }
+
+    /// Returns a constant polynomial `c * 1` in all symbols.
+    /// @warning Freezes the symbol list
     Poly constant(Cx c) const { return Poly::constant(frozen_nsym(), c); }
+
+    /// Returns a constant polynomial `c * 1` in all symbols.
+    /// @warning Freezes the symbol list
     Poly constant(double c) const { return constant(Cx{c, 0}); }
-    /// The polynomial `x_i` of symbol @p i.
+
+    /// The polynomial `1 · x_i`: symbol @p i (declaration order) alone, as a Poly in all nsym() variables.
+    /// @warning Freezes the symbol list
     Poly var(int i) const
     {
       if (i < 0 || i >= frozen_nsym())
         NT_THROW(std::out_of_range, ("Frame::var: symbol " + std::to_string(i) + " out of range").c_str());
       return Poly::var(nsym(), i);
     }
+
     /// The monomial `c · Π x_i^{e_i}`.
+    /// @warning Freezes the symbol list
     Poly mono(const std::vector<int> &e, Cx c) const
     {
       if (static_cast<int>(e.size()) != frozen_nsym())
         NT_THROW(std::invalid_argument, "Frame::mono: exponent vector length differs from the symbol count");
       return Poly::mono(nsym(), e, c);
     }
-    /// The inverse atom `1/D_aid` as a polynomial (tests and hand-built reductions).
-    Poly atom(int aid) const { return Poly::atom(frozen_nsym(), aid); }
+
+    /// The inverse `1/denominators()[aid]` as a polynomial (tests and hand-built reductions).
+    /// @warning Freezes the symbol list
+    Poly inv_denominator(int aid) const { return Poly::atom(frozen_nsym(), aid); }
+
+    /// The zero dressing polynomial (no terms) over this frame's symbols; fill it with DPoly::add.
+    /// @warning Freezes the symbol list
     DPoly dzero() const { return DPoly(frozen_nsym()); }
+
     /// The slashed 4×4 matrix of a momentum given by its components.
+    /// @warning Freezes the symbol list
     Mat4 slashC(const std::array<Poly, 4> &comp) const { return ::numtracer::numeric::slashC(frozen_nsym(), comp); }
 
     // ── momenta and indices ──────────────────────────────────────────────────────────────────────
+
     /// Declare a momentum by its four Euclidean components (component 0 is the heat-bath direction
     /// at finite temperature).
     Momentum momentum(Component c0, Component c1, Component c2, Component c3)
@@ -201,6 +222,7 @@ namespace numtracer::inline numeric
       comp_.push_back(std::move(row));
       return {{{1.0, static_cast<int>(comp_.size()) - 1}}};
     }
+
     /// Set component @p mu of momentum @p vid (generated code; the table grows as needed).
     void set_component(int vid, int mu, Poly p)
     {
@@ -210,20 +232,27 @@ namespace numtracer::inline numeric
         comp_.resize(static_cast<std::size_t>(vid) + 1, {zero(), zero(), zero(), zero()});
       comp_[static_cast<std::size_t>(vid)][static_cast<std::size_t>(mu)] = std::move(p);
     }
+
     /// The component table: `components()[vid][mu]`.
     const std::vector<std::array<Poly, 4>> &components() const { return comp_; }
-    /// @p N fresh, distinct Lorentz index labels: `auto [mu, nu] = F.indices<2>();`.
+
+    /// Generate @p N fresh Lorentz index labels: `auto [mu, nu] = F.indices<2>();`.
+    /// They are distinct from each other and from all the previous ones.
     template <int N> std::array<LorentzIndex, N> indices()
     {
-      std::array<LorentzIndex, N> r = make_indices<N>(std::make_integer_sequence<int, N>{});
+      const int first = nextIndex_;
       nextIndex_ += N;
-      return r;
+      return [first]<int... I>(std::integer_sequence<int, I...>) {
+        return std::array<LorentzIndex, N>{LorentzIndex{first + I}...};
+      }(std::make_integer_sequence<int, N>{});
     }
 
     // ── projector denominators ───────────────────────────────────────────────────────────────────
-    /// Register the `1/k²` denominators of every projector in @p nets, under the atom ids the nets
-    /// carry. Generated code calls this once for all its nets before contracting; hand-built nets do
-    /// not need it (@ref trace assigns atoms itself).
+
+    /// Scan @p nets for all projectors they may contain and extract their `1/k²` denominators.
+    /// These are then registered under the atom ids the nets carry, so @ref trace can read them as `1/k²`.
+    /// @warning Generated code calls this once for all its nets before contracting; hand-built nets do not need it
+    /// (@ref trace assigns atoms itself).
     void add_denominators(const std::vector<LorentzNet> &nets)
     {
       std::vector<Poly> den = ndetail::collect_atom_denoms(frozen_nsym(), nets, comp_);
@@ -236,8 +265,10 @@ namespace numtracer::inline numeric
       for (std::size_t i = 0; i < den.size(); ++i)
         if (!den[i].empty()) set_denominator(static_cast<int>(i), std::move(den[i]));
     }
+
     /// The projector denominators: `denominators()[atom] = k²`.
     const std::vector<Poly> &denominators() const { return atomDen_; }
+
     /// Denominator @p atom as a C++ expression in the symbol names.
     std::string denominator_cpp(int atom) const
     {
@@ -245,6 +276,7 @@ namespace numtracer::inline numeric
     }
 
     // ── contraction ──────────────────────────────────────────────────────────────────────────────
+
     /// @brief The trace of the Dirac chain @p chain, contracted with the Lorentz network @p lor, as a
     ///        polynomial in the frame's symbols (projector denominators ride as atoms `1/k²`).
     ///
@@ -259,15 +291,18 @@ namespace numtracer::inline numeric
       if (!needs_atoms(lor)) return std::as_const(*this).trace(chain, lor);
       return std::as_const(*this).trace(chain, assign_atoms(lor));
     }
+
     /// The `const` form: every projector's atoms must already be registered.
     Poly trace(const DiracChain &chain, const LorentzNet &lor = {}) const
     {
       return ndetail::contract(frozen_nsym(), chain, lor, comp_, atomDen_, units_);
     }
+
     /// A pure Lorentz network contracted to a scalar polynomial:
     /// `F.contract(vec(mu, p) * projT(mu, nu, l) * vec(nu, p))`.
     Poly contract(const LorentzNet &lor) { return trace({}, lor); }
     Poly contract(const LorentzNet &lor) const { return trace({}, lor); }
+
     /// A chain with dressed-numerator SLOTS, collected per dressing monomial (see @ref DSlotOpt).
     /// Like the plain @ref trace, this overload assigns atoms to projectors built without one.
     DPoly trace(const std::vector<DChainTok> &chain, std::vector<DSlot> slots, LorentzNet lor)
@@ -279,10 +314,12 @@ namespace numtracer::inline numeric
             assign_atoms(f);
       return std::as_const(*this).trace(chain, slots, lor);
     }
+
     DPoly trace(const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots, const LorentzNet &lor) const
     {
       return ndetail::contract_dressed(frozen_nsym(), chain, slots, lor, comp_, atomDen_, units_);
     }
+
     /// Generated code: the slots' dressing is carried outside, so the result is a plain polynomial.
     Poly trace_structural(const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
                           const LorentzNet &lor) const
@@ -291,9 +328,11 @@ namespace numtracer::inline numeric
     }
 
     // ── evaluation ───────────────────────────────────────────────────────────────────────────────
+
     /// A point from the values of the INDEPENDENT symbols, in declaration order (an angle's sine is
     /// derived from its cosine, not given).
     Point at(std::initializer_list<double> values) const { return at(std::vector<double>(values)); }
+
     /// `F.at(1.3, 0.8, 0.6)`: the same, without the braces (`F.at()` for a frame without symbols).
     template <class... V>
       requires(std::is_arithmetic_v<V> && ...)
@@ -301,6 +340,7 @@ namespace numtracer::inline numeric
     {
       return at(std::initializer_list<double>{static_cast<double>(values)...});
     }
+
     /// The same, from values held in a vector (independent symbols, declaration order).
     Point at(const std::vector<double> &values) const
     {
@@ -316,6 +356,7 @@ namespace numtracer::inline numeric
       fill_derived(pt);
       return pt;
     }
+
     /// A point from named values: `F.at({{P, 1.3}, {L, 0.8}, {C, 0.6}})`. Every independent symbol
     /// needs one.
     Point at(std::initializer_list<std::pair<Symbol, double>> values) const
@@ -337,8 +378,10 @@ namespace numtracer::inline numeric
       fill_derived(pt);
       return pt;
     }
+
     /// The polynomial's value at @p pt; the projector denominators it carries are evaluated there too.
     Cx eval(const Poly &p, const Point &pt) const { return ndetail::eval(p, checked(pt).x, atom_values(pt, {&p})); }
+
     /// A dressed polynomial's value; `dressings[id]` is the value of dressing `id`.
     Cx eval(const DPoly &p, const Point &pt, const std::vector<double> &dressings) const
     {
@@ -349,6 +392,7 @@ namespace numtracer::inline numeric
     }
 
     // ── lowering to C++ ──────────────────────────────────────────────────────────────────────────
+
     /// The `f[]` slot values of a lowered program (@ref to_genprog) at @p pt, for @ref interpret.
     std::vector<double> fill_values(const GlobalEnv &g, const Point &pt) const
     {
@@ -371,6 +415,7 @@ namespace numtracer::inline numeric
       }
       return f;
     }
+
     /// The formulas that compute each `f[]` slot from the independent symbols (see @ref emit_fill).
     FillFormulas fill_formulas() const
     {
@@ -396,6 +441,7 @@ namespace numtracer::inline numeric
       };
       return fm;
     }
+
     /// Print `void name(double* f, double <sym>, …)`: the function that fills the `f[]` array a
     /// lowered program reads, from the independent symbols.
     void emit_fill(std::ostream &out, const GlobalEnv &g, const std::string &name = "fill",
@@ -412,6 +458,7 @@ namespace numtracer::inline numeric
     {
       return ::numtracer::numeric::contract_traces<P>(nsym(), nCache, W, std::forward<TraceFn>(trace));
     }
+
     /// Streaming phase B: folds each group's nets on demand and drains straight to `sink`, so no net
     /// polynomial outlives its group. See `trace_fold.hpp` for the equivalence argument.
     template <class P, class TraceFn, class ScaleFn, class Sink>
@@ -424,6 +471,7 @@ namespace numtracer::inline numeric
                                                      std::forward<TraceFn>(trace), std::forward<ScaleFn>(scale),
                                                      std::forward<Sink>(sink));
     }
+
     /// Streaming phase B, dressed variant: a plain-Poly `traceTable` + the per-sub-term dressing
     /// monomials `subDress` fold into a DPoly per net. See `trace_fold.hpp`.
     template <class TraceFn, class ScaleFn, class Sink>
@@ -453,10 +501,7 @@ namespace numtracer::inline numeric
     std::map<std::pair<bool, Vlc>, int> autoAtom_; ///< (spatial?, momentum up to sign) → assigned atom
     int nextIndex_ = 0;                            ///< next fresh Lorentz label
 
-    template <int N, int... I> std::array<LorentzIndex, N> make_indices(std::integer_sequence<int, I...>) const
-    {
-      return {LorentzIndex{nextIndex_ + I}...};
-    }
+    /// Check that the frame is still open for symbol declaration. Throws if not.
     void require_open(const char *what) const
     {
       if (frozen_)
@@ -464,16 +509,21 @@ namespace numtracer::inline numeric
                                     ": declare every symbol before making a momentum or polynomial from them")
                                        .c_str());
     }
+
+    /// Freeze the symbol list and return its size.
     int frozen_nsym() const
     {
       if (!frozen_) frozen_ = true; // read-only once frozen: the const contractions run in parallel
       return nsym();
     }
+
+    /// Check that @p p is a polynomial of this frame (or empty). Throws if not.
     void check_owned(const Poly &p, const char *what) const
     {
       if (!p.empty() && p.nsym != nsym())
         NT_THROW(std::invalid_argument, (std::string(what) + ": a polynomial of another frame").c_str());
     }
+
     std::size_t independent_count() const
     {
       std::size_t n = 0;
@@ -481,6 +531,7 @@ namespace numtracer::inline numeric
         n += d < 0;
       return n;
     }
+
     std::string independent_list() const
     {
       std::string s;
@@ -488,6 +539,7 @@ namespace numtracer::inline numeric
         if (derivedFrom_[i] < 0) s += (s.empty() ? "" : ", ") + names_[i];
       return s;
     }
+
     void fill_derived(Point &pt) const
     {
       for (std::size_t i = 0; i < names_.size(); ++i)
@@ -500,12 +552,14 @@ namespace numtracer::inline numeric
           pt.x[i] = std::sqrt(1.0 - cv * cv);
         }
     }
+
     const Point &checked(const Point &pt) const
     {
       if (pt.frame != this)
         NT_THROW(std::invalid_argument, "Frame::eval: the point belongs to another frame (use this frame's at())");
       return pt;
     }
+
     /// `k²` of atom @p a at @p pt, complex in a finite-density frame.
     Cx atom_denominator_value(const Point &pt, int a) const
     {
@@ -514,6 +568,7 @@ namespace numtracer::inline numeric
                  ("Frame::eval: atom " + std::to_string(a) + " is not registered in this frame").c_str());
       return ndetail::eval(atomDen_[static_cast<std::size_t>(a)], pt.x, {});
     }
+
     /// `1/k²` of atom @p a at @p pt; refuses an unregistered atom and a vanishing denominator.
     double atom_value(const Point &pt, int a) const
     {
@@ -530,6 +585,7 @@ namespace numtracer::inline numeric
                                         .c_str());
       return 1.0 / d;
     }
+
     /// The atom values the polynomials @p parts reference, evaluated at @p pt (others stay NaN).
     std::vector<double> atom_values(const Point &pt, const std::vector<const Poly *> &parts) const
     {
@@ -545,6 +601,7 @@ namespace numtracer::inline numeric
           }
       return v;
     }
+
     void set_denominator(int id, Poly den)
     {
       if (static_cast<std::size_t>(id) >= atomDen_.size()) atomDen_.resize(static_cast<std::size_t>(id) + 1, zero());
@@ -562,6 +619,7 @@ namespace numtracer::inline numeric
                  ("Frame: atom id " + std::to_string(id) + " already names a different denominator").c_str());
       slot = std::move(den);
     }
+
     static bool needs_atoms(const LorentzNet &lor)
     {
       for (const LorentzTerm &t : lor)
@@ -572,6 +630,7 @@ namespace numtracer::inline numeric
         }
       return false;
     }
+
     /// The atom of projector @p f's `k²` (or `|k⃗|²` when @p spatial): one id per momentum up to
     /// sign, its denominator registered on first use.
     int atom_for(const LorentzFactor &f, bool spatial)
@@ -591,6 +650,7 @@ namespace numtracer::inline numeric
       autoAtom_.emplace(std::make_pair(spatial, std::move(key)), id);
       return id;
     }
+
     void assign_atoms(LorentzFactor &f)
     {
       if (!f.is_projector()) return;
@@ -598,6 +658,7 @@ namespace numtracer::inline numeric
       if ((f.kind == LorentzFactor::ProjE || f.kind == LorentzFactor::ProjM) && f.atomS < 0)
         f.atomS = atom_for(f, true);
     }
+
     LorentzNet assign_atoms(LorentzNet lor)
     {
       for (LorentzTerm &t : lor)
