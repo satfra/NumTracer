@@ -115,7 +115,7 @@ int main()
     std::printf("== divThroughPolyAtoms: exact division cancels the atom ==\n");
     const std::vector<nm::Poly> aden{D};
     const nm::Poly Q = x0 * x1 + x3 * x3 + env.constant(Cx{-1.5, 0.0});
-    const nm::Poly p = (Q * D) * env.atom(0); // (Q·D)·(1/D)
+    const nm::Poly p = (Q * D) * env.inv_denominator(0); // (Q·D)·(1/D)
     check(termsWithAtoms(p) == p.terms.size() && !p.terms.empty(), "input carries the atom on every term");
 
     const nm::Poly r = nm::divThroughPolyAtoms(p, aden);
@@ -135,7 +135,7 @@ int main()
     std::printf("== divThroughPolyAtoms: non-divisible numerator is value-preserved ==\n");
     const std::vector<nm::Poly> aden{D};
     const nm::Poly N = x0 * x2 + x3 + env.constant(Cx{0.7, 0.0}); // deliberately not a multiple of D
-    const nm::Poly p = N * env.atom(0);
+    const nm::Poly p = N * env.inv_denominator(0);
 
     const nm::Poly r = nm::divThroughPolyAtoms(p, aden);
     checkSameValue("non-divisible value preserved", p, r, aden, nsym, rng);
@@ -148,7 +148,7 @@ int main()
     std::printf("== divThroughMonomialAtoms: monomial denominator ==\n");
     const std::vector<nm::Poly> aden{Dm};
     // x2^2 · (1/x2^2) must cancel exactly; the x3 term cannot and must keep its atom.
-    const nm::Poly p = (x2 * x2 * x0) * env.atom(0) + (x3 * x1) * env.atom(0);
+    const nm::Poly p = (x2 * x2 * x0) * env.inv_denominator(0) + (x3 * x1) * env.inv_denominator(0);
     const nm::Poly r = nm::divThroughMonomialAtoms(p, aden);
     checkSameValue("monomial-cancellation value preserved", p, r, aden, nsym, rng);
     check(r.terms.size() <= p.terms.size(), "no term-count growth");
@@ -173,7 +173,7 @@ int main()
       }
       if (it % 3 == 0) N = N * D; // make a third of them exactly divisible
       const int aid = static_cast<int>(it % 2);
-      const nm::Poly p = N * env.atom(aid);
+      const nm::Poly p = N * env.inv_denominator(aid);
 
       nm::Poly r = nm::divThroughMonomialAtoms(p, aden);
       r = nm::divThroughPolyAtoms(r, aden);

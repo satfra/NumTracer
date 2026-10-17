@@ -25,7 +25,7 @@ collection of equal-momentum propagator groups (`reduce_units`).
 
 Every `Poly` (and `DPoly`) is minted through a `numtracer::Frame` (`numeric/frame.hpp`), which
 fixes the symbol list — and with it the symbol-space size `nsym` — **once**: you write
-`frame.mono(...)`, `frame.atom(...)`, `frame.var(i)`, `frame.zero()`, and contract with
+`frame.mono(...)`, `frame.inv_denominator(...)`, `frame.var(i)`, `frame.zero()`, and contract with
 `frame.trace(...)`. Because the frame carries `nsym`, the raw size-taking factories never appear in
 caller code, and two polynomials built from the same frame are guaranteed to share a symbol space.
 The frame also owns the component table and the projector denominators, so a contraction call takes
@@ -64,7 +64,7 @@ namespaces:
   and `LorentzFactor::atomS` for the spatial `1/|k⃗|²`); `collect_atom_denoms` interns the actual
   denominator polynomial once into a separate table, `atomDen[aid] = k² = Σ_μ comp[μ]²` (itself
   a `Poly` in the symbols). A term multiplied by `1/D₃·1/D₃·1/D₇` carries `atoms = {3,3,7}`
-  (sorted, with multiplicity ⇒ `1/D₃²` is `{3,3}`). `frame.atom(aid)` builds a bare `1/D`
+  (sorted, with multiplicity ⇒ `1/D₃²` is `{3,3}`). `frame.inv_denominator(aid)` builds a bare `1/D`
   as a monomial with empty exponents and `atoms = {aid}`.
 
 Two monomials are "the same" (and so combine) iff their exponent vectors *and* their id multisets

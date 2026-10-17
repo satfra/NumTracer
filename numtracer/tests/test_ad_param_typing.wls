@@ -35,8 +35,8 @@
         passing ADParams without ScalarParams must still get "auto".
 
      3. Non-AD parameters are untouched: a plain scalar stays "double", a dressing keeps its own
-        entry["Type"], and a bare (non-Association) dressing name falls back to dressTy. This is
-        what keeps every committed kernel byte-identical.
+        entry["Type"], and a bare (non-Association) dressing name gets dressTy. With dressTy =
+        "auto" (DressingType -> Automatic) every dressing is "auto", even one with its own Type.
 
      4. Symbol and String spellings of a name agree, on both the parameter side and the ADParams
         side. Hand-written flow files spell names as Symbols; DiFfRG_compat passes Strings.
@@ -53,7 +53,7 @@ Begin["NumTracer`Private`"];
 
 (* Total number of check[] calls below. An Abort escaping mid-file would otherwise leave a passing
    tally simply because the remaining checks never executed; asserting the count closes that. *)
-$nExpected = 22;
+$nExpected = 24;
 $fail = 0; nRan = 0;
 check[label_, cond_] := (
   nRan++;
@@ -69,8 +69,8 @@ SetAttributes[abortsQ, HoldRest];
 abortsQ[expr_Hold, msg_] :=
   CheckAbort[Quiet[ReleaseHold[expr]; False, msg], True];
 
-(* stand-in for the dressTy closure mkGenerateKernel builds from "DressingType"/interpTy. *)
-dressTy = Function[nm, "FALLBACK_" <> ntParamName[nm]];
+(* stand-in for an explicit "DressingType" string; Automatic arrives here as "auto". *)
+dressTy = "FALLBACK";
 
 Print["=== 1. ntParamName: Symbol and String spellings collapse to the same key ==="];
 check["a String is itself",            ntParamName["d1V"] === "d1V"];
@@ -110,12 +110,17 @@ check["dressing Association -> its own Type",
   ntRuntimeParamType[<|"Name" -> "ZA", "Type" -> "TexLinearInterpolator1D"|>,
     {"d1V"}, {"d1V"}, dressTy] === "TexLinearInterpolator1D"];
 (* the backend-agnostic path (ParameterOrder -> Automatic) maps over BARE names, not Associations,
-   and those must reach dressTy — that is how a mixed 1-D/3-D interpolator flow gets per-name
-   types. *)
+   and those must get dressTy. *)
 check["bare Symbol dressing -> dressTy",
-  ntRuntimeParamType[Global`ZA, {"d1V"}, {"d1V"}, dressTy] === "FALLBACK_ZA"];
+  ntRuntimeParamType[Global`ZA, {"d1V"}, {"d1V"}, dressTy] === "FALLBACK"];
 check["bare String dressing -> dressTy",
-  ntRuntimeParamType["ZA", {"d1V"}, {"d1V"}, dressTy] === "FALLBACK_ZA"];
+  ntRuntimeParamType["ZA", {"d1V"}, {"d1V"}, dressTy] === "FALLBACK"];
+check["DressingType auto beats a dressing entry Type",
+  ntRuntimeParamType[<|"Name" -> "ZA", "Type" -> "TexLinearInterpolator1D"|>,
+    {"d1V"}, {"d1V"}, "auto"] === "auto"];
+check["DressingType auto never touches a plain scalar",
+  ntRuntimeParamType[<|"Name" -> "rhoL", "Type" -> "double"|>,
+    {}, {"rhoL"}, "auto"] === "double"];
 (* a dressing is never in scalarNames, but if one ever were, the scalar gate must not steal it
    ahead of an AD flag. *)
 check["AD flag beats a dressing entry Type",

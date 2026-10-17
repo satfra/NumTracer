@@ -126,9 +126,9 @@ int main() {
   {
     using namespace numtracer::numeric;
     Frame env(ntest::names(4));
-    ok("Poly::atom accepts the largest in-range id", !throws([&] { (void)env.atom(32767); }));
-    ok("Poly::atom rejects an id that would wrap int16", throws([&] { (void)env.atom(32768); }));
-    ok("Poly::atom rejects a negative id", throws([&] { (void)env.atom(-1); }));
+    ok("Poly::atom accepts the largest in-range id", !throws([&] { (void)env.inv_denominator(32767); }));
+    ok("Poly::atom rejects an id that would wrap int16", throws([&] { (void)env.inv_denominator(32768); }));
+    ok("Poly::atom rejects a negative id", throws([&] { (void)env.inv_denominator(-1); }));
 
     // D3: two ProjT on the SAME inv id. Same vid => the ordinary repeated-projector case, silent.
     // Different vid => the corruption, must throw.
@@ -257,7 +257,7 @@ int main() {
     using namespace numtracer;
     Frame env(ntest::names(2));
     const Poly x0 = env.var(0);
-    const Poly withAtom = x0 * env.atom(1);
+    const Poly withAtom = x0 * env.inv_denominator(1);
     ok("eval: too few symbol values throws (was a silent wrong number)",
        throws([&] { (void)ndetail::eval(x0, {1.0}, {}); }));
     ok("eval: missing atom value throws (was a segfault)", throws([&] { (void)ndetail::eval(withAtom, {1.0, 2.0}, {0.5}); }));
