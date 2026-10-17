@@ -37,7 +37,7 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
               groupDir_String, kernelFile_String] :=
   Block[{$ntComplexRuntimeProjection = fronts[[1, "Options"]]["ComplexRuntimeProjection"]},
   Module[{o = fronts[[1, "Options"]], n = Length[fronts], sig = fronts[[1, "Signature"]], groupName, macros,
-          complexQ, evens, parts, lookups, dr, ints, traceDecls, nenv, preamble, body, kernelFn, constFn,
+          complexQ, evens, parts, lookups, dr, ints, traceDecls, nenv, preamble, body, kernelFn, hoistTrait, constFn,
           traits, tracesIncludes, verdictIncludes, header},
     groupName = StringReplace[className, "_kernel" ~~ EndOfString -> ""];
     (* -- the members must agree in everything but their projection -- *)
@@ -125,6 +125,7 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
             "#else",
             "#error \"NumTracer: kernel group '" <> groupName <> "' mixes genuinely complex (verdict 0) and real members; generate them as separate flows.\"",
             "#endif"}, "\n"]];
+    {kernelFn, hoistTrait} = ntHoistedKernelFn[kernelFn, o, parts[[1, "Split"]], fronts[[1, "MatsubaraSym"]]];
     constFn = FunKit`MakeCppFunction[consts, "Name" -> "constant", "Prefix" -> o["Decorator"], "Return" -> "auto",
       "CodeParser" -> "Cpp", "Parameters" -> sig["ConstParams"], "MultiReturn" -> multiReturn,
       "Body" -> If[AllTrue[consts, MatchQ[#, 0 | 0.]&], "", StringRiffle[ntSupportUsings[o["SupportNamespace"]], "\n"]]];
@@ -134,7 +135,8 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
         {"static constexpr bool matsubara_even = " <>
           StringRiffle[Map[If[#["MVarIdx"] >= 0, #["Options"]["NsHome"] <> "::matsubara_even", "true"]&, fronts], " && "] <> ";"},
         {}],
-      If[parts[[1, "FiniteExtent"]], {"static constexpr bool matsubara_finite_extent = true;"}, {}]];
+      If[parts[[1, "FiniteExtent"]], {"static constexpr bool matsubara_finite_extent = true;"}, {}],
+      hoistTrait];
 
     tracesIncludes = Map[ntRelativePath[groupDir, #["TracesFile"]]&, fronts];
     verdictIncludes =

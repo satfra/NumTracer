@@ -60,7 +60,7 @@ ntReportDiFfRG[name_String, flowDir_, lines_List] :=
     ntLog["[DiFfRG] ", #]& /@ lines;(* raw chatter, verbose only *)
     Print["[NumTracer] " <> name <> ": DiFfRG scaffold — " <> ToString[Length[wrote]] <> " written, " <> ToString[Length[unchanged]] <> " unchanged"];
     If[ntCMakeStaleQ[flowDir, name, wrote],
-      Print["[NumTracer] " <> name <> ": flows/CMakeLists.txt needs refreshing — run UpdateNTFlows[\"" <> name <> "\"]  (NOT UpdateFlows[], which would drop the NumTracer CMake patch)"]
+      Print["[NumTracer] " <> name <> ": flows/CMakeLists.txt needs refreshing — run UpdateNTFlows[\"<library name>\"] after the last flow  (NOT UpdateFlows[], which would drop the NumTracer CMake patch)"]
     ];
     wrote
   ];
@@ -133,6 +133,16 @@ Options[MakeNTKernelDiFfRG] =
 (* {{D1, D2, ...}, ...}: dressings on one grid, which may share a coordinate transform (see
    ntShareGridLookups). Default: only the lookups of one dressing share it. *)
     "SharedGrids" -> {},
+(* MakeNTKernel's "Hoist" / "PointArguments": also emit the kernel in hoisted form (pre()/post(), see
+   kernel_has_pre in DiFfRG's quadrature_integrator_fT.hh). It only applies to finite-T flows and is a
+   no-op otherwise, so Automatic = True. PointArguments names the parameters a caller passes per point
+   to map_points(), e.g. the field-dependent inputs of a potential flow; pre() never reads them.
+   Automatic = the AD parameters (V', V'', ...) with "MapPoints" -> True, none otherwise: map() and get()
+   have no per-point arguments, and every listed parameter keeps the lines that read it out of pre().
+   A per-point parameter missing from the list costs only the speedup: the integrator then sees that
+   pre() reads it and uses the plain kernel. *)
+    "Hoist" -> Automatic,
+    "PointArguments" -> Automatic,
     "IntegrationVariables" -> Automatic, (* REQUIRED, e.g. {"l1","cos1"} *)
     "Parameters" -> Automatic, (* REQUIRED kernelParameterList; also the source of Dressings *)
     "ParameterOrder" -> Automatic, (* positional runtime ABI; Automatic follows Parameters order *)
@@ -301,6 +311,15 @@ ntShareableInterpTypeQ[t_] :=
       ("SplineInterpolator1D" | "SplineInterpolator1DStack" | "LinearInterpolator1D" | "LinearInterpolator2D" |
         "LinearInterpolator3D" | "PeriodicCubicInterpolator3D") ~~ "<" ~~ ___];
 
+(* The AD-flagged scalar parameters; k and p are never among them. *)
+ntADParamNames[params_] :=
+  Cases[params,
+    a_?AssociationQ /; ntScalarTypeQ[a["Type"]] && TrueQ[a["AD"]] && !MemberQ[{"k", "p"}, ntParamName[a["Name"]]] :> a["Name"]];
+
+(* "PointArguments" -> Automatic: the AD parameters for a kernel with map_points(), none otherwise. *)
+ntPointArguments[Automatic, mapPoints_, params_] := If[TrueQ[mapPoints], ntADParamNames[params], {}];
+ntPointArguments[names_, _, _] := names;
+
 (* The dressings that share lookups under "ShareInterpolatorIndex" -> Automatic: those of a shareable type. *)
 ntShareableDressings[params_List] :=
   Cases[params, a_?AssociationQ /; !ntScalarTypeQ[a["Type"]] && ntShareableInterpTypeQ[a["Type"]] :> a["Name"]];
@@ -378,12 +397,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
 (* AD-flagged scalar params (e.g. d1V, d2V for the FE-potential flows): the DiFfRG integrator has an
    autodiff twin (integrator_AD) that forwards these as autodiff::real, so the kernel must declare them
    as `const auto&`, not `const double&`. Thread their names to MakeNTKernel so it types them auto. *)
-    adParams =
-      Cases[
-        params,
-        a_?AssociationQ /;
-            ntScalarTypeQ[a["Type"]] && TrueQ[a["AD"]] && !MemberQ[{"k", "p"}, ntParamName[a["Name"]]] :> a["Name"]
-      ];
+    adParams = ntADParamNames[params];
     (* resolve paths *)
     flowDir = ntFlowDir[OptionValue["FlowDirectory"]];
     (* create flows/ up front so the DiFfRG scaffold and the kernel/manifest writes have a target *)
@@ -446,6 +460,8 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
       "ShareInterpolatorIndex" -> shareIdxOpt,
       "SharedGrids" -> OptionValue["SharedGrids"],
       "HoistLoopConstLookups" -> hoistOpt,
+      "Hoist" -> (OptionValue["Hoist"] /. Automatic -> True),
+      "PointArguments" -> ntPointArguments[OptionValue["PointArguments"], OptionValue["MapPoints"], params],
       "RealOutput" -> OptionValue["RealOutput"],
       "ComplexRuntimeProjection" -> OptionValue["ComplexRuntimeProjection"],
       "ComplexEndProjection" -> OptionValue["ComplexEndProjection"],
@@ -540,6 +556,8 @@ MakeNTKernelGroupDiFfRG[ntks : {__NTKernel}, opts : OptionsPattern[]] :=
       "Decorator" -> (OptionValue["Decorator"] /. Automatic :> If[OptionValue["Device"] === "GPU", "static KOKKOS_INLINE_FUNCTION", "static inline"]),
       "DeviceTarget" -> (OptionValue["Device"] === "GPU"), "Dressings" -> dressParams[[All, "Name"]],
       "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False,
+      "Hoist" -> (OptionValue["Hoist"] /. Automatic -> True),
+      "PointArguments" -> ntPointArguments[OptionValue["PointArguments"], OptionValue["MapPoints"], params],
       "RealOutput" -> OptionValue["RealOutput"], "ComplexRuntimeProjection" -> OptionValue["ComplexRuntimeProjection"],
       "ComplexEndProjection" -> OptionValue["ComplexEndProjection"],
       "ScalarParams" -> Cases[params, a_?AssociationQ /; ntScalarTypeQ[a["Type"]] && !MemberQ[{"k", "p"}, ntParamName[a["Name"]]] :> a["Name"]],
