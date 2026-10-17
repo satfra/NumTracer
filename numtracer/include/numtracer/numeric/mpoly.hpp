@@ -35,18 +35,18 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <tuple>
 #include <utility>
-#include <string>
 #include <vector>
-#include <map>
-#include <cmath>
 
 namespace numtracer::inline numeric
 {
@@ -80,7 +80,9 @@ namespace numtracer::inline numeric
   template <class T> struct NarrowAlloc : std::allocator<T> {
     using size_type = std::uint32_t;
     using difference_type = std::int32_t;
-    template <class U> struct rebind { using other = NarrowAlloc<U>; };
+    template <class U> struct rebind {
+      using other = NarrowAlloc<U>;
+    };
     NarrowAlloc() = default;
     template <class U> NarrowAlloc(const NarrowAlloc<U> &) noexcept {}
   };
@@ -103,12 +105,12 @@ namespace numtracer::inline numeric
   /// list, so nsym and degree are bounded only by `MonoExpT` (`int16_t`, ≤ 32767).
   struct MonoExp {
     static constexpr unsigned kExpBits = 5;
-    static constexpr unsigned kPerWord = 64u / kExpBits;         ///< 12 symbols per 64-bit word (no straddle)
+    static constexpr unsigned kPerWord = 64u / kExpBits;               ///< 12 symbols per 64-bit word (no straddle)
     static constexpr int kInlineSyms = 2 * static_cast<int>(kPerWord); ///< 24 symbols inline
     static constexpr MonoExpT kMaxExp = static_cast<MonoExpT>((1u << kExpBits) - 1u); ///< 31
 
-    std::array<std::uint64_t, 2> packed{};             ///< packed inline exponents (big-endian per word)
-    std::unique_ptr<std::vector<MonoExpT>> overflow;   ///< full exponent list; null ⇒ inline
+    std::array<std::uint64_t, 2> packed{};           ///< packed inline exponents (big-endian per word)
+    std::unique_ptr<std::vector<MonoExpT>> overflow; ///< full exponent list; null ⇒ inline
 
     static unsigned wordOf(int k) { return static_cast<unsigned>(k) / kPerWord; }
     /// Big-endian slot: symbol 0 → shift 59 (high bits), symbol 11 → shift 4. Low nibble unused, so the
@@ -125,7 +127,8 @@ namespace numtracer::inline numeric
     {
       overflow = std::make_unique<std::vector<MonoExpT>>();
       overflow->reserve(static_cast<std::size_t>(kInlineSyms));
-      for (int j = 0; j < kInlineSyms; ++j) overflow->push_back(unpackInline(j));
+      for (int j = 0; j < kInlineSyms; ++j)
+        overflow->push_back(unpackInline(j));
     }
 
     MonoExp() = default;
@@ -136,15 +139,15 @@ namespace numtracer::inline numeric
     template <class It> MonoExp(It b, It e)
     {
       int k = 0;
-      for (; b != e; ++b, ++k) set(k, static_cast<MonoExpT>(*b));
+      for (; b != e; ++b, ++k)
+        set(k, static_cast<MonoExpT>(*b));
     }
 
     // `overflow` owns its list, so the moves are the compiler's; only the deep COPY is hand-written.
     MonoExp(MonoExp &&) noexcept = default;
     MonoExp &operator=(MonoExp &&) noexcept = default;
     MonoExp(const MonoExp &o)
-        : packed(o.packed),
-          overflow(o.overflow ? std::make_unique<std::vector<MonoExpT>>(*o.overflow) : nullptr)
+        : packed(o.packed), overflow(o.overflow ? std::make_unique<std::vector<MonoExpT>>(*o.overflow) : nullptr)
     {
     }
     MonoExp &operator=(const MonoExp &o)
@@ -201,9 +204,21 @@ namespace numtracer::inline numeric
       MonoExp *owner;
       int slot;
       operator MonoExpT() const { return owner->get(slot); }
-      Ref &operator=(MonoExpT v) { owner->set(slot, v); return *this; }
-      Ref &operator+=(MonoExpT v) { owner->set(slot, static_cast<MonoExpT>(owner->get(slot) + v)); return *this; }
-      Ref &operator-=(MonoExpT v) { owner->set(slot, static_cast<MonoExpT>(owner->get(slot) - v)); return *this; }
+      Ref &operator=(MonoExpT v)
+      {
+        owner->set(slot, v);
+        return *this;
+      }
+      Ref &operator+=(MonoExpT v)
+      {
+        owner->set(slot, static_cast<MonoExpT>(owner->get(slot) + v));
+        return *this;
+      }
+      Ref &operator-=(MonoExpT v)
+      {
+        owner->set(slot, static_cast<MonoExpT>(owner->get(slot) - v));
+        return *this;
+      }
     };
     MonoExpT operator[](int k) const { return get(k); }
     Ref operator[](int k) { return Ref{this, k}; }
@@ -340,7 +355,8 @@ namespace numtracer::inline numeric
       for (std::size_t i = 1; sorted && i < s.size(); ++i)
         sorted = s[i - 1].first < s[i].first;
       if (sorted) {
-        for (auto &kv : s) absorb(kv);
+        for (auto &kv : s)
+          absorb(kv);
         return p;
       }
       struct Key {
@@ -361,7 +377,8 @@ namespace numtracer::inline numeric
         if (a.p1 != b.p1) return a.p1 < b.p1;
         return ma.atoms < mb.atoms;
       });
-      for (const Key &k : keys) absorb(s[k.idx]);
+      for (const Key &k : keys)
+        absorb(s[k.idx]);
       return p;
     }
 
@@ -421,9 +438,7 @@ namespace numtracer::inline numeric
         if (carry) return false;
       }
       NT_STAT_ADD(mul_keyed, 1);
-      auto less = [](const AtomFreeKey &x, const AtomFreeKey &y) {
-        return x.p0 != y.p0 ? x.p0 < y.p0 : x.p1 < y.p1;
-      };
+      auto less = [](const AtomFreeKey &x, const AtomFreeKey &y) { return x.p0 != y.p0 ? x.p0 < y.p0 : x.p1 < y.p1; };
       bool sorted = true;
       for (std::size_t k = 1; sorted && k < keys.size(); ++k)
         sorted = less(keys[k - 1], keys[k]);
@@ -518,7 +533,8 @@ namespace numtracer::inline numeric
         for (const auto &kv : p.terms) {
           if (kv.first.e.overflow) return false;
           std::size_t x = 0;
-          while (x < lists.size() && !(*lists[x] == kv.first.atoms)) ++x;
+          while (x < lists.size() && !(*lists[x] == kv.first.atoms))
+            ++x;
           if (x == lists.size()) {
             if (lists.size() == kMaxLists) return false;
             lists.push_back(&kv.first.atoms);
@@ -538,14 +554,18 @@ namespace numtracer::inline numeric
           const MonoAtoms &u = *la[x], &v = *lb[y];
           MonoAtoms &m = merged[x * lb.size() + y];
           std::size_t i = 0, j = 0;
-          while (i < u.size() && j < v.size()) m.push_back(u[i] <= v[j] ? u[i++] : v[j++]);
-          while (i < u.size()) m.push_back(u[i++]);
-          while (j < v.size()) m.push_back(v[j++]);
+          while (i < u.size() && j < v.size())
+            m.push_back(u[i] <= v[j] ? u[i++] : v[j++]);
+          while (i < u.size())
+            m.push_back(u[i++]);
+          while (j < v.size())
+            m.push_back(v[j++]);
         }
       gch::small_vector<std::uint32_t, 1> rank(nPairs, 0);
       if (nPairs > 1) {
         gch::small_vector<std::uint32_t, 16> order(nPairs);
-        for (std::size_t q = 0; q < nPairs; ++q) order[q] = static_cast<std::uint32_t>(q);
+        for (std::size_t q = 0; q < nPairs; ++q)
+          order[q] = static_cast<std::uint32_t>(q);
         std::sort(order.begin(), order.end(), [&](std::uint32_t x, std::uint32_t y) { return merged[x] < merged[y]; });
         std::uint32_t r = 0;
         for (std::size_t q = 0; q < nPairs; ++q) {
@@ -554,7 +574,8 @@ namespace numtracer::inline numeric
         }
       }
       gch::small_vector<std::uint32_t, 1> repOfRank(nPairs, 0); // one merged list per rank
-      for (std::size_t q = 0; q < nPairs; ++q) repOfRank[rank[q]] = static_cast<std::uint32_t>(q);
+      for (std::size_t q = 0; q < nPairs; ++q)
+        repOfRank[rank[q]] = static_cast<std::uint32_t>(q);
 
       struct Key {
         std::uint64_t p0, p1;
@@ -831,7 +852,8 @@ namespace numtracer::inline numeric
         }
       }
       if (!fast)
-        for (int k = 0; k < ns; ++k) m.e[k] = ma.e[k] + mb.e[k]; // packed exponents: set each directly
+        for (int k = 0; k < ns; ++k)
+          m.e[k] = ma.e[k] + mb.e[k]; // packed exponents: set each directly
       // Only ask for capacity when the merge would overflow the inline buffer — most monomials carry
       // NO atoms (an unconditional reserve() here cost ~7% of the run).
       const std::size_t nat = ma.atoms.size() + mb.atoms.size();
@@ -839,8 +861,10 @@ namespace numtracer::inline numeric
       std::size_t i = 0, j = 0; // merge the two sorted atom multisets
       while (i < ma.atoms.size() && j < mb.atoms.size())
         m.atoms.push_back(ma.atoms[i] <= mb.atoms[j] ? ma.atoms[i++] : mb.atoms[j++]);
-      while (i < ma.atoms.size()) m.atoms.push_back(ma.atoms[i++]);
-      while (j < mb.atoms.size()) m.atoms.push_back(mb.atoms[j++]);
+      while (i < ma.atoms.size())
+        m.atoms.push_back(ma.atoms[i++]);
+      while (j < mb.atoms.size())
+        m.atoms.push_back(mb.atoms[j++]);
     };
 
     // A factor that is a single constant term (a γ or C matrix entry in the Dirac fold) leaves every
@@ -890,7 +914,8 @@ namespace numtracer::inline numeric
       PolyScratch s;
       s.reserve(na * nb);
       for (const auto &[ma, ca] : a.terms)
-        for (const auto &[mb, cb] : b.terms) emit(s, ma, ca, mb, cb);
+        for (const auto &[mb, cb] : b.terms)
+          emit(s, ma, ca, mb, cb);
       return Poly::from_scratch(ns, std::move(s));
     }
 
@@ -905,7 +930,8 @@ namespace numtracer::inline numeric
       s.reserve((i1 - i0) * nb);
       for (std::size_t i = i0; i < i1; ++i) {
         const auto &[ma, ca] = a.terms[i];
-        for (const auto &[mb, cb] : b.terms) emit(s, ma, ca, mb, cb);
+        for (const auto &[mb, cb] : b.terms)
+          emit(s, ma, ca, mb, cb);
       }
       Poly part = Poly::from_scratch(ns, std::move(s));
       acc = acc.terms.empty() ? std::move(part) : acc + part;
@@ -919,8 +945,8 @@ namespace numtracer::inline numeric
     // scratch-free path in operator*, and operator+ moves an empty side.
     auto keyable = [](const Poly &x, const Poly &y) {
       auto trivial = [](const Poly &p) { return p.terms.empty() || isConstant(p); };
-      return !trivial(x) && !trivial(y) && x.terms.size() * y.terms.size() <= kMulMaxScratch &&
-             atomFreeInline(x) && atomFreeInline(y);
+      return !trivial(x) && !trivial(y) && x.terms.size() * y.terms.size() <= kMulMaxScratch && atomFreeInline(x) &&
+             atomFreeInline(y);
     };
     KeyedTerms t0, t1;
     if (!(keyable(x0, y0) && keyable(x1, y1) && keyedAtomFreeTerms(x0, y0, t0) && keyedAtomFreeTerms(x1, y1, t1)))
@@ -945,8 +971,10 @@ namespace numtracer::inline numeric
         ++j;
       }
     }
-    while (i < t0.size()) m.push_back(t0[i++]);
-    while (j < t1.size()) m.push_back(t1[j++]);
+    while (i < t0.size())
+      m.push_back(t0[i++]);
+    while (j < t1.size())
+      m.push_back(t1[j++]);
     return fromKeyed(ns, m.data(), m.size());
   }
 
@@ -984,7 +1012,7 @@ namespace numtracer::inline numeric
                 e[k] -= d[k];
               // a stored monomial denominator never has a zero coefficient
               assert(dc.re * dc.re + dc.im * dc.im != 0.0);
-              coeff = cdiv(coeff, dc);
+              coeff = coeff / dc;
               cancelled = true;
             }
           }
@@ -1245,7 +1273,8 @@ namespace numtracer::inline numeric
     if (!dpaIsNoop(p, atomDen)) return divThroughPolyAtoms(static_cast<const Poly &>(p), atomDen);
     NT_STAT_ADD(dpa_calls, 1);
     NT_STAT_ADD(dpa_noop, 1);
-    for (auto &kv : p.terms) kv.second = Cx{0, 0} + kv.second;
+    for (auto &kv : p.terms)
+      kv.second = Cx{0, 0} + kv.second;
     return std::move(p);
   }
 
@@ -1280,7 +1309,8 @@ namespace numtracer::inline numeric
     // individual terms: two roundings of zero always disagree by 100%.
     auto maxAbsCoeff = [](const AtomGroup &G) {
       double m = 0.0;
-      for (const auto &kv : G) m = std::max(m, std::max(std::fabs(kv.second.re), std::fabs(kv.second.im)));
+      for (const auto &kv : G)
+        m = std::max(m, std::max(std::fabs(kv.second.re), std::fabs(kv.second.im)));
       return m;
     };
     // Exact division G / D in lex order (the map's own ordering, a valid monomial order). Returns
@@ -1291,17 +1321,21 @@ namespace numtracer::inline numeric
       if (!dlead.first.atoms.empty()) return false;
       while (!G.empty()) {
         auto lead = std::prev(G.end());
-        if (std::max(std::fabs(lead->second.re), std::fabs(lead->second.im)) < tol) { G.erase(lead); continue; }
+        if (std::max(std::fabs(lead->second.re), std::fabs(lead->second.im)) < tol) {
+          G.erase(lead);
+          continue;
+        }
         MonoExp e = lead->first;
         for (int k = 0; k < p.nsym; ++k) {
           if (e[k] < dlead.first.e[k]) return false;
           e[k] -= dlead.first.e[k];
         }
-        const Cx c = cdiv(lead->second, dlead.second);
+        const Cx c = lead->second / dlead.second;
         Q[e] = Q[e] + c;
         for (const auto &dt : D.terms) {
           MonoExp f = e;
-          for (int k = 0; k < p.nsym; ++k) f[k] += dt.first.e[k];
+          for (int k = 0; k < p.nsym; ++k)
+            f[k] += dt.first.e[k];
           Cx &g = G[f];
           g = Cx{g.re - (c.re * dt.second.re - c.im * dt.second.im),
                  g.im - (c.re * dt.second.im + c.im * dt.second.re)};
@@ -1395,10 +1429,10 @@ namespace numtracer::inline numeric
             mon *= x[k];
         for (int aid : m.atoms) {
           if (aid < 0 || static_cast<std::size_t>(aid) >= atomVal.size())
-            NT_THROW(std::invalid_argument, ("eval: the polynomial carries atom " + std::to_string(aid) +
-                                             " (a projector's 1/k^2) but only " + std::to_string(atomVal.size()) +
-                                             " atom values were given")
-                                                .c_str());
+            NT_THROW(std::invalid_argument,
+                     ("eval: the polynomial carries atom " + std::to_string(aid) + " (a projector's 1/k^2) but only " +
+                      std::to_string(atomVal.size()) + " atom values were given")
+                         .c_str());
           mon *= atomVal[aid];
         }
         s = s + Cx{c.re * mon, c.im * mon};
@@ -1433,4 +1467,4 @@ namespace numtracer::inline numeric
     return true;
   }
 
-} // namespace numtracer::numeric
+} // namespace numtracer::inline numeric
