@@ -237,6 +237,14 @@ Options[mkGenerateKernel] =
     "SharedGrids" -> {},
 (* Opt-in: turn launch-constant dressing lookups into host-evaluated kernel parameters. *)
     "HoistLoopConstLookups" -> False,
+(* Opt-in, finite-T DiFfRG flows only (needs "MatsubaraVar"): emit the kernel also in hoisted form,
+   pre()/post() plus pre_reads, so the integrator computes the part depending only on the radial
+   variable, the frequency and the shared parameters once per (radial node, frequency node); see
+   ntHoistKernelText. *)
+    "Hoist" -> False,
+(* Hoist: the runtime parameters a caller may pass per point to DiFfRG's map_points() (e.g. the
+   field-dependent inputs of a potential flow). pre() never reads them. *)
+    "PointArguments" -> {},
 (* Kernel class shape; see ntKernelClass. RegulatorAlias implies RegulatorTemplate. *)
     "RegulatorTemplate" -> False,
     "RegulatorAlias" -> False,
@@ -439,7 +447,7 @@ ntGenOptions[OptionsPattern[mkGenerateKernel]] :=
        "ConstArgQ", "AngleDefs", "Decorator", "DeviceTarget", "Offline",
        "RunGenerator", "RunOnline", "MainOpt", "IncludeDir", "RuntimeInclude", "ExtraIncludes",
        "RegulatorTemplate", "RegulatorAlias", "Components", "SymbolDefs", "MatsubaraVar",
-       "DecayingRegulators", "MatsubaraFiniteExtent", "HoistLoopConstLookups",
+       "DecayingRegulators", "MatsubaraFiniteExtent", "HoistLoopConstLookups", "Hoist", "PointArguments",
        "ShareInterpolatorIndex", "SharedGrids", "RealProbe", "PruneRealTraces", "ComplexRuntimeProjection",
        "ComplexEndProjection", "RealOutput", "Constant"},
       <|"Name" -> name,
@@ -495,6 +503,8 @@ ntGenOptions[OptionsPattern[mkGenerateKernel]] :=
           Replace[OptionValue["DecayingRegulators"], Automatic -> $ntDefaultDecayingRegulators],
         "MatsubaraFiniteExtent" -> OptionValue["MatsubaraFiniteExtent"],
         "HoistLoopConstLookups" -> TrueQ[OptionValue["HoistLoopConstLookups"]],
+        "Hoist" -> TrueQ[OptionValue["Hoist"]],
+        "PointArguments" -> (ntParamName /@ Flatten[{OptionValue["PointArguments"]}]),
         "ShareInterpolatorIndex" ->
           With[{v = OptionValue["ShareInterpolatorIndex"]},
             Which[ListQ[v], v, TrueQ[v], OptionValue["Dressings"], True, {}]],
@@ -1104,6 +1114,154 @@ ntFiniteExtentPartition[integrand_, matsubaraSym_, decayRegs_, forced_] :=
       <|"FiniteExtent" -> finiteExtent, "Split" -> split, "FiniteExtentExpr" -> finiteExtentPart,
         "TailExpr" -> tailPart|>]];
 
+(* ---- LOOP-INVARIANT HOISTING ("Hoist") ----------------------------------------------------------
+   For DiFfRG's finite-T integrators (kernel_has_pre in quadrature_integrator_fT.hh). Next to every
+   lowered `kernel(...)` definition this emits
+     pre_reads     one flag per kernel() parameter: whether pre() reads it;
+     pre(...)      the body's statements that depend neither on an excluded parameter nor on one
+                   another that does, returned as a DiFfRG::device::tuple;
+     post(P, ...)  the remaining statements, with the hoisted names bound from P; returns kernel().
+   The integrator evaluates pre() once per (radial node, frequency node) and post() at every
+   quadrature point. Excluded are every box variable but the radial one, the external coordinates
+   (the parameters between the frequency and the first runtime parameter) and "PointArguments".
+   It works on the lowered TEXT, which COEN emits as one `const T name = expr;` per line (shared
+   lookups with a leading [[maybe_unused]]). Only such lines move; declarations, the fill() call and
+   the return stay in post(). P holds only the values post() reads. *)
+
+(* Split a parameter list at its top-level commas (template arguments contain commas too). *)
+ntSplitTopLevel[str_String] :=
+  Module[{depth = 0, cur = {}, out = {}},
+    Do[
+      Which[
+        MemberQ[{"(", "<", "[", "{"}, c], depth++; AppendTo[cur, c],
+        MemberQ[{")", ">", "]", "}"}, c], depth--; AppendTo[cur, c],
+        c === "," && depth === 0, AppendTo[out, StringJoin[cur]]; cur = {},
+        True, AppendTo[cur, c]],
+      {c, Characters[str]}];
+    If[cur =!= {}, AppendTo[out, StringJoin[cur]]];
+    StringTrim /@ out];
+
+ntIdentifiers[str_String] := StringCases[str, RegularExpression["[A-Za-z_][A-Za-z_0-9]*"]];
+
+(* Position (1-based) of the bracket closing the one opening at `open`. *)
+ntMatchingBracket[chars_List, open_Integer, {l_String, r_String}] :=
+  Module[{depth = 0, i = open},
+    While[True,
+      Which[chars[[i]] === l, depth++, chars[[i]] === r, depth--];
+      If[depth === 0, Return[i, Module]];
+      i++]];
+
+(* The excluded parameter names of a kernel with parameters `names` (in order), frequency `mvar` and
+   runtime parameters `runtime`. *)
+ntHoistExcluded[names_List, mvar_String, runtime_List, pointArgs_List] :=
+  Module[{fIdx = FirstPosition[names, mvar, {None}][[1]], rIdx},
+    If[fIdx === None, Return[None, Module]];
+    rIdx = FirstPosition[names, _?(MemberQ[runtime, #]&), {Length[names] + 1}, {1}][[1]];
+    Join[names[[2 ;; fIdx - 1]], names[[fIdx + 1 ;; rIdx - 1]], Intersection[names, pointArgs]]];
+
+(* One definition `fn` (prefix ... "auto kernel(" ... "}") -> {pre_reads, pre, post} as text; None without
+   the frequency parameter, Missing["NothingToHoist"] if post() would take nothing from pre(). *)
+ntHoistDefinition[fn_String, mvar_String, runtime_List, pointArgs_List] :=
+  Module[{chars = Characters[fn], kpos, open, close, prefix, sigStr, names, excluded, bOpen, bClose, lines,
+          stmtRx = RegularExpression["^\\s*(?:\\[\\[maybe_unused\\]\\]\\s*)?const (?:auto|double|float) (\\w+) = (.*);\\s*$"],
+          declRx = RegularExpression["^\\s*[\\w:<>]+\\s+(\\w+)\\s*(?:\\[|=|;)"],
+          dirty, preNames = {}, preLines = {}, postLines = {}, usings, reads, preTokens, exprOf, lineOf, deps,
+          postTokens, exported, needed},
+    kpos = First[First[StringPosition[fn, "auto kernel(", 1]]];
+    open = kpos + StringLength["auto kernel"];
+    close = ntMatchingBracket[chars, open, {"(", ")"}];
+    prefix = StringTake[fn, kpos - 1];
+    sigStr = StringTake[fn, {open + 1, close - 1}];
+    names = Last[ntIdentifiers[#]]& /@ ntSplitTopLevel[sigStr];
+    excluded = ntHoistExcluded[names, mvar, runtime, pointArgs];
+    If[excluded === None, Return[None, Module]];
+    bOpen = First[Select[Range[close + 1, Length[chars]], chars[[#]] === "{" &, 1]];
+    bClose = ntMatchingBracket[chars, bOpen, {"{", "}"}];
+    lines = StringSplit[StringTake[fn, {bOpen + 1, bClose - 1}], "
+"];
+    dirty = excluded;
+    usings = Select[lines, StringStartsQ[StringTrim[#], "using namespace"]&];
+    Do[
+      With[{m = StringCases[l, stmtRx -> {"$1", "$2"}]},
+        Which[
+          StringStartsQ[StringTrim[l], "using namespace"], Null,
+          m =!= {} && !IntersectingQ[ntIdentifiers[m[[1, 2]]], dirty],
+            AppendTo[preNames, m[[1, 1]]]; AppendTo[preLines, l -> m[[1, 2]]],
+          m =!= {},
+            AppendTo[dirty, m[[1, 1]]]; AppendTo[postLines, l],
+          True,
+(* anything else a line declares (the fenv array) exists only in post() *)
+            dirty = Join[dirty, StringCases[l, declRx -> "$1"]]; AppendTo[postLines, l]]],
+      {l, lines}];
+    exprOf = AssociationThread[preNames, Last /@ preLines];
+    lineOf = AssociationThread[preNames, First /@ preLines];
+    deps[nm_] := Select[ntIdentifiers[exprOf[nm]], KeyExistsQ[exprOf, #]&];
+    postTokens = Union @@ Prepend[ntIdentifiers /@ postLines, {}];
+    exported = Select[preNames, MemberQ[postTokens, #]&];
+    If[exported === {}, Return[Missing["NothingToHoist"], Module]];
+(* pre() computes what the exported values need, and reads only what those lines read *)
+    needed = FixedPoint[Union[#, Flatten[deps /@ #]]&, exported];
+    preLines = lineOf /@ Select[preNames, MemberQ[needed, #]&];
+    preTokens = Union @@ Prepend[ntIdentifiers /@ preLines, {}];
+    reads = (If[MemberQ[preTokens, #], "true", "false"])& /@ names;
+    {
+      "static constexpr std::array<bool, " <> ToString[Length[names]] <> "> pre_reads{" <> StringRiffle[reads, ", "] <> "};",
+      prefix <> "auto pre(" <> sigStr <> ")
+{
+" <> StringRiffle[Join[usings, preLines], "
+"] <>
+        "
+  return DiFfRG::device::make_tuple(" <> StringRiffle[exported, ", "] <> ");
+}",
+      prefix <> "auto post(const auto &P_, " <> sigStr <> ")
+{
+" <>
+        StringRiffle[Join[usings,
+          MapIndexed["  [[maybe_unused]] const auto &" <> #1 <> " = DiFfRG::device::get<" <> ToString[#2[[1]] - 1] <> ">(P_);"&, exported],
+          postLines], "
+"] <> "
+}"}];
+
+(* Every `kernel(...)` definition in `text` (one, or one per #if branch of a complex flow) followed by
+   its pre_reads/pre/post; None if a definition has no frequency parameter or nothing to hoist. *)
+ntHoistKernelText[text_String, mvar_String, runtime_List, pointArgs_List] :=
+  Module[{starts, pieces = {}, last = 0, chars = Characters[text], ok = True},
+    starts = First /@ StringPosition[text, "auto kernel("];
+    Do[
+      Module[{lineStart, bOpen, bClose, fn, parts},
+        lineStart = Max[Join[{0}, Select[Range[1, st - 1], chars[[#]] === "
+" &]]] + 1;
+        bOpen = First[Select[Range[ntMatchingBracket[chars, st + StringLength["auto kernel"], {"(", ")"}] + 1, Length[chars]],
+                  chars[[#]] === "{" &, 1]];
+        bClose = ntMatchingBracket[chars, bOpen, {"{", "}"}];
+        fn = StringTake[text, {lineStart, bClose}];
+        parts = ntHoistDefinition[fn, mvar, runtime, pointArgs];
+        If[!ListQ[parts], ok = False,
+          AppendTo[pieces, StringTake[text, {last + 1, bClose}] <> "
+" <> StringRiffle[parts, "
+"]];
+          last = bClose]],
+      {st, starts}];
+    If[!ok || starts === {}, None, StringJoin[pieces] <> StringDrop[text, last]]];
+
+(* The kernel text in hoisted form if "Hoist" is on and applicable, else unchanged; and the trait. *)
+ntHoistedKernelFn[kernelFn_String, o_, split_, matsubaraSym_] :=
+  Module[{res},
+    If[!TrueQ[o["Hoist"]], Return[{kernelFn, {}}, Module]];
+(* a vacuum flow has nothing to hoist over; silent, since DiFfRG turns "Hoist" on for every flow *)
+    If[matsubaraSym === None, Return[{kernelFn, {}}, Module]];
+    If[split,
+      ntLog["[hoist] not applied: Matsubara-split kernel"];
+      Return[{kernelFn, {}}, Module]];
+(* k leads the runtime parameters of a DiFfRG kernel but is not among ScalarParams; without it, k would
+   count as an external coordinate and every regulator would stay in post(). *)
+    res = ntHoistKernelText[kernelFn, ntParamName[matsubaraSym],
+            Join[{"k"}, ntParamName /@ Join[o["ScalarParams"], o["Dressings"]]], o["PointArguments"]];
+    If[res === None,
+      ntLog["[hoist] not applied: no kernel(...) with the frequency parameter, or nothing worth hoisting"];
+      {kernelFn, {}},
+      {res, {"static constexpr bool has_pre = true;"}}]];
+
 (* One kernel entry point, lowered by FunKit. Each body has its own MakeCppFunction so COEN's CSE
    spans it whole. Per-body timing: the aggregate [prof] line of ntLowerKernel also covers
    constant(), the class and the header, so the cost of one BODY (what "RealOutput" removes) is
@@ -1206,12 +1364,12 @@ ntKernelHeader[o_, members_List, complexQ_, headerFile_] :=
 (* The integrand -> C++ lowering (FunKit). Timed as one block: it is the one heavy stage between the
    net-build and the generator emit, so without this the [prof] trail has a blind spot. *)
 ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, mVarIdx_, symDefs_, headerFile_] :=
-  Module[{bodyFor, kernelFn, splitFns, constFn, mEvenBody, header},
+  Module[{bodyFor, kernelFn, hoistTrait, splitFns, constFn, mEvenBody, header},
     With[{ntT =
       First @
         AbsoluteTiming[
           bodyFor = ntKernelBody[#1, #2, o, sig["KernelParams"], preamble, complexQ]&;
-          kernelFn = bodyFor["kernel", integrand];
+          {kernelFn, hoistTrait} = ntHoistedKernelFn[bodyFor["kernel", integrand], o, part["Split"], matsubaraSym];
 (* The two halves are lowered from the SAME machinery as the full body, so a complex flow gets its
    #if ladder in each of them and the verdict macro keeps meaning one thing across all three. *)
           splitFns =
@@ -1240,6 +1398,7 @@ ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, 
               If[part["FiniteExtent"],
                 {"static constexpr bool matsubara_finite_extent = true;"},
                 {}],
+              hoistTrait,
 (* MIXED flow: two entry points instead of one. `kernel` stays and is still the whole thing -- it is
    what a consumer without the split machinery calls, and what the split is checked against. *)
               If[part["Split"],
