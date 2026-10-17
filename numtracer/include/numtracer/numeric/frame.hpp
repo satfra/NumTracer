@@ -51,22 +51,21 @@ namespace numtracer::inline numeric
   // include it. The @ref Frame methods that forward here are member templates whose bodies are only
   // instantiated in the generator's main TU, where `trace_fold.hpp` is already included — so these
   // declarations are enough to compile `frame.hpp` everywhere else.
-  template <class P, class TraceFn>
-  std::vector<P> contract_traces(int nsym, long nCache, unsigned W, TraceFn &&trace);
+  template <class P, class TraceFn> std::vector<P> contract_traces(int nsym, long nCache, unsigned W, TraceFn &&trace);
   template <class P, class TraceFn, class ScaleFn, class Sink>
   void fold_groups_streaming(int nsym, const std::vector<std::vector<int>> &traceIdx,
-                             const std::vector<std::vector<Cx>> &subScale,
-                             const std::vector<std::vector<int>> &groups, const std::vector<P> &traceTable,
-                             long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
-                             Sink &&sink);
+                             const std::vector<std::vector<Cx>> &subScale, const std::vector<std::vector<int>> &groups,
+                             const std::vector<P> &traceTable, long nCache, unsigned W, long window, TraceFn &&trace,
+                             ScaleFn &&scale, Sink &&sink);
   template <class TraceFn, class ScaleFn, class Sink>
   void fold_groups_streaming_dressed(int nsym, const std::vector<std::vector<int>> &traceIdx,
                                      const std::vector<std::vector<Cx>> &subScale,
                                      const std::vector<std::vector<DMono>> &subDress,
-                                     const std::vector<std::vector<int>> &groups,
-                                     const std::vector<Poly> &traceTable, long nCache, unsigned W,
-                                     long window, TraceFn &&trace, ScaleFn &&scale, Sink &&sink);
+                                     const std::vector<std::vector<int>> &groups, const std::vector<Poly> &traceTable,
+                                     long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
+                                     Sink &&sink);
 
+  // forward declaration.
   class Frame;
 
   /// @brief A scalar symbol of a @ref Frame (a momentum magnitude, an angle cosine, …). Converts to
@@ -104,13 +103,17 @@ namespace numtracer::inline numeric
   public:
     /// An empty frame; declare its symbols with @ref symbol / @ref angle.
     Frame() = default;
+
     /// A frame with a fixed symbol list (generated code). @p units are the unit-vector groups
     /// `Σ_i x_{g_i}² = 1` among the symbols (e.g. `{cos, sin}`), used to simplify `k²`.
     explicit Frame(std::vector<std::string> names, std::vector<std::vector<int>> units = {}, int nMomenta = 0)
         : names_(std::move(names)), derivedFrom_(names_.size(), -1), units_(std::move(units)), frozen_(true)
     {
-      comp_.assign(static_cast<std::size_t>(nMomenta), {zero(), zero(), zero(), zero()});
+      if (nMomenta < 0)
+        NT_THROW(std::invalid_argument, ("Frame: invalid number of momenta: " + std::to_string(nMomenta)).c_str());
+      comp_.assign(nMomenta, {zero(), zero(), zero(), zero()});
     }
+
     Frame(const Frame &) = delete;
     Frame &operator=(const Frame &) = delete;
 
@@ -119,15 +122,22 @@ namespace numtracer::inline numeric
     /// a C++ identifier: it becomes a parameter name in @ref emit_fill.
     Symbol symbol(std::string name)
     {
+      // Check if the frame is open for symbol declaration.
       require_open("symbol");
+
+      // Check if the name is a valid C++ identifier.
       const bool ident = !name.empty() && (std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_') &&
                          std::all_of(name.begin(), name.end(),
                                      [](char ch) { return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_'; });
       if (!ident) NT_THROW(std::invalid_argument, ("Frame::symbol: \"" + name + "\" is not a C++ identifier").c_str());
+
+      // Register the new symbol.
       names_.push_back(std::move(name));
+      // it's independent!
       derivedFrom_.push_back(-1);
       return {static_cast<int>(names_.size()) - 1, this};
     }
+
     /// Declare an angle θ by name; returns the symbols `{cos_θ, sin_θ}`. Only the cosine is given at
     /// evaluation time — `sin_θ = sqrt(1 - cos_θ²)` is derived — and `cos² + sin² = 1` is used to
     /// simplify (`l²(cos² + sin²) → l²`).
@@ -135,10 +145,13 @@ namespace numtracer::inline numeric
     {
       const Symbol c = symbol("cos_" + name);
       const Symbol s = symbol("sin_" + name);
-      derivedFrom_[static_cast<std::size_t>(s.id)] = c.id;
+      // declare the sine as derived from the cosine
+      derivedFrom_[s.id] = c.id;
+      // register the unit-vector group {cos, sin}
       units_.push_back({c.id, s.id});
       return {c, s};
     }
+
     /// Number of symbols (the polynomials' variable count).
     int nsym() const { return static_cast<int>(names_.size()); }
     const std::vector<std::string> &symbol_names() const { return names_; }
@@ -262,7 +275,8 @@ namespace numtracer::inline numeric
       lor = assign_atoms(std::move(lor));
       for (DSlot &slot : slots)
         for (DSlotOpt &opt : slot)
-          for (LorentzFactor &f : opt.netFacs) assign_atoms(f);
+          for (LorentzFactor &f : opt.netFacs)
+            assign_atoms(f);
       return std::as_const(*this).trace(chain, slots, lor);
     }
     DPoly trace(const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots, const LorentzNet &lor) const
@@ -291,10 +305,10 @@ namespace numtracer::inline numeric
     Point at(const std::vector<double> &values) const
     {
       if (values.size() != independent_count())
-        NT_THROW(std::invalid_argument, ("Frame::at: " + std::to_string(values.size()) + " values given, the frame has " +
-                                         std::to_string(independent_count()) + " independent symbols (" +
-                                         independent_list() + ")")
-                                            .c_str());
+        NT_THROW(std::invalid_argument,
+                 ("Frame::at: " + std::to_string(values.size()) + " values given, the frame has " +
+                  std::to_string(independent_count()) + " independent symbols (" + independent_list() + ")")
+                     .c_str());
       Point pt{std::vector<double>(names_.size(), 0.0), this};
       auto v = values.begin();
       for (std::size_t i = 0; i < names_.size(); ++i)
@@ -329,7 +343,8 @@ namespace numtracer::inline numeric
     Cx eval(const DPoly &p, const Point &pt, const std::vector<double> &dressings) const
     {
       std::vector<const Poly *> parts;
-      for (const auto &[d, mp] : p.terms) parts.push_back(&mp);
+      for (const auto &[d, mp] : p.terms)
+        parts.push_back(&mp);
       return ndetail::eval(p, checked(pt).x, atom_values(pt, parts), dressings);
     }
 
@@ -349,7 +364,7 @@ namespace numtracer::inline numeric
         else if (kind == SymKind::inv && !g.atom_cplx(a))
           f[i] = atoms.at(static_cast<std::size_t>(a));
         else if (kind == SymKind::inv || kind == SymKind::inv_im) {
-          const Cx z = cdiv(Cx{1.0, 0.0}, atom_denominator_value(checked(pt), a));
+          const Cx z = Cx{1.0, 0.0} / atom_denominator_value(checked(pt), a);
           f[i] = kind == SymKind::inv ? z.re : z.im;
         } else
           NT_THROW(std::invalid_argument, "Frame::fill_values: the program uses a dressing or scalar-product slot");
@@ -400,15 +415,14 @@ namespace numtracer::inline numeric
     /// Streaming phase B: folds each group's nets on demand and drains straight to `sink`, so no net
     /// polynomial outlives its group. See `trace_fold.hpp` for the equivalence argument.
     template <class P, class TraceFn, class ScaleFn, class Sink>
-    void fold_groups_streaming(const std::vector<std::vector<int>> &traceIdx,
-                               const std::vector<std::vector<Cx>> &subScale,
-                               const std::vector<std::vector<int>> &groups, const std::vector<P> &traceTable,
-                               long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
-                               Sink &&sink) const
+    void
+    fold_groups_streaming(const std::vector<std::vector<int>> &traceIdx, const std::vector<std::vector<Cx>> &subScale,
+                          const std::vector<std::vector<int>> &groups, const std::vector<P> &traceTable, long nCache,
+                          unsigned W, long window, TraceFn &&trace, ScaleFn &&scale, Sink &&sink) const
     {
-      ::numtracer::numeric::fold_groups_streaming<P>(nsym(), traceIdx, subScale, groups, traceTable, nCache, W,
-                                                     window, std::forward<TraceFn>(trace),
-                                                     std::forward<ScaleFn>(scale), std::forward<Sink>(sink));
+      ::numtracer::numeric::fold_groups_streaming<P>(nsym(), traceIdx, subScale, groups, traceTable, nCache, W, window,
+                                                     std::forward<TraceFn>(trace), std::forward<ScaleFn>(scale),
+                                                     std::forward<Sink>(sink));
     }
     /// Streaming phase B, dressed variant: a plain-Poly `traceTable` + the per-sub-term dressing
     /// monomials `subDress` fold into a DPoly per net. See `trace_fold.hpp`.
@@ -416,20 +430,21 @@ namespace numtracer::inline numeric
     void fold_groups_streaming_dressed(const std::vector<std::vector<int>> &traceIdx,
                                        const std::vector<std::vector<Cx>> &subScale,
                                        const std::vector<std::vector<DMono>> &subDress,
-                                       const std::vector<std::vector<int>> &groups,
-                                       const std::vector<Poly> &traceTable, long nCache, unsigned W,
-                                       long window, TraceFn &&trace, ScaleFn &&scale, Sink &&sink) const
+                                       const std::vector<std::vector<int>> &groups, const std::vector<Poly> &traceTable,
+                                       long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
+                                       Sink &&sink) const
     {
-      ::numtracer::numeric::fold_groups_streaming_dressed(nsym(), traceIdx, subScale, subDress, groups,
-                                                          traceTable, nCache, W, window,
-                                                          std::forward<TraceFn>(trace),
+      ::numtracer::numeric::fold_groups_streaming_dressed(nsym(), traceIdx, subScale, subDress, groups, traceTable,
+                                                          nCache, W, window, std::forward<TraceFn>(trace),
                                                           std::forward<ScaleFn>(scale), std::forward<Sink>(sink));
     }
 
   private:
-    std::vector<std::string> names_;               ///< symbol names, in declaration order
-    std::vector<int> derivedFrom_;                 ///< per symbol: the cosine an angle's sine derives from, or -1
-    std::vector<std::vector<int>> units_;          ///< unit-vector groups (Σ x² = 1)
+    std::vector<std::string> names_; ///< symbol names, in declaration order
+    /// Per symbol: If the symbol is independent, this is -1. Otherwise, it's the index
+    /// of the cosine an angle's sine derives from
+    std::vector<int> derivedFrom_;
+    std::vector<std::vector<int>> units_; ///< unit-vector groups (Σ x² = 1)
     /// Set once the first polynomial is made. Atomic because the const members may run in parallel;
     /// they only ever read it once the frame is frozen (generated frames are frozen at construction).
     mutable std::atomic<bool> frozen_{false};
@@ -462,7 +477,8 @@ namespace numtracer::inline numeric
     std::size_t independent_count() const
     {
       std::size_t n = 0;
-      for (int d : derivedFrom_) n += d < 0;
+      for (int d : derivedFrom_)
+        n += d < 0;
       return n;
     }
     std::string independent_list() const
@@ -494,7 +510,8 @@ namespace numtracer::inline numeric
     Cx atom_denominator_value(const Point &pt, int a) const
     {
       if (a < 0 || static_cast<std::size_t>(a) >= atomDen_.size() || atomDen_[static_cast<std::size_t>(a)].empty())
-        NT_THROW(std::invalid_argument, ("Frame::eval: atom " + std::to_string(a) + " is not registered in this frame").c_str());
+        NT_THROW(std::invalid_argument,
+                 ("Frame::eval: atom " + std::to_string(a) + " is not registered in this frame").c_str());
       return ndetail::eval(atomDen_[static_cast<std::size_t>(a)], pt.x, {});
     }
     /// `1/k²` of atom @p a at @p pt; refuses an unregistered atom and a vanishing denominator.
@@ -508,8 +525,8 @@ namespace numtracer::inline numeric
                                             .c_str());
       const double d = dc.re;
       if (d == 0.0)
-        NT_THROW(std::domain_error, ("Frame::eval: projector denominator " + std::to_string(a) + " (k^2 = " +
-                                     denominator_cpp(a) + ") vanishes at this point")
+        NT_THROW(std::domain_error, ("Frame::eval: projector denominator " + std::to_string(a) +
+                                     " (k^2 = " + denominator_cpp(a) + ") vanishes at this point")
                                         .c_str());
       return 1.0 / d;
     }
@@ -561,7 +578,8 @@ namespace numtracer::inline numeric
     {
       Vlc key = f.vlc.empty() ? Vlc{{1.0, f.vid}} : f.vlc;
       if (key.front().first < 0)
-        for (auto &t : key) t.first = -t.first;
+        for (auto &t : key)
+          t.first = -t.first;
       const auto it = autoAtom_.find({spatial, key});
       if (it != autoAtom_.end()) return it->second;
       const std::array<Poly, 4> k = ndetail::factor_momentum(frozen_nsym(), f, comp_);
@@ -583,7 +601,8 @@ namespace numtracer::inline numeric
     LorentzNet assign_atoms(LorentzNet lor)
     {
       for (LorentzTerm &t : lor)
-        for (LorentzFactor &f : t.e) assign_atoms(f);
+        for (LorentzFactor &f : t.e)
+          assign_atoms(f);
       return lor;
     }
   };
@@ -594,4 +613,4 @@ namespace numtracer::inline numeric
   inline Poly operator*(double c, Symbol s) { return c * Poly(s); }
   inline Poly operator*(Symbol s, double c) { return c * Poly(s); }
 
-} // namespace numtracer::numeric
+} // namespace numtracer::inline numeric
