@@ -55,7 +55,7 @@ namespace numtracer::inline poly
 
   // The `nsym`-carrying construction API is closed behind these friends, exactly as for @ref Poly:
   // @ref Frame is the sole user-facing path and @ref DPolyFactory the internal attorney for the
-  // trusted contraction/trace-fold code. (`mpoly.hpp`, included above, already forward-declares
+  // trusted contraction/generator-phase code. (`mpoly.hpp`, included above, already forward-declares
   // @ref Frame; declare the DPoly attorney here.)
   struct DPolyFactory;
 
@@ -109,7 +109,7 @@ namespace numtracer::inline poly
   };
 
   /// @brief Internal attorney re-exposing the private @ref DPoly factories to the trusted engine code
-  ///        (the dressed contraction / trace-fold), mirroring @ref PolyFactory. Not public API.
+  ///        (the dressed contraction / generator phases), mirroring @ref PolyFactory. Not public API.
   struct DPolyFactory {
     static DPoly zero(int ns) { return DPoly(ns); }
     static DPoly fromPoly(const Poly &p) { return DPoly::fromPoly(p); }
@@ -165,7 +165,7 @@ namespace numtracer::inline poly
     for (const auto &[d, mp] : a.terms) {
       // Direct coefficient scaling instead of `mp * constant(c)`: bit-identical (see Poly::scaled),
       // without the scratch and sort. The emptiness guard is defensive: `mp` is non-empty and `c != 0`.
-      Poly s = PolyFactory::scaled(a.nsym, mp, c);
+      Poly s = PolyFactory::scaled(mp, c);
       if (!s.empty()) r.terms.push_back({d, std::move(s)});
     }
     return r;

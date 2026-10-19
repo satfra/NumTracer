@@ -119,7 +119,7 @@ namespace numtracer::inline engine
       for (; first != last; ++first) {
         const auto &cv = comp[first->second];
         for (int mu = 0; mu < 4; ++mu)
-          r[mu] = std::move(r[mu]) + PolyFactory::scaled(nsym, cv[mu], Cx{first->first, 0});
+          r[mu] = std::move(r[mu]) + PolyFactory::scaled(cv[mu], Cx{first->first, 0});
       }
       return r;
     }
@@ -763,7 +763,7 @@ namespace numtracer::inline engine
               break;
             }
             if (!seeded) {
-              prod = PolyFactory::scaled(nsym, e, Cx{1, 0});
+              prod = PolyFactory::scaled(e, Cx{1, 0});
               seeded = true;
             } else
               prod = prod * e;
@@ -919,7 +919,7 @@ namespace numtracer::inline engine
           break;
         }
         if (!seeded) {
-          prod = PolyFactory::scaled(nsym, F.data()[0], Cx{1, 0});
+          prod = PolyFactory::scaled(F.data()[0], Cx{1, 0});
           seeded = true;
         } else
           prod = prod * F.data()[0];
@@ -1263,6 +1263,9 @@ namespace numtracer::inline engine
         // fold same-momentum projector chains (P·P→P, orthogonal→0) before expansion. Fusion needs
         // two projectors, so a term with fewer is read in place rather than copied.
         Cx co = lt.coeff;
+        // An exact zero term (e.g. the one `mul` leaves when it prunes every product) contributes
+        // nothing; contracting it could also trip the open-index guard on legs its factors closed.
+        if (co.re == 0 && co.im == 0) continue;
         std::vector<Factor> facs;
         {
           NT_STAT_TIMER(t_elem);
@@ -1288,7 +1291,7 @@ namespace numtracer::inline engine
         }
         // `scaled` instead of `* constant(co)`: bit-identical (see PolyFactory::scaled) without the
         // scratch + sort. Once per Lorentz term per trace, on the FULLY CONTRACTED term.
-        term = PolyFactory::scaled(nsym, term, co);
+        term = PolyFactory::scaled(term, co);
         result = std::move(result) + std::move(term);
       }
       if (lor.empty()) result = close_loops(nsym, loops, aden, units);

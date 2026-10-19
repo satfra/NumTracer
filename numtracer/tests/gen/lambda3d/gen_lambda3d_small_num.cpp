@@ -3,7 +3,7 @@
 // ==============================================================================
 
 #include "numtracer/numtracer.hpp"
-#include "numtracer/engine/trace_fold.hpp"
+#include "numtracer/engine/generator_phases.hpp"
 
 #include <iostream>
 #include <string>

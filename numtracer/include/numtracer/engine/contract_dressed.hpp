@@ -8,7 +8,7 @@
 /// enumerated and each concrete chain goes through the same pipeline; @ref ndetail::contract_dressed
 /// collects the results per dressing monomial (a @ref DPoly), while @ref ndetail::contract_structural
 /// sums them into a plain @ref Poly for the generator, which carries the dressings separately
-/// (see engine/trace_fold.hpp).
+/// (see engine/generator_phases.hpp).
 ///
 ///
 /// A dressed propagator numerator like `Mq·δ + Z(p)·(γ·p)` is a SUM of Dirac structures whose

@@ -107,7 +107,7 @@ that must stay symbolic to the end of the trace rather than cancel:
   combinations that share a concrete Dirac structure and differ only in dressing collapse to **one**
   contraction — a 6.2× reduction in distinct traces on the dense quark–gluon flows, and what makes
   full-basis `ZAAqbq1` generate at all. The `DPoly` is then built in phase B, where
-  `fold_net_dressed` (`engine/trace_fold.hpp`) routes each sub-term's scaled `Poly` into its
+  `fold_net_dressed` (`engine/generator_phases.hpp`) routes each sub-term's scaled `Poly` into its
   dressing channel. The alternative — collecting the `DPoly` during contraction
   (`Frame::trace` with slots, engine entry `ndetail::contract_dressed`) — is still the reference
   implementation and what `tests/test_dpoly.cpp` grades against, but it re-contracts once per
@@ -174,7 +174,7 @@ itself is unchanged, so flows without diagonal dressings are byte-identical.)
 Each diagram's `Poly` is handed to `to_genprog` (`codegen/lower_poly.hpp`), which lowers it into
 one shared fundamental-symbol environment (`network`'s `GlobalEnv`) via the
 [CSE + Horner lowering](cse-and-lowering.md), returning a `GenProg`. The emitted generator drives
-that over every diagram through the two parallel phases of `engine/trace_fold.hpp`
+that over every diagram through the two parallel phases of `engine/generator_phases.hpp`
 (`contract_traces` then `fold_groups_streaming`), and prints the `trN(const double* f)` functions
 plus the `fill` that computes the frame symbols once per call. `poly_to_cpp`
 (`codegen/poly_cpp.hpp`) renders a momentum component or a propagator denominator as a C++

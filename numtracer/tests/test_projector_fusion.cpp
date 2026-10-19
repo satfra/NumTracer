@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <random>
+#include <stdexcept>
 #include <vector>
 
 #include "numtracer/engine/contract.hpp"
@@ -250,6 +251,20 @@ int main()
   check(wTrTM < 1e-10, "PT.PM (closed) == tr PM = 2");
   check(wZeroEM == 0, "a.E.M.b contracts to exactly 0");
   check(wPruned < 1e-10 * std::max(1.0, scaleEM), "pruned a.(E+M).(E+M).b == all four terms");
+
+  // A Dirac loop whose free indices were closed only by the pruned projectors: the explicit zero term
+  // that mul leaves behind must contract to 0, not trip the open-index guard on the loop's legs.
+  {
+    bool threw = false, zero = false;
+    try {
+      const nm::Poly p = ntest::contract(env, DiracChain{gamma(LorentzIndex{10}), gamma(LorentzIndex{11})},
+                                         mul(L1(PE(10, 12)), L1(PM(12, 11))), comp, atomDen);
+      zero = p.terms.empty();
+    } catch (const std::exception &) {
+      threw = true;
+    }
+    check(!threw && zero, "tr(γ^μ γ^ν).E.M (all pruned) == 0, no throw");
+  }
 
   std::printf(fails ? "\nTESTS FAILED (%d)\n" : "\nALL TESTS PASSED\n", fails);
   return fails ? 1 : 0;

@@ -287,7 +287,7 @@ namespace numtracer::inline poly
   // polynomial in one trace must share an `nsym`, so the factories that bake it in are private and the
   // ONLY sanctioned way to mint one is a @ref Frame (which holds a fixed `nsym`). @ref PolyFactory
   // is a tiny internal attorney that re-exposes the same factories to the trusted cross-header engine
-  // code (contraction / trace-fold), which already threads a single `nsym` and must not route through a
+  // code (contraction / generator phases), which already threads a single `nsym` and must not route through a
   // user-facing Frame. Only names are needed here; the definitions live below / in `engine/frame.hpp`.
   struct PolyFactory;
 
@@ -649,17 +649,18 @@ namespace numtracer::inline poly
       return p;
     }
 
-    /// Scale every coefficient of `p` by the constant `c`. This is exactly `constant(ns, c) * p`, but
+    /// Scale every coefficient of `p` by the constant `c`. This is exactly `constant(p.nsym, c) * p`, but
     /// without the n·m scratch and the `std::sort` that `operator*` pays: multiplying by a constant
     /// leaves every monomial (hence `p`'s existing sort order and its distinctness) unchanged, so there
     /// is nothing to sort and no like terms to collect. `c * coeff` matches the operand order of the
-    /// `constant(ns,c) * p` it replaces — and `Cx` multiply is componentwise, so `c*coeff == coeff*c`
+    /// `constant(p.nsym, c) * p` it replaces — and `Cx` multiply is componentwise, so `c*coeff == coeff*c`
     /// bit-for-bit, making this bit-identical to BOTH the `constant * p` and `p * constant` call sites.
     /// A nonzero `c` times a stored (nonzero) coeff is nonzero, so no term can vanish; `c == 0` yields
-    /// the empty (zero) polynomial, exactly as `constant(ns, 0) * p` does.
-    static Poly scaled(int ns, const Poly &p, Cx c)
+    /// the empty (zero) polynomial, exactly as `constant(p.nsym, 0) * p` does. The result lives in `p`'s
+    /// symbol space by construction; there is no way to relabel it.
+    static Poly scaled(const Poly &p, Cx c)
     {
-      Poly r(ns);
+      Poly r(p.nsym);
       if (c.re == 0 && c.im == 0) return r;
       r.terms.reserve(p.terms.size());
       for (const auto &kv : p.terms)
@@ -709,7 +710,7 @@ namespace numtracer::inline poly
   };
 
   /// @brief Internal attorney re-exposing the private @ref Poly factories to the trusted cross-header
-  ///        engine code (spinor matrices, contraction, trace-fold). Those functions already carry one
+  ///        engine code (spinor matrices, contraction, generator phases). Those functions already carry one
   ///        definite `nsym` and must not depend on the user-facing @ref Frame, but they cannot be
   ///        friended by name (templates / DiracChain-heavy signatures across headers), so the friend
   ///        surface is localised to this one struct. NOT part of the public API — call sites outside the
@@ -717,7 +718,7 @@ namespace numtracer::inline poly
   struct PolyFactory {
     static Poly zero(int ns) { return Poly(ns); }
     static Poly constant(int ns, Cx c) { return Poly::constant(ns, c); }
-    static Poly scaled(int ns, const Poly &p, Cx c) { return Poly::scaled(ns, p, c); }
+    static Poly scaled(const Poly &p, Cx c) { return Poly::scaled(p, c); }
     static Poly atom(int ns, int aid) { return Poly::atom(ns, aid); }
     static Poly from_scratch(int ns, PolyScratch s) { return Poly::from_scratch(ns, std::move(s)); }
     static Poly mul_add(const Poly &x0, const Poly &y0, const Poly &x1, const Poly &y1)
@@ -1406,7 +1407,7 @@ namespace numtracer::inline poly
   }
 
   // Polynomials with numbers.
-  inline Poly operator*(double c, const Poly &p) { return PolyFactory::scaled(p.nsym, p, Cx{c, 0}); }
+  inline Poly operator*(double c, const Poly &p) { return PolyFactory::scaled(p, Cx{c, 0}); }
   inline Poly operator*(const Poly &p, double c) { return c * p; }
   inline Poly operator+(const Poly &p, double c) { return p + PolyFactory::constant(p.nsym, Cx{c, 0}); }
   inline Poly operator+(double c, const Poly &p) { return p + c; }

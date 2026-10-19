@@ -5,7 +5,7 @@
 ///        `1/k²` (a finite-density frame; see @ref inv_fill_cpp).
 ///
 /// The contraction driver itself is `contract_traces` + `fold_groups_streaming`
-/// (engine/trace_fold.hpp), emitted by mathematica/CodegenGenerator.m.
+/// (engine/generator_phases.hpp), emitted by mathematica/CodegenGenerator.m.
 #pragma once
 
 #include "numtracer/poly/mpoly.hpp"

@@ -48,11 +48,11 @@
 namespace numtracer::inline engine
 {
 
-  // Forward declarations of the host-only trace-fold templates (`engine/trace_fold.hpp`). That header
-  // spawns threads and is forbidden in the -fno-exceptions net-builder TUs, so `frame.hpp` must NOT
-  // include it. The @ref Frame methods that forward here are member templates whose bodies are only
-  // instantiated in the generator's main TU, where `trace_fold.hpp` is already included — so these
-  // declarations are enough to compile `frame.hpp` everywhere else.
+  // Forward declarations of the host-only generator-phase templates (`engine/generator_phases.hpp`).
+  // That header spawns threads and is forbidden in the -fno-exceptions net-builder TUs, so `frame.hpp`
+  // must NOT include it. The @ref Frame methods that forward here are member templates whose bodies
+  // are only instantiated in the generator's main TU, where `generator_phases.hpp` is already
+  // included — so these declarations are enough to compile `frame.hpp` everywhere else.
   template <class P, class TraceFn> std::vector<P> contract_traces(int nsym, long nCache, unsigned W, TraceFn &&trace);
   template <class P, class TraceFn, class ScaleFn, class Sink>
   void fold_groups_streaming(int nsym, const std::vector<std::vector<int>> &traceIdx,
@@ -202,7 +202,12 @@ namespace numtracer::inline engine
 
     /// The slashed 4×4 matrix of a momentum given by its components.
     /// @warning Freezes the symbol list
-    Matrix<4, Poly> slashC(const std::array<Poly, 4> &comp) const { return ::numtracer::engine::slashC(frozen_nsym(), comp); }
+    Matrix<4, Poly> slashC(const std::array<Poly, 4> &comp) const
+    {
+      for (const Poly &c : comp)
+        check_owned(c, "Frame::slashC");
+      return ::numtracer::engine::slashC(frozen_nsym(), comp);
+    }
 
     // ── momenta and indices ──────────────────────────────────────────────────────────────────────
 
@@ -455,14 +460,14 @@ namespace numtracer::inline engine
       ::numtracer::network::emit_fill(out, g, name, sig, fill_formulas(), decor);
     }
 
-    // ── trace-fold phases (generated code; member templates over the free templates above) ────────
+    // ── generator phases (generated code; member templates over the free templates above) ────────
     template <class P, class TraceFn> std::vector<P> contract_traces(long nCache, unsigned W, TraceFn &&trace) const
     {
       return ::numtracer::engine::contract_traces<P>(nsym(), nCache, W, std::forward<TraceFn>(trace));
     }
 
     /// Streaming phase B: folds each group's nets on demand and drains straight to `sink`, so no net
-    /// polynomial outlives its group. See `trace_fold.hpp` for the equivalence argument.
+    /// polynomial outlives its group. See `generator_phases.hpp` for the equivalence argument.
     template <class P, class TraceFn, class ScaleFn, class Sink>
     void
     fold_groups_streaming(const std::vector<std::vector<int>> &traceIdx, const std::vector<std::vector<Cx>> &subScale,
@@ -475,7 +480,7 @@ namespace numtracer::inline engine
     }
 
     /// Streaming phase B, dressed variant: a plain-Poly `traceTable` + the per-sub-term dressing
-    /// monomials `subDress` fold into a DPoly per net. See `trace_fold.hpp`.
+    /// monomials `subDress` fold into a DPoly per net. See `generator_phases.hpp`.
     template <class TraceFn, class ScaleFn, class Sink>
     void fold_groups_streaming_dressed(const std::vector<std::vector<int>> &traceIdx,
                                        const std::vector<std::vector<Cx>> &subScale,

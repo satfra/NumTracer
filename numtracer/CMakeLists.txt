@@ -66,7 +66,7 @@ endif()
 # functions are declared in the headers and defined once in src/numtracer.cpp (see core/export.hpp).
 # This affects only how the engine ships; the kernel it *emits* stays standalone header-only C++.
 
-# The generator's parallel net fold (engine/trace_fold.hpp) spawns std::threads, and sun_net.hpp
+# The generator's parallel net fold (engine/generator_phases.hpp) spawns std::threads, and sun_net.hpp
 # takes a std::mutex, so every binary that links the engine needs the platform thread library. On
 # glibc >= 2.34 the pthread symbols are in libc and this is a no-op; on the older glibc that most
 # clusters still run, libstdc++'s std::thread anchor references pthread_create/pthread_join and the
@@ -301,12 +301,12 @@ if(NUMTRACER_BUILD_TESTS)
   # typed labels, SUN groups, and the lowered program run through interpret() against its polynomial.
   nt_add_test(test_frame tests/test_frame.cpp NAME frame)
 
-  # The generator's sub-term dedup (engine/trace_fold.hpp): the balanced tree fold vs the left fold
+  # The generator's sub-term dedup (engine/generator_phases.hpp): the balanced tree fold vs the left fold
   # it replaces, and every trace-cache regime. This is the ONLY test that sees the fold: the dedup
   # needs many sub-terms per net, and every flow in tests/gen has exactly one — so the flow tests and
   # even the codegen test are blind to it. Includes a work bound (a botched carry still returns the
   # right VALUE while quietly degenerating back into the left fold, which no value check can see).
-  nt_add_test(test_trace_fold tests/test_trace_fold.cpp NAME trace_fold)
+  nt_add_test(test_generator_phases tests/test_generator_phases.cpp NAME generator_phases)
   nt_add_test(test_poly_cancel tests/test_poly_cancel.cpp NAME poly_cancel)
 
   nt_add_test(test_lowering_norm tests/test_lowering_norm.cpp NAME lowering_norm)

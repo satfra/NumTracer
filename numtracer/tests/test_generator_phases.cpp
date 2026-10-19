@@ -1,4 +1,4 @@
-// The generator's sub-term dedup (engine/trace_fold.hpp): phase A contracts each DISTINCT Dirac
+// The generator's sub-term dedup (engine/generator_phases.hpp): phase A contracts each DISTINCT Dirac
 // trace once, phase B folds each net's traces with its own scalars as a balanced binary-counter tree.
 //
 // Why this test exists. The dedup only does anything on a flow with MANY sub-terms per net, and every
@@ -18,7 +18,7 @@
 //     and 7 terms (7 = 0b111 leaves three unmerged partials on the stack -> the leftover sweep)
 #include "numtracer/engine/frame.hpp"
 #include "engine_test_util.hpp"
-#include "numtracer/engine/trace_fold.hpp"
+#include "numtracer/engine/generator_phases.hpp"
 
 #include <cstdio>
 #include <numeric>
@@ -88,7 +88,7 @@ namespace
     Counted::touches += a.size + b.size;                      // a merge touches both operands
     return Counted::terms(a.size + b.size);
   }
-  Counted scale_trace(int, const Counted &p, Cx) { return p; } // found by ADL from inside fold_net
+  Counted scale_trace(const Counted &p, Cx) { return p; } // found by ADL from inside fold_net
 
   // What fold_net replaces: Σ_j sc[j]·trace(idx[j]), left-folded against one growing accumulator.
   template <class P, class TraceFn>
@@ -96,7 +96,7 @@ namespace
   {
     P acc = zero_like<P>(NSYM); // Poly/DPoly route through the private-factory attorney; Counted uses its ctor
     for (std::size_t j = 0; j < idx.size(); ++j)
-      acc = acc + scale_trace(NSYM, trace(idx[j]), sc[j]);
+      acc = acc + scale_trace(trace(idx[j]), sc[j]);
     return acc;
   }
 
@@ -156,7 +156,7 @@ namespace
 
 int main()
 {
-  std::printf("trace_fold: tree fold vs left fold, all cache regimes\n");
+  std::printf("generator_phases: tree fold vs left fold, all cache regimes\n");
 
   run_backend<Poly>("Poly", trace_of);
   run_backend<DPoly>("DPoly", [](int k) {
@@ -323,9 +323,9 @@ int main()
   check(poly_bytes(trace_of(4)) > poly_bytes(env.constant(Cx{1, 0})), "poly_bytes: grows with terms");
 
   if (failures) {
-    std::printf("trace_fold: %d FAILURES\n", failures);
+    std::printf("generator_phases: %d FAILURES\n", failures);
     return 1;
   }
-  std::printf("trace_fold: all checks passed\n");
+  std::printf("generator_phases: all checks passed\n");
   return 0;
 }

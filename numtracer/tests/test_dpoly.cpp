@@ -15,7 +15,7 @@
 using namespace numtracer; // the typed builders (LorentzIndex, Momentum, …) the tests spell unqualified
 #include "numtracer/engine/contract_dressed.hpp"
 #include "numtracer/codegen/lower_poly.hpp"
-#include "numtracer/engine/trace_fold.hpp" // fold_net_dressed (lever (b) assembly)
+#include "numtracer/engine/generator_phases.hpp" // fold_net_dressed (lever (b) assembly)
 
 #include <cstdio>
 #include <random>

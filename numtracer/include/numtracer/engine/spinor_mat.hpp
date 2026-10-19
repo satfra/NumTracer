@@ -74,7 +74,7 @@ namespace numtracer::inline engine
           if (g.re == 0 && g.im == 0) continue;
           // `scaled` instead of `constant(g) * comp[mu]`: bit-identical (same operand and monomial
           // order) without the scratch sort — this runs per Slash token inside the Dirac fold.
-          S(i, j) = std::move(S(i, j)) + PolyFactory::scaled(nsym, comp[mu], g);
+          S(i, j) = std::move(S(i, j)) + PolyFactory::scaled(comp[mu], g);
         }
     }
     return S;

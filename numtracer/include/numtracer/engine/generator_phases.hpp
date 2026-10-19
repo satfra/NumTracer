@@ -1,22 +1,26 @@
-/// @file trace_fold.hpp
-/// @brief The generator's two contraction phases: contract each DISTINCT Dirac trace once (phase A),
-///        then multiply each net's traces with their corresponding scalar factors (phase B). This avoids tracing
-///        identical Dirac chains repeatedly across nets, and phase A is a flat list of work items.
+/// @file generator_phases.hpp
+/// @brief Scheduling for the generator program: phase A contracts each distinct Dirac trace once,
+///        phase B sums each net from those traces. The contraction itself is a callback (`trace(k)`,
+///        the Frame's trace members → engine/contract.hpp); this header decides what runs when, on
+///        which thread, and what stays in memory.
 ///
 /// The same `(dnet, lnet, dch, dsl)` trace recurs across nets and colour branches (5-7.5x on dense
 /// flows), so CodegenGenerator.m emits a table of the DISTINCT traces and, per net, the indices into
-/// it; this header contracts and folds that table. Two wins:
+/// it plus one scalar per index. The two phases:
 ///
-///  - **the contraction shrinks by the redundancy factor** — each distinct trace is contracted once;
-///  - **the parallel phase becomes a FLAT list of uniform work items.** - scheduling per net would lead to wildly
-///  different workloads per thread, as both their sizes and complexity typically vary a lot.
+///  - **Phase A** (@ref contract_traces): contract the first `nCache` distinct traces into a table, in
+///    parallel over a FLAT work list (@ref parallel_flat). Flat matters: per-net work is wildly
+///    uneven in both size and cost, so scheduling per net would leave threads idle.
+///  - **Phase B** (@ref fold_net, @ref fold_net_dressed; production driver @ref fold_groups_streaming):
+///    each net is `Σ_j scale[j] · trace(idx[j])`, read from the table or recomputed if it was not
+///    cached. The sum is a **balanced binary-counter tree** (@ref tree_sum) rather than a left fold
+///    against a growing accumulator (heavy nets have >1000 terms); this reassociation moves the
+///    emitted kernel only in the last ulp (worst relative deviation ~7e-15). Nets are folded in
+///    bounded waves (@ref net_window) so that only a window of net polynomials is ever held.
 ///
-/// Phase B reduces each net as a **balanced binary-counter tree** rather than a left fold against a
-/// growing accumulator (heavy nets fold >1000 terms). Reassociating perturbs the emitted kernel only
-/// in the last ulp (worst relative deviation ~7e-15). Measurements: docs/NUMTRACER_DESIGN_NOTES.md.
-///
-/// Only the generator's main TU includes this (it is host-only: it spawns threads). The `-O0` net
-/// builder units are compiled `-fno-exceptions -fno-rtti` and must not see it.
+/// Measurements: docs/NUMTRACER_DESIGN_NOTES.md. Only the generator's main TU includes this (it is
+/// host-only: it spawns threads). The `-O0` net-builder units are compiled `-fno-exceptions
+/// -fno-rtti` and must not see it.
 #pragma once
 
 #include "numtracer/core/envvar.hpp" // env_flag / env_int — the single truth test for NT_* switches
@@ -57,8 +61,8 @@ namespace numtracer::inline engine
   /// @brief Scale a contracted trace by its sub-term scalar. Overloaded so phase B is one template
   ///        over both backends: the plain path multiplies by a constant `Poly`, the dressed path
   ///        scales every kinematic coefficient (@ref scaleCx).
-  inline Poly scale_trace(int nsym, const Poly &p, Cx c) { return PolyFactory::scaled(nsym, p, c); }
-  inline DPoly scale_trace(int, const DPoly &p, Cx c) { return scaleCx(p, c); }
+  inline Poly scale_trace(const Poly &p, Cx c) { return PolyFactory::scaled(p, c); }
+  inline DPoly scale_trace(const DPoly &p, Cx c) { return scaleCx(p, c); }
 
   /// @brief Approximate heap footprint of a polynomial, for the trace-table RAM report. The table is
   ///        the one place this design trades memory for time, so the generator prints what it costs.
@@ -261,7 +265,7 @@ namespace numtracer::inline engine
     P recomputed;
     return tree_sum<P>(nsym, traceIdx.size(), [&](std::size_t j) {
       const P &src = resident_or_recompute(traceIdx[j], traceTable, nCache, trace, recomputed);
-      return scale_trace(nsym, src, subScale[j]);
+      return scale_trace(src, subScale[j]);
     });
   }
 
@@ -285,7 +289,7 @@ namespace numtracer::inline engine
       // Empty if the scaled trace cancels to nothing (DPoly::add drops an empty Poly), matching
       // fold_net's zero handling.
       DPoly cur = DPolyFactory::zero(nsym);
-      cur.add(subDress[j], scale_trace(nsym, src, subScale[j]));
+      cur.add(subDress[j], scale_trace(src, subScale[j]));
       return cur;
     });
   }
@@ -295,7 +299,7 @@ namespace numtracer::inline engine
   /// TEST-ONLY. CodegenGenerator.m no longer emits a call to this: production goes through
   /// @ref fold_groups_streaming, which folds each group on demand and drains straight to the sink so
   /// no net polynomial outlives its group. This one materialises them all, which is exactly why it
-  /// makes a good reference — `tests/test_trace_fold.cpp` diffs the streaming fold against it and
+  /// makes a good reference — `tests/test_generator_phases.cpp` diffs the streaming fold against it and
   /// requires bit-identity. Keep it, but do not mistake it for a live path.
   ///
   /// Still net-parallel (unlike phase A), but that is fine here: the contraction is done, so a net's

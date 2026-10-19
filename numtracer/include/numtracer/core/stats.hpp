@@ -11,7 +11,7 @@
 /// `mpoly.hpp`/`contract.hpp`, which the `-O0 -fno-exceptions` net-builder TUs may see —
 /// so no `<thread>`, no `<mutex>`, no exceptions. Aggregation uses an atomic intrusive list of
 /// heap-allocated (deliberately leaked) per-thread counter blocks; the dump walks the list after
-/// phase A's workers have joined (trace_fold.hpp owns the dump).
+/// phase A's workers have joined (generator_phases.hpp owns the dump).
 #pragma once
 
 #if NT_PHASEA_STATS

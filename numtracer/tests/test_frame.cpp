@@ -142,6 +142,14 @@ int main()
     auto Q = G.symbol("q");
     const nt::Poly other = Q;
     check(!throws([&] { (void)F.eval(other, G.at(1.0)); }).empty(), "point of another frame -> throws");
+    nt::Frame H;
+    auto R1 = H.symbol("r1");
+    auto R2 = H.symbol("r2");
+    const nt::Poly foreign = R1 * R2; // nsym 2, F has 1
+    const nt::Poly own = P;
+    check(throws([&] { (void)F.slashC({own, foreign, own, own}); }).find("another frame") != std::string::npos,
+          "slashC with a polynomial of another frame -> throws");
+    check(throws([&] { (void)F.slashC({own, own, own, own}); }).empty(), "slashC with own polynomials -> ok");
   }
 
   {
