@@ -24,8 +24,8 @@ int main() {
 
   // @snip begin: slash
   // F.slashC(k) = sum_mu k_mu gamma_mu: a slashed momentum as a 4x4 matrix of polynomials.
-  nt::Mat4 ps = F.slashC({p[0], p[1], p[2], p[3]});
-  nt::Mat4 qs = F.slashC({q[0], q[1], q[2], q[3]});
+  nt::Matrix<4, nt::Poly> ps = F.slashC({p[0], p[1], p[2], p[3]});
+  nt::Matrix<4, nt::Poly> qs = F.slashC({q[0], q[1], q[2], q[3]});
 
   // tr(p/ q/) is the trace of the matrix product: a polynomial in the 8 symbols.
   nt::Poly tr = nt::mtrace(nt::matmul(ps, qs));

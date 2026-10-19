@@ -1,64 +1,63 @@
 /// @file cmat.hpp
-/// @brief A small compile-time-sized dense complex matrix and its basic operations.
+/// @brief A small compile-time-sized dense matrix, generic in its entry type.
 ///
-/// This header is a foundational leaf — it has no dependency on the Lorentz/Dirac/SU(N)
-/// sector headers. It provides a stack-allocated `N×N` complex matrix (`std::complex<double>`
-/// entries) with element access, a sparse-aware matrix product, and a trace. `sun/sun_data.hpp`
-/// stores its typed-out generators as `Mat<N>`; `network/sun_net.hpp` copies them into its own
-/// runtime-sized `DynMat`. The matmul skips structurally-zero left entries because the
-/// generators are sparse.
+/// This header is a foundational leaf — it has no dependency on the Lorentz/Dirac/SU(N) sector
+/// headers. `Matrix<N>` (complex entries) holds the typed-out SU(N) generators in `sun/sun_data.hpp`;
+/// `Matrix<4, Poly>` is the spinor matrix of the numeric Dirac trace (`engine/spinor_mat.hpp`).
+/// The type is an aggregate, so it stays brace-initialisable and usable in `constexpr` tables; the
+/// product and trace below are generic in both `N` and the entry type.
 #pragma once
 
 #include <array>
 #include <complex>
+#include <utility> // std::move
 
-namespace numtracer {
+namespace numtracer
+{
 
-/// @brief A compile-time-sized N×N complex matrix stored on the stack (row-major).
-/// @tparam N The matrix dimension.
-template <int N> struct Mat {
-  std::array<std::complex<double>, N * N> data{}; ///< Row-major element storage.
-  /// @brief Mutable element access.
-  /// @param i Row index.
-  /// @param j Column index.
-  /// @return Reference to element `(i,j)`.
-  std::complex<double> &operator()(int i, int j) { return data[i * N + j]; }
-  /// @brief Const element access.
-  /// @param i Row index.
-  /// @param j Column index.
-  /// @return The value of element `(i,j)`.
-  std::complex<double> operator()(int i, int j) const { return data[i * N + j]; }
-};
+  /// @brief A compile-time-sized N×N matrix stored on the stack (row-major).
+  /// @tparam N The matrix dimension.
+  /// @tparam T The entry type (complex by default).
+  template <int N, typename T = std::complex<double>> struct Matrix {
+    std::array<T, N * N> data{}; ///< Row-major element storage.
+    /// @brief Mutable element access.
+    /// @param i Row index.
+    /// @param j Column index.
+    /// @return Reference to element `(i,j)`.
+    constexpr T &operator()(int i, int j) { return data[i * N + j]; }
+    /// @brief Const element access.
+    /// @param i Row index.
+    /// @param j Column index.
+    /// @return Reference to element `(i,j)`.
+    constexpr const T &operator()(int i, int j) const { return data[i * N + j]; }
+  };
 
-/// @brief Matrix product, skipping structurally zero entries of the left operand.
-///
-/// The generators are sparse, so skipping zero `x(i,k)` saves work.
-/// @tparam N The matrix dimension.
-/// @param x The left matrix.
-/// @param y The right matrix.
-/// @return The product `x * y`.
-template <int N> Mat<N> matmul(const Mat<N> &x, const Mat<N> &y) {
-  Mat<N> r;
-  for (int i = 0; i < N; ++i)
-    for (int k = 0; k < N; ++k) {
-      const std::complex<double> xik = x(i, k);
-      if (xik == std::complex<double>{0, 0})
-        continue; // generators are sparse — skip structural zeros
-      for (int j = 0; j < N; ++j)
-        r(i, j) += xik * y(k, j);
-    }
-  return r;
-}
+  /// @brief Matrix product `A · B`.
+  ///
+  /// Each entry starts from its first product rather than from a zero, so `T` needs only `+` and `*`
+  /// (a `Poly` zero would need the frame's symbol count).
+  template <int N, typename T> Matrix<N, T> matmul(const Matrix<N, T> &A, const Matrix<N, T> &B)
+  {
+    static_assert(N >= 1, "matmul needs N >= 1");
+    Matrix<N, T> C;
+    for (int i = 0; i < N; ++i)
+      for (int j = 0; j < N; ++j) {
+        T s = A(i, 0) * B(0, j);
+        for (int k = 1; k < N; ++k)
+          s = s + A(i, k) * B(k, j);
+        C(i, j) = std::move(s);
+      }
+    return C;
+  }
 
-/// @brief Matrix trace.
-/// @tparam N The matrix dimension.
-/// @param x The matrix.
-/// @return @f$\sum_i x_{ii}@f$.
-template <int N> std::complex<double> trace(const Mat<N> &x) {
-  std::complex<double> t{0, 0};
-  for (int i = 0; i < N; ++i)
-    t += x(i, i);
-  return t;
-}
+  /// @brief Matrix trace `Σ_i A(i,i)`.
+  template <int N, typename T> T mtrace(const Matrix<N, T> &A)
+  {
+    static_assert(N >= 1, "mtrace needs N >= 1");
+    T s = A(0, 0);
+    for (int i = 1; i < N; ++i)
+      s = s + A(i, i);
+    return s;
+  }
 
 } // namespace numtracer

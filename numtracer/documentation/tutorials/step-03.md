@@ -80,7 +80,7 @@ a symbol after that throws. Values are supplied at evaluation time, in declarati
 ```
 
 Three lines, and every one is ordinary linear algebra. `F.slashC(k)` builds
-$\sum_\mu k_\mu\gamma^\mu$ as a `Mat4` of polynomials; `matmul` is the $4\times4$ product;
+$\sum_\mu k_\mu\gamma^\mu$ as a `Matrix<4, Poly>` (a 4×4 matrix of polynomials); `matmul` is the $4\times4$ product;
 `mtrace` sums the diagonal. There is no Dirac-algebra code path here at all — `matmul` does not
 know it is multiplying gammas.
 

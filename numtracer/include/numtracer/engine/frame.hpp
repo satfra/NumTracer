@@ -27,7 +27,7 @@
 #pragma once
 
 #include "numtracer/codegen/gen.hpp"              // GlobalEnv / FillFormulas / emit_fill
-#include "numtracer/engine/contract.hpp"         // Poly/Mat4, LorentzNet, DiracChain, ndetail::contract
+#include "numtracer/engine/contract.hpp"         // Poly/Matrix<4, Poly>, LorentzNet, DiracChain, ndetail::contract
 #include "numtracer/engine/contract_dressed.hpp" // DSlot/DChainTok, ndetail::contract_dressed/_structural
 #include "numtracer/codegen/lower_poly.hpp"      // to_genprog
 #include "numtracer/codegen/poly_cpp.hpp"   // poly_to_cpp
@@ -202,7 +202,7 @@ namespace numtracer::inline engine
 
     /// The slashed 4×4 matrix of a momentum given by its components.
     /// @warning Freezes the symbol list
-    Mat4 slashC(const std::array<Poly, 4> &comp) const { return ::numtracer::engine::slashC(frozen_nsym(), comp); }
+    Matrix<4, Poly> slashC(const std::array<Poly, 4> &comp) const { return ::numtracer::engine::slashC(frozen_nsym(), comp); }
 
     // ── momenta and indices ──────────────────────────────────────────────────────────────────────
 

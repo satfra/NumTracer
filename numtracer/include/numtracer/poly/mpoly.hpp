@@ -22,7 +22,7 @@
 /// Stored as a sorted vector (see @ref Poly); the symbol *meaning* lives only in the kernel's `fill`,
 /// so the engine is frame-agnostic.
 ///
-/// This header is the polynomial type alone; the 4×4 spinor matrix of `Poly` (`Mat4`) and the
+/// This header is the polynomial type alone; the 4×4 spinor matrix of `Poly` (`Matrix<4, Poly>`) and the
 /// γ/slash builders that consume it live in `engine/spinor_mat.hpp`.
 #pragma once
 
@@ -302,7 +302,7 @@ namespace numtracer::inline poly
   struct Poly {
     int nsym = 0;
     /// Heap-backed on purpose: inline storage (capacity 4) is a measured dead end — ~2% faster, but
-    /// sizeof(Mat4) 0.5 KB -> 8.7 KB and peak RSS +20% on the memory-bound dense flows.
+    /// sizeof(Matrix<4, Poly>) 0.5 KB -> 8.7 KB and peak RSS +20% on the memory-bound dense flows.
     std::vector<std::pair<Mono, Cx>> terms; ///< sorted by Mono, like terms combined, no zeros
 
     // Sanctioned construction paths (see the note above @ref Poly). The Frame and the internal attorney

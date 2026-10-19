@@ -29,7 +29,7 @@
 #include "numtracer/core/config.hpp"       // NT_THROW (exception-optional guard for -fno-exceptions builds)
 #include "numtracer/core/envvar.hpp"       // env_flag / env_int — the single truth test for NT_* switches
 #include "numtracer/core/export.hpp"       // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
-#include "numtracer/engine/spinor_mat.hpp" // Mat4 / matmul / mtrace / gammaC / slashC
+#include "numtracer/engine/spinor_mat.hpp" // Matrix<4, Poly> / gammaC / cmatC / slashC
 #include "numtracer/network/dirac.hpp"     // DiracChain / DFac
 #include "numtracer/network/network.hpp"   // LorentzNet / LorentzFactor
 #include "numtracer/poly/mpoly.hpp"        // Poly (the polynomial type)
@@ -92,8 +92,9 @@ namespace numtracer::inline engine
     ///        expanded into `δ − kk/k²`. Two projectors on the **same momentum** contracting over a
     ///        shared dummy Lorentz index collapse by the projector algebra:
     ///          - idempotency `P·P → P` (one shared index) / `tr P` (both shared: T→3,L→1,E→1,M→2);
-    ///          - orthogonality `L⟂{T,E,M}`, `E⟂M` ⇒ the contraction is the zero tensor ⇒ the term dies.
-    ///        `T·E`/`T·M` are left untouched (they need `Pᵀ=Pᴱ+Pᴹ`; omitting an identity is value-safe).
+    ///          - orthogonality `L⟂{T,E,M}`, `E⟂M` ⇒ the contraction is the zero tensor ⇒ the term dies;
+    ///          - absorption `T·E → E`, `T·M → M` (`tr` → 1, 2): E and M live inside the transverse
+    ///            subspace (`P_M k = 0`, `P_E = P_T − P_M`), where P_T is the identity.
     ///        Value-preserving and a strict **no-op unless such a pair exists**, so non-redundant nets
     ///        (≤ one projector per line) are unchanged. This is what keeps a transverse-vertex
     ///        (`…ClassTrans`) derivation as compact as the bare one: the backend cannot otherwise
@@ -214,7 +215,7 @@ namespace numtracer::inline engine
     //      block-diagonal product is tr(m0)+tr(m1).
     // collect free-leg ids (in chain order) and precompute the per-token matrices that don't vary.
     std::vector<int> freeLegs;
-    std::vector<Mat4> slashMat; // precomputed Slash matrices, indexed by token
+    std::vector<Matrix<4, Poly>> slashMat; // precomputed Slash matrices, indexed by token (others: empty placeholders)
     slashMat.reserve(chain.size());
     // Comm commutator [A,B]: each leg is FREE (a looped component) or SLASH (a fixed momentum matrix).
     // For a slashed leg we stash its slash matrix here and turn it into 2×2 blocks below (next to sP/sQ).
@@ -222,13 +223,13 @@ namespace numtracer::inline engine
     const bool hasComm =
         std::any_of(chain.begin(), chain.end(), [](const network::DFac &d) { return d.kind == network::DFac::Comm; });
     const std::size_t nComm = hasComm ? chain.size() : 0;
-    std::vector<Mat4> commA(nComm, Mat4(nsym)), commB(nComm, Mat4(nsym));
+    std::vector<Matrix<4, Poly>> commA(nComm), commB(nComm); // set (and read) only for a slashed leg
     std::vector<char> commAslash(nComm, 0), commBslash(nComm, 0);
     for (std::size_t i = 0; i < chain.size(); ++i) {
       const network::DFac &d = chain[i];
       if (d.kind == network::DFac::Gamma) {
         freeLegs.push_back(d.mu);
-        slashMat.emplace_back(nsym); // placeholder
+        slashMat.emplace_back();
       } else if (d.kind == network::DFac::Slash) {
         slashMat.push_back(slashC(nsym, ndetail::mom_components(nsym, d.vlc, comp)));
       } else if (d.kind ==
@@ -245,9 +246,9 @@ namespace numtracer::inline engine
           commBslash[i] = 1;
           commB[i] = slashC(nsym, ndetail::mom_components(nsym, d.vlc2, comp));
         }
-        slashMat.emplace_back(nsym); // placeholder
-      } else {                       // γ5 and C — block-diagonal in the Weyl basis, folded in below
-        slashMat.emplace_back(nsym); // placeholder (keeps slashMat aligned with the token index)
+        slashMat.emplace_back();
+      } else { // γ5 and C — block-diagonal in the Weyl basis, folded in below
+        slashMat.emplace_back();
       }
     }
     const int f = freeLegs.size();
@@ -295,24 +296,25 @@ namespace numtracer::inline engine
 
     // Precompute each factor's Weyl 2×2 blocks (P = upper-right, Q = lower-left) once. The fold carries
     // only these two blocks rather than the full 4×4 (4× fewer Poly multiplies); see the algorithm note.
-    using B2 = std::array<Poly, 4>; // row-major 2×2
-    auto blocksOf = [&](const Mat4 &M, B2 &P, B2 &Q) {
+    using B2 = Matrix<2, Poly>;
+    auto blocksOf = [&](const Matrix<4, Poly> &M, B2 &P, B2 &Q) {
       for (int rr = 0; rr < 2; ++rr)
         for (int cc = 0; cc < 2; ++cc) {
-          P[rr * 2 + cc] = M.entries[rr][cc + 2];
-          Q[rr * 2 + cc] = M.entries[rr + 2][cc];
+          P(rr, cc) = M(rr, cc + 2);
+          Q(rr, cc) = M(rr + 2, cc);
         }
     };
     auto mul2 = [&](const B2 &x, const B2 &y) {
       NT_STAT_ADD(mul2_calls, 1);
-      return B2{PolyFactory::mul_add(x[0], y[0], x[1], y[2]), PolyFactory::mul_add(x[0], y[1], x[1], y[3]),
-                PolyFactory::mul_add(x[2], y[0], x[3], y[2]), PolyFactory::mul_add(x[2], y[1], x[3], y[3])};
+      return B2{{PolyFactory::mul_add(x(0, 0), y(0, 0), x(0, 1), y(1, 0)),
+                 PolyFactory::mul_add(x(0, 0), y(0, 1), x(0, 1), y(1, 1)),
+                 PolyFactory::mul_add(x(1, 0), y(0, 0), x(1, 1), y(1, 0)),
+                 PolyFactory::mul_add(x(1, 0), y(0, 1), x(1, 1), y(1, 1))}};
     };
-    // Transpose of a row-major 2x2 block: swap the off-diagonal entries.
-    auto t2 = [](const B2 &b) { return B2{b[0], b[2], b[1], b[3]}; };
+    auto t2 = [](const B2 &b) { return B2{{b(0, 0), b(1, 0), b(0, 1), b(1, 1)}}; }; // transpose
     std::array<B2, 4> gP, gQ;
     for (int mu = 0; mu < 4; ++mu) {
-      Mat4 g = gammaC(nsym, mu);
+      const Matrix<4, Poly> g = gammaC(nsym, mu);
       blocksOf(g, gP[mu], gQ[mu]);
     }
     // TRANSPOSED tokens. A block-ANTIdiagonal factor M = [[0,P],[Q,0]] has M^T = [[0,Q^T],[P^T,0]],
@@ -337,11 +339,11 @@ namespace numtracer::inline engine
     // C is block-DIAGONAL, so it needs the other two blocks: upper-LEFT and lower-RIGHT. Built only
     // when the chain actually carries a C — the vast majority of chains do not, and cmatC would
     // otherwise allocate 16 Poly per call inside the phase-A Dirac fold.
-    auto diagBlocksOf = [&](const Mat4 &M, B2 &U, B2 &L) {
+    auto diagBlocksOf = [&](const Matrix<4, Poly> &M, B2 &U, B2 &L) {
       for (int rr = 0; rr < 2; ++rr)
         for (int cc = 0; cc < 2; ++cc) {
-          U[rr * 2 + cc] = M.entries[rr][cc];
-          L[rr * 2 + cc] = M.entries[rr + 2][cc + 2];
+          U(rr, cc) = M(rr, cc);
+          L(rr, cc) = M(rr + 2, cc + 2);
         }
     };
 
@@ -374,16 +376,23 @@ namespace numtracer::inline engine
     // γ5 = diag(+I,−I) (Weyl): block-diagonal, so it costs no multiply and never flips the parity — it just
     // negates one running block (upper when the product is antidiagonal, lower when diagonal). A leading γ5
     // seeds the product as diag(+I,−I).
-    const B2 id2 = {PolyFactory::constant(nsym, Cx{1, 0}), PolyFactory::zero(nsym), PolyFactory::zero(nsym),
-                    PolyFactory::constant(nsym, Cx{1, 0})};
+    const B2 id2 = {{PolyFactory::constant(nsym, Cx{1, 0}), PolyFactory::zero(nsym), PolyFactory::zero(nsym),
+                     PolyFactory::constant(nsym, Cx{1, 0})}};
     auto neg2 = [&](const B2 &x) {
-      return B2{PolyFactory::zero(nsym) - x[0], PolyFactory::zero(nsym) - x[1], PolyFactory::zero(nsym) - x[2],
-                PolyFactory::zero(nsym) - x[3]};
+      B2 r;
+      for (int k = 0; k < 4; ++k)
+        r.data[k] = PolyFactory::zero(nsym) - x.data[k];
+      return r;
     };
     // BARE commutator [A,B] = A·B − B·A is block-diagonal (A,B antidiagonal ⇒ A·B diagonal), like γ5 so it
     // never flips the parity: upper = P_a Q_b − P_b Q_a, lower = Q_a P_b − Q_b P_a, from the (upper-right,
     // lower-left) blocks of legs A,B. (The σ^{μν}=(i/2)[γ^μ,γ^ν] normalization is applied in the scalar.)
-    auto subB2 = [&](const B2 &x, const B2 &y) { return B2{x[0] - y[0], x[1] - y[1], x[2] - y[2], x[3] - y[3]}; };
+    auto subB2 = [&](const B2 &x, const B2 &y) {
+      B2 r;
+      for (int k = 0; k < 4; ++k)
+        r.data[k] = x.data[k] - y.data[k];
+      return r;
+    };
     auto commBlocks = [&](const B2 &Pa, const B2 &Qa, const B2 &Pb, const B2 &Qb, B2 &Su, B2 &Sl) {
       Su = subB2(mul2(Pa, Qb), mul2(Pb, Qa));
       Sl = subB2(mul2(Qa, Pb), mul2(Qb, Pa));
@@ -406,7 +415,7 @@ namespace numtracer::inline engine
         // `flat` has the walk's leg order (legs legsBefore..f-1 most significant); rotate its digits
         // back to the original order.
         const int orig = (flat % lowDigits) * highDigits + flat / lowDigits;
-        F.entries[static_cast<std::size_t>(orig)] = m0[0] + m0[3] + m1[0] + m1[3];
+        F.entries[static_cast<std::size_t>(orig)] = m0(0, 0) + m0(1, 1) + m1(0, 0) + m1(1, 1);
         return;
       }
       const network::DFac &d = chain[i];
@@ -1020,19 +1029,6 @@ namespace numtracer::inline engine
       return k == LorentzFactor::ProjT || k == LorentzFactor::ProjL || k == LorentzFactor::ProjE ||
              k == LorentzFactor::ProjM;
     }
-    /// `P_L ⟂ {P_T,P_E,P_M}` and `P_E ⟂ P_M` (on the same momentum) ⇒ their product is the zero tensor.
-    inline bool projOrthogonal(LorentzFactor::Kind A, LorentzFactor::Kind B)
-    {
-      auto lOrtho = [](LorentzFactor::Kind x) {
-        return x == LorentzFactor::ProjT || x == LorentzFactor::ProjE || x == LorentzFactor::ProjM;
-      };
-      if (A == LorentzFactor::ProjL && lOrtho(B)) return true;
-      if (B == LorentzFactor::ProjL && lOrtho(A)) return true;
-      if ((A == LorentzFactor::ProjE && B == LorentzFactor::ProjM) ||
-          (A == LorentzFactor::ProjM && B == LorentzFactor::ProjE))
-        return true;
-      return false;
-    }
     /// `tr P` in 4D: `tr P_T=3, tr P_L=1, tr P_E=1, tr P_M=2` (cf. test_projector_identity).
     inline int projTrace4D(LorentzFactor::Kind k)
     {
@@ -1048,6 +1044,15 @@ namespace numtracer::inline engine
       default:
         return 0;
       }
+    }
+    /// `P_T·P_E = P_E` and `P_T·P_M = P_M` (on the same momentum): returns which of the pair survives
+    /// (0 = @p A, 1 = @p B), or -1 when the pair is not of this form.
+    inline int projAbsorbedByT(LorentzFactor::Kind A, LorentzFactor::Kind B)
+    {
+      auto em = [](LorentzFactor::Kind x) { return x == LorentzFactor::ProjE || x == LorentzFactor::ProjM; };
+      if (A == LorentzFactor::ProjT && em(B)) return 1;
+      if (B == LorentzFactor::ProjT && em(A)) return 0;
+      return -1;
     }
     /// The projector of kind @p k on the outer indices @p a, @p b, keeping @p src's momentum and atoms.
     inline LorentzFactor makeProj(LorentzFactor::Kind k, int a, int b, const LorentzFactor &src)
@@ -1099,10 +1104,14 @@ namespace numtracer::inline engine
             if (!isProjKind(e[j].kind) || e[j].a == e[j].b) continue;
             if (!same_momentum(e[i], e[j])) continue; // same momentum only
             const LorentzFactor::Kind kA = e[i].kind, kB = e[j].kind;
-            // same projector (full field identity) ⇒ idempotent; orthogonal pair ⇒ vanishes.
+            // same projector (full field identity) ⇒ idempotent; T·E / T·M ⇒ the E/M factor survives;
+            // orthogonal pair ⇒ vanishes. `keep` is the factor whose kind, momentum and atoms survive.
             const bool same = (kA == kB) && e[i].atom == e[j].atom && e[i].atomS == e[j].atomS;
-            const bool ortho = projOrthogonal(kA, kB);
-            if (!same && !ortho) continue; // T·E / T·M: leave untouched
+            const int absorbed = projAbsorbedByT(kA, kB);
+            const bool ortho = network::mdetail::orthogonal_kinds(kA, kB);
+            if (!same && absorbed < 0 && !ortho) continue;
+            const LorentzFactor &keep = (absorbed == 1) ? e[j] : e[i];
+            const bool survives = same || absorbed >= 0;
 
             // shared indices among {a,b} that are CLEAN dummies (multiplicity exactly 2).
             int sharedCount = 0, sharedIdx = -1;
@@ -1118,12 +1127,12 @@ namespace numtracer::inline engine
             for (std::size_t t = 0; t < e.size(); ++t)
               if (t != i && t != j) out.push_back(e[t]);
             if (sharedCount == 2) { // full contraction → scalar trace (orthogonal ⇒ 0)
-              const int tr = same ? projTrace4D(kA) : 0;
+              const int tr = survives ? projTrace4D(keep.kind) : 0;
               coeff = Cx{coeff.re * tr, coeff.im * tr};
-            } else if (same) { // single shared index → fused projector on the outer indices
+            } else if (survives) { // single shared index → fused projector on the outer indices
               const int outA = (e[i].a == sharedIdx) ? e[i].b : e[i].a;
               const int outB = (e[j].a == sharedIdx) ? e[j].b : e[j].a;
-              out.push_back(makeProj(kA, outA, outB, e[i]));
+              out.push_back(makeProj(keep.kind, outA, outB, keep));
             } else { // orthogonal single contraction → zero tensor → whole term vanishes
               coeff = Cx{0, 0};
             }

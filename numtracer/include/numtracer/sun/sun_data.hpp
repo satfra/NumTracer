@@ -19,7 +19,7 @@
 /// entries of @f$f@f$ equal to `0.8660254037844386`.
 #pragma once
 
-#include "numtracer/core/cmat.hpp" // Mat<N>, matmul, trace (the dense complex-matrix leaf)
+#include "numtracer/core/cmat.hpp" // Matrix<N> (the generator storage)
 #include "numtracer/core/cx.hpp"   // Cx (constexpr complex), approx
 #include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
 
@@ -59,10 +59,10 @@ template <int N> inline constexpr bool kHasSUNData = false;
 /// @brief Compile-time SU(2) data: the 3 generators and the nonzero @f$f^{abc}@f$.
 template <> struct SUNData<2> {
   /// @brief The 3 fundamental generators @f$T^a = \sigma^a/2@f$.
-  static constexpr std::array<Mat<2>, 3> generators = {{
-    Mat<2>{{{std::complex<double>{0,0}, std::complex<double>{0.5,0}, std::complex<double>{0.5,0}, std::complex<double>{0,0}}}},
-    Mat<2>{{{std::complex<double>{0,0}, std::complex<double>{0,-0.5}, std::complex<double>{0,0.5}, std::complex<double>{0,0}}}},
-    Mat<2>{{{std::complex<double>{0.5,0}, std::complex<double>{0,0}, std::complex<double>{0,0}, std::complex<double>{-0.5,0}}}},
+  static constexpr std::array<Matrix<2>, 3> generators = {{
+    Matrix<2>{{{std::complex<double>{0,0}, std::complex<double>{0.5,0}, std::complex<double>{0.5,0}, std::complex<double>{0,0}}}},
+    Matrix<2>{{{std::complex<double>{0,0}, std::complex<double>{0,-0.5}, std::complex<double>{0,0.5}, std::complex<double>{0,0}}}},
+    Matrix<2>{{{std::complex<double>{0.5,0}, std::complex<double>{0,0}, std::complex<double>{0,0}, std::complex<double>{-0.5,0}}}},
   }};
   /// @brief The nonzero structure constants @f$f^{abc} = \epsilon^{abc}@f$.
   static constexpr std::array<sun_detail::FEntry, 6> f_nonzeros = {{
@@ -77,15 +77,15 @@ template <> inline constexpr bool kHasSUNData<2> = true; ///< SU(2) data is tabu
 template <> struct SUNData<3> {
   /// @brief The 8 fundamental generators @f$T^a = \lambda^a/2@f$, in generalized Gell-Mann order:
   ///        the off-diagonal generators first (λ1, λ2, λ4, λ5, λ6, λ7), the diagonal λ3, λ8 last.
-  static constexpr std::array<Mat<3>, 8> generators = {{
-    Mat<3>{{{std::complex<double>{0,0},std::complex<double>{0.5,0},std::complex<double>{0,0},std::complex<double>{0.5,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0}}}},
-    Mat<3>{{{std::complex<double>{0,0},std::complex<double>{0,-0.5},std::complex<double>{0,0},std::complex<double>{0,0.5},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0}}}},
-    Mat<3>{{{std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0.5,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0.5,0},std::complex<double>{0,0},std::complex<double>{0,0}}}},
-    Mat<3>{{{std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,-0.5},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0.5},std::complex<double>{0,0},std::complex<double>{0,0}}}},
-    Mat<3>{{{std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0.5,0},std::complex<double>{0,0},std::complex<double>{0.5,0},std::complex<double>{0,0}}}},
-    Mat<3>{{{std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,-0.5},std::complex<double>{0,0},std::complex<double>{0,0.5},std::complex<double>{0,0}}}},
-    Mat<3>{{{std::complex<double>{0.5,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{-0.5,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0}}}},
-    Mat<3>{{{std::complex<double>{0.28867513459481287,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0.28867513459481287,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{-0.57735026918962573,0}}}},
+  static constexpr std::array<Matrix<3>, 8> generators = {{
+    Matrix<3>{{{std::complex<double>{0,0},std::complex<double>{0.5,0},std::complex<double>{0,0},std::complex<double>{0.5,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0}}}},
+    Matrix<3>{{{std::complex<double>{0,0},std::complex<double>{0,-0.5},std::complex<double>{0,0},std::complex<double>{0,0.5},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0}}}},
+    Matrix<3>{{{std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0.5,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0.5,0},std::complex<double>{0,0},std::complex<double>{0,0}}}},
+    Matrix<3>{{{std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,-0.5},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0.5},std::complex<double>{0,0},std::complex<double>{0,0}}}},
+    Matrix<3>{{{std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0.5,0},std::complex<double>{0,0},std::complex<double>{0.5,0},std::complex<double>{0,0}}}},
+    Matrix<3>{{{std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,-0.5},std::complex<double>{0,0},std::complex<double>{0,0.5},std::complex<double>{0,0}}}},
+    Matrix<3>{{{std::complex<double>{0.5,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{-0.5,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0}}}},
+    Matrix<3>{{{std::complex<double>{0.28867513459481287,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0.28867513459481287,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{0,0},std::complex<double>{-0.57735026918962573,0}}}},
   }};
   /// @brief The 54 nonzero structure constants @f$f^{abc}@f$.
   static constexpr std::array<sun_detail::FEntry, 54> f_nonzeros = {{

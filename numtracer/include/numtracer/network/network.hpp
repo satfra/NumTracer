@@ -124,6 +124,38 @@ namespace numtracer::inline network
   /// @ref dirac_value returns `{}` for a vanishing trace. Write a structural zero as `0.0 * net`.
   using LorentzNet = std::vector<LorentzTerm>;
 
+  namespace mdetail
+  {
+    /// Whether two projector kinds on the same momentum multiply to the zero tensor:
+    /// `P_L ⟂ {P_T, P_E, P_M}` and `P_E ⟂ P_M`.
+    inline bool orthogonal_kinds(LorentzFactor::Kind x, LorentzFactor::Kind y)
+    {
+      auto lOrtho = [](LorentzFactor::Kind k) {
+        return k == LorentzFactor::ProjT || k == LorentzFactor::ProjE || k == LorentzFactor::ProjM;
+      };
+      if (x == LorentzFactor::ProjL) return lOrtho(y);
+      if (y == LorentzFactor::ProjL) return lOrtho(x);
+      return (x == LorentzFactor::ProjE && y == LorentzFactor::ProjM) ||
+             (x == LorentzFactor::ProjM && y == LorentzFactor::ProjE);
+    }
+
+    /// Whether @p x and @p y are orthogonal projectors on one momentum that share an index, so any
+    /// product term holding both is exactly zero. The shared index is a contracted pair: in a valid
+    /// network an index occurs at most twice (the front end rejects more, `NumTrace::badlabel`).
+    inline bool orthogonal_pair(const LorentzFactor &x, const LorentzFactor &y)
+    {
+      return x.is_projector() && y.is_projector() && orthogonal_kinds(x.kind, y.kind) && x.vid == y.vid &&
+             (x.a == y.a || x.a == y.b || x.b == y.a || x.b == y.b) && x.vlc == y.vlc;
+    }
+
+    inline bool has_projector(const LorentzTerm &t)
+    {
+      for (const LorentzFactor &f : t.e)
+        if (f.is_projector()) return true;
+      return false;
+    }
+  } // namespace mdetail
+
   /// @brief A single-factor network (one product term, coefficient 1).
   inline LorentzNet leaf(LorentzFactor el) { return {LorentzTerm{Cx{1, 0}, {std::move(el)}}}; }
 
@@ -247,12 +279,32 @@ namespace numtracer::inline network
 
   /// @brief Tensor product of networks (Cartesian over their terms): factors sharing a label are
   ///        contracted when the result is evaluated. Spelled `a * b` in user code.
+  ///
+  /// Product terms that are exactly zero are not built: a zero coefficient, or a factor of @p a and a
+  /// factor of @p b that are orthogonal projectors on one momentum over a shared index
+  /// (@ref mdetail::orthogonal_pair). On an E/M-split finite-T flow these are ~99% of all terms. When
+  /// nothing survives the result is one explicit zero term, since an empty network reads as 1.
   inline LorentzNet mul(const LorentzNet &a, const LorentzNet &b)
   {
     LorentzNet r;
     r.reserve(a.size() * b.size());
-    for (const LorentzTerm &ta : a)
-      for (const LorentzTerm &tb : b) {
+    std::vector<char> bProj(b.size());
+    for (std::size_t j = 0; j < b.size(); ++j)
+      bProj[j] = mdetail::has_projector(b[j]);
+    auto orthogonal = [](const LorentzTerm &x, const LorentzTerm &y) {
+      for (const LorentzFactor &f : x.e)
+        if (f.is_projector())
+          for (const LorentzFactor &g : y.e)
+            if (mdetail::orthogonal_pair(f, g)) return true;
+      return false;
+    };
+    for (const LorentzTerm &ta : a) {
+      if (ta.coeff.re == 0 && ta.coeff.im == 0) continue;
+      const bool aProj = mdetail::has_projector(ta);
+      for (std::size_t j = 0; j < b.size(); ++j) {
+        const LorentzTerm &tb = b[j];
+        if (tb.coeff.re == 0 && tb.coeff.im == 0) continue;
+        if (aProj && bProj[j] && orthogonal(ta, tb)) continue;
         LorentzTerm p;
         p.coeff = ta.coeff * tb.coeff;
         p.e.reserve(ta.e.size() + tb.e.size());
@@ -260,6 +312,8 @@ namespace numtracer::inline network
         p.e.insert(p.e.end(), tb.e.begin(), tb.e.end());
         r.push_back(std::move(p));
       }
+    }
+    if (r.empty() && !a.empty() && !b.empty()) r.push_back(LorentzTerm{Cx{0, 0}, {}});
     return r;
   }
   template <class... R> LorentzNet mul(const LorentzNet &a, const LorentzNet &b, const R &...r)

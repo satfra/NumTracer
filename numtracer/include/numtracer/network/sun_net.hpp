@@ -26,7 +26,7 @@
 #include "numtracer/core/config.hpp"        // NT_THROW (exception-optional guard for -fno-exceptions builds)
 #include "numtracer/core/export.hpp"        // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
 #include "numtracer/poly/tolerances.hpp" // kZeroSnapTol
-#include "numtracer/sun/sun_data.hpp"       // SUNData<N> tables, Mat<N>, matmul, trace, Cx, sun_detail::FEntry
+#include "numtracer/sun/sun_data.hpp"       // SUNData<N> tables, Matrix<N>, Cx, sun_detail::FEntry
 
 #include <algorithm>
 #include <array>

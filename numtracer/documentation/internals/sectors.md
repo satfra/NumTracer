@@ -57,5 +57,5 @@ dresses each colour/flavour component differently (a group-diagonal $\delta$) fo
 `sun_value_dressed` to a polynomial $\sum_a c_a Z_a$ over runtime per-component dressing leaves;
 `sun_value` is left untouched, so colour-blind flows are unchanged.
 
-`core/cmat.hpp` defines `Mat<N>`, `matmul`, and `trace` — a plain dense complex matrix type used
-by the tables and the tests.
+`core/cmat.hpp` defines `Matrix<N, T>`, a plain dense N×N matrix (complex entries by default)
+that holds the generator tables; `Matrix<4, Poly>` is the spinor matrix of the Dirac sector.
