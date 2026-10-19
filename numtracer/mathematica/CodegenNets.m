@@ -671,7 +671,7 @@ orderDiracFacs[facs_] :=
       Abort[]];
     (* Mixed-orientation loops (e.g. qq diquarks) are valid: reversed factors are transposed by the
        engine (DFac::transposed, or dtrslot(k) for a slot). The transposition is checked by section J
-       of tests/test_numeric_contract.cpp against a brute-force index contraction. *)
+       of tests/test_contract.cpp against a brute-force index contraction. *)
     out];
 
 (* A component may contain SEVERAL independent closed spinor loops (a quark loop + the

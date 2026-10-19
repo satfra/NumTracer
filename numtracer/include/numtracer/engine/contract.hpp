@@ -1,60 +1,117 @@
-/// @file numeric_contract.hpp
-/// @brief The numeric (matrix-product) contraction engine: fold a diagram's Dirac trace
-///        by 4×4 spinor matrix **products** over @ref Poly entries (γ numeric, momenta symbolic),
-///        then contract the surviving free gluon legs against the pure-Lorentz network (projectors /
-///        metrics / vectors / Levi-Civita) by a bounded index sum. Neither step suffers the
-///        `(2n−1)!!` Wick blowup or the `2^np` projector-mask blowup of a symbolic expansion.
+/// @file contract.hpp
+/// @brief The contraction engine: reduce one diagram (Dirac chain ⊗ Lorentz network) to a
+///        scalar @ref Poly.
 ///
-/// Inputs per diagram:
-///   - a closed Dirac chain @ref DiracChain (free legs `gamma(mu)`, slashed propagators
-///     `slash(k)`, …; the tokens of `network/dirac.hpp`).
-///   - a Lorentz network @ref LorentzNet (metrics / vectors / projectors / Levi-Civita) over the
-///     same Lorentz ids.
-///   - a **component table** `comp[vid]` = the 4 @ref Poly components of frame momentum `vid`
-///     (partially numeric / partially symbolic), and the projector denominators
-///     `atomDen[aid] = k²` for monomial-cancellation bookkeeping.
+/// Pipeline (@ref ndetail::contract_net):
+///   1. Dirac trace: each spinor loop (a chain may hold several, split at `LoopSep`; it may also
+///      be empty) is multiplied out as 4×4 matrices over @ref Poly entries — γ numeric, momenta
+///      symbolic — once per assignment of its free γ indices, giving a dense tensor over them.
+///   2. Lorentz contraction: projectors are first fused algebraically (@ref ndetail::fuse_projectors);
+///      every network factor (metric, vector, projector, Levi-Civita) then becomes a dense 4^rank
+///      tensor, and all shared indices — between loops and network, or within the network — are
+///      summed one at a time (@ref ndetail::contract_factors).
+///   3. Cancellation of projector denominators `1/k²` against the numerator.
+/// No step expands symbolically, so neither the `(2n−1)!!` Wick blowup nor the `2^np` projector
+/// blowup occurs that would plague a symbolic approach.
 ///
-/// A @ref Frame owns the last two and is the way to call this; the `ndetail::contract*` entry
-/// points below take them explicitly.
 ///
-/// Output: the diagram's scalar trace as one @ref Poly (surviving `1/k²` atoms in its monomials),
-/// ready for @ref to_genprog → the shared `gdetail::best_into` CSE/Horner emission.
+/// Inputs: the chain and network, plus a component table `comp[vid]` (the 4 @ref Poly components of
+/// each frame momentum) and the projector denominators `atomDen[aid] = k²`. A @ref Frame owns the
+/// latter two and is the normal way to call this.
+///
+/// Related headers: engine/contract_dressed.hpp runs this pipeline over dressed numerators;
+/// codegen/lower_poly.hpp turns the resulting polynomial into kernel instructions.
+///
+/// Layout: declarations first (always visible), then the bodies, which compile only in the library
+/// TU or a header-only build (see core/export.hpp).
 #pragma once
 
-#include "numtracer/core/export.hpp"   // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
-#include "numtracer/core/envvar.hpp" // env_flag / env_int — the single truth test for NT_* switches
-#include "numtracer/core/config.hpp"    // NT_THROW (exception-optional guard for -fno-exceptions builds)
-#include "numtracer/codegen/gen.hpp"   // network::GlobalEnv / GenProg / LMono / gdetail::best_into
-#include "numtracer/network/dirac.hpp" // DiracChain / DFac
-#include "numtracer/numeric/dpoly.hpp"      // DPoly / DMono (dressing-atom layer)
-#include "numtracer/numeric/mpoly.hpp"      // Poly (the polynomial type)
-#include "numtracer/numeric/spinor_mat.hpp" // Mat4 / matmul / mtrace / gammaC / slashC
-#include "numtracer/numeric/tolerances.hpp"  // kNoisePruneRelTol
+#include "numtracer/core/config.hpp"       // NT_THROW (exception-optional guard for -fno-exceptions builds)
+#include "numtracer/core/envvar.hpp"       // env_flag / env_int — the single truth test for NT_* switches
+#include "numtracer/core/export.hpp"       // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
+#include "numtracer/engine/spinor_mat.hpp" // Mat4 / matmul / mtrace / gammaC / slashC
+#include "numtracer/network/dirac.hpp"     // DiracChain / DFac
+#include "numtracer/network/network.hpp"   // LorentzNet / LorentzFactor
+#include "numtracer/poly/mpoly.hpp"        // Poly (the polynomial type)
 
 #include <algorithm>
-#include <cassert>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <cstdio>
-#include <memory>
 #include <cstdlib>
+#include <memory>
 #include <stdexcept>
 #include <string> // the open-index guard's diagnostic (assert_no_open_ids)
 #include <vector>
 
-namespace numtracer::inline numeric
+namespace numtracer::inline engine
 {
 
+  // ================================================================================================
+  // Declarations
+  // ================================================================================================
 
   namespace ndetail
   {
 
-    /// The 4 components of momentum `Σ coeff·comp(vid)` over the terms `[first, last)`.
+    /// @brief A dense Lorentz factor: a tensor over `ids` (each extent 4), row-major flat `v` of Poly.
+    struct Factor {
+      std::vector<int> ids;
+      std::vector<Poly> entries; ///< the dense tensor, flattened: size 4^ids.size()
+      /// When set, the tensor is borrowed from here and `entries` is unused. The Dirac loop tensors
+      /// enter every Lorentz term's contraction unchanged, so they are borrowed rather than copied.
+      const std::vector<Poly> *borrowed = nullptr;
+      const std::vector<Poly> &data() const { return borrowed ? *borrowed : entries; }
+    };
+
+    /// @brief Trace one closed spinor loop into a dense tensor over its free Lorentz indices (the
+    ///        open indices of its `gamma(μ)` and commutator tokens). For each assignment of those f
+    ///        indices to 0..3, multiply the chain out as 4×4 @ref Poly matrices and take the trace.
+    ///        Returns the free index ids and the row-major tensor of traces (one entry per `4^f`
+    ///        assignment).
+    ///
+    /// @p chain is ONE closed loop (no `LoopSep`; @ref dirac_loop_factors splits first): the
+    /// walk may start anywhere in it because the trace is cyclic.
+    NUMTRACER_FUNC Factor trace_dirac_loop(int nsym, const network::DiracChain &chain,
+                                           const std::vector<std::array<Poly, 4>> &comp);
+
+    /// @brief Contract a diagram (Dirac chain ⊗ Lorentz network) to its scalar trace polynomial. The
+    ///        engine behind @ref Frame::trace; see there.
+    /// @param nsym     number of user symbols (Poly variable count)
+    /// @param dirac    the closed Dirac chain (may be empty for a pure-Lorentz diagram)
+    /// @param lor      the Lorentz network (an empty one is the scalar 1)
+    /// @param comp     component table `comp[vid]` = 4 Poly components of frame momentum `vid`
+    /// @param atomDen  projector denominators `atomDen[atom] = k²` (for atom cancellation)
+    /// @param units    unit-constraint groups (`Σ U² = 1`); empty when the frame has none
+    NUMTRACER_FUNC Poly contract(int nsym, const DiracChain &dirac, const LorentzNet &lor,
+                                 const std::vector<std::array<Poly, 4>> &comp, const std::vector<Poly> &atomDen,
+                                 const std::vector<std::vector<int>> &units = {});
+
+    /// @brief Projector-algebra fusion on one term's element list, applied BEFORE the projectors are
+    ///        expanded into `δ − kk/k²`. Two projectors on the **same momentum** contracting over a
+    ///        shared dummy Lorentz index collapse by the projector algebra:
+    ///          - idempotency `P·P → P` (one shared index) / `tr P` (both shared: T→3,L→1,E→1,M→2);
+    ///          - orthogonality `L⟂{T,E,M}`, `E⟂M` ⇒ the contraction is the zero tensor ⇒ the term dies.
+    ///        `T·E`/`T·M` are left untouched (they need `Pᵀ=Pᴱ+Pᴹ`; omitting an identity is value-safe).
+    ///        Value-preserving and a strict **no-op unless such a pair exists**, so non-redundant nets
+    ///        (≤ one projector per line) are unchanged. This is what keeps a transverse-vertex
+    ///        (`…ClassTrans`) derivation as compact as the bare one: the backend cannot otherwise
+    ///        re-cancel the redundant `kk/k²` of shifted lines (their multi-term `k²` denominator is not a
+    ///        single monomial — see @ref divThroughMonomialAtoms). Mutates @p e (rebuilt) and @p coeff.
+    NUMTRACER_FUNC void fuse_projectors(std::vector<LorentzFactor> &e, Cx &coeff);
+
+    /// @brief The projector denominators of @p lors: `atomDen[atom] = k²` and `atomDen[atomS] = |k⃗|²`.
+    NUMTRACER_FUNC std::vector<Poly> collect_atom_denoms(int nsym, const std::vector<LorentzNet> &lors,
+                                                         const std::vector<std::array<Poly, 4>> &comp);
+
+    /// @brief The 4 components of momentum `Σ coeff·comp(vid)` over the terms `[first, last)`.
     inline std::array<Poly, 4> mom_components(int nsym, const std::pair<double, int> *first,
                                               const std::pair<double, int> *last,
                                               const std::vector<std::array<Poly, 4>> &comp)
     {
-      std::array<Poly, 4> r = {PolyFactory::zero(nsym), PolyFactory::zero(nsym), PolyFactory::zero(nsym), PolyFactory::zero(nsym)};
+      std::array<Poly, 4> r = {PolyFactory::zero(nsym), PolyFactory::zero(nsym), PolyFactory::zero(nsym),
+                               PolyFactory::zero(nsym)};
       // `scaled`, not `constant(coeff) * cv[mu]`: bit-identical (same operand and monomial order)
       // without the scratch sort — one of the hottest sites in the engine. The accumulate moves, so
       // the empty first `r[mu]` is not deep-copied.
@@ -70,7 +127,7 @@ namespace numtracer::inline numeric
       return mom_components(nsym, vlc.data(), vlc.data() + vlc.size(), comp);
     }
 
-    /// The 4 components of a factor's momentum: the single frame momentum `vid` when `vlc` is empty
+    /// @brief The 4 components of a factor's momentum: the single frame momentum `vid` when `vlc` is empty
     /// (a projector's common case), else the linear combination `vlc`.
     inline std::array<Poly, 4> factor_momentum(int nsym, const LorentzFactor &el,
                                                const std::vector<std::array<Poly, 4>> &comp)
@@ -80,47 +137,17 @@ namespace numtracer::inline numeric
       return mom_components(nsym, &one, &one + 1, comp);
     }
 
-    /// Whether two projector factors carry the same momentum.
-    inline bool same_momentum(const LorentzFactor &x, const LorentzFactor &y)
-    {
-      return x.vid == y.vid && x.vlc == y.vlc;
-    }
-
-    /// Totally antisymmetric ε_{abcd}, ε_{0123}=+1.
-    inline double levi(int a, int b, int c, int d)
-    {
-      int idx[4] = {a, b, c, d};
-      double sgn = 1.0;
-      for (int i = 0; i < 4; ++i)
-        for (int j = i + 1; j < 4; ++j) {
-          if (idx[i] == idx[j]) return 0.0;
-          if (idx[i] > idx[j]) sgn = -sgn;
-        }
-      return sgn;
-    }
-
-    /// A dense Lorentz factor: a tensor over `ids` (each extent 4), row-major flat `v` of Poly.
-    struct Factor {
-      std::vector<int> ids;
-      std::vector<Poly> entries; ///< the dense tensor, flattened: size 4^ids.size()
-      /// When set, the tensor is borrowed from here and `entries` is unused. The Dirac loop tensors
-      /// enter every Lorentz term's contraction unchanged, so they are borrowed rather than copied.
-      const std::vector<Poly> *borrowed = nullptr;
-      const std::vector<Poly> &data() const { return borrowed ? *borrowed : entries; }
-    };
-
   } // namespace ndetail
 
-  // Public engine entry points: declared always, defined once (in the library TU, or inline in a
-  // header-only build). See core/export.hpp. Their heavy bodies live in the NUMTRACER_DEFINE_BODIES
-  // regions below so a normal consumer/generator TU only parses the declarations and links the lib.
-  NUMTRACER_FUNC ndetail::Factor numeric_dirac(int nsym, const network::DiracChain &chain,
-                                               const std::vector<std::array<Poly, 4>> &comp);
-
 #if NUMTRACER_DEFINE_BODIES
+
+  // ================================================================================================
+  // 1. Dirac trace: one spinor loop → dense tensor over its free γ indices
+  // ================================================================================================
+
   namespace ndetail
   {
-    /// The start token for walking a closed Dirac trace. The DFS in @ref numeric_dirac multiplies a
+    /// The start token for walking a closed Dirac trace. The DFS in @ref trace_dirac_loop multiplies a
     /// token that follows k free legs 4^k times, and only slash/C/commutator tokens cost a polynomial
     /// multiply (a γ is a signed permutation), so the walk starts where Σ 4^k over those tokens is
     /// smallest. The trace is cyclic, so every start gives the same value. Ties keep start 0.
@@ -153,18 +180,9 @@ namespace numtracer::inline numeric
       return best;
     }
   } // namespace ndetail
-#endif // NUMTRACER_DEFINE_BODIES
 
-  /// @brief Fold the closed Dirac chain into a tensor over its free gluon legs (the `gamma` ids).
-  ///        For each assignment of the free legs to concrete indices 0..3, build the slashed/free
-  ///        γ chain as 4×4 @ref Poly matrices and take the trace. Returns the free-leg ids and the
-  ///        row-major tensor of trace polynomials (one entry per `4^f` assignment).
-  ///
-  /// @p chain is ONE closed loop (no `LoopSep`; @ref ndetail::dirac_loop_factors splits first): the
-  /// walk may start anywhere in it because the trace is cyclic.
-#if NUMTRACER_DEFINE_BODIES
-  NUMTRACER_FUNC ndetail::Factor numeric_dirac(int nsym, const network::DiracChain &chainIn,
-                                               const std::vector<std::array<Poly, 4>> &comp)
+  NUMTRACER_FUNC ndetail::Factor ndetail::trace_dirac_loop(int nsym, const network::DiracChain &chainIn,
+                                                           const std::vector<std::array<Poly, 4>> &comp)
   {
     // Walk the trace from its cheapest start (see ndetail::best_trace_start). The free legs are then
     // met in rotated order; `legsBefore` of them precede the start in the original chain, and the
@@ -201,8 +219,8 @@ namespace numtracer::inline numeric
     // Comm commutator [A,B]: each leg is FREE (a looped component) or SLASH (a fixed momentum matrix).
     // For a slashed leg we stash its slash matrix here and turn it into 2×2 blocks below (next to sP/sQ).
     // Sized only when the chain has a commutator — almost none do.
-    const bool hasComm = std::any_of(chain.begin(), chain.end(),
-                                     [](const network::DFac &d) { return d.kind == network::DFac::Comm; });
+    const bool hasComm =
+        std::any_of(chain.begin(), chain.end(), [](const network::DFac &d) { return d.kind == network::DFac::Comm; });
     const std::size_t nComm = hasComm ? chain.size() : 0;
     std::vector<Mat4> commA(nComm, Mat4(nsym)), commB(nComm, Mat4(nsym));
     std::vector<char> commAslash(nComm, 0), commBslash(nComm, 0);
@@ -247,8 +265,10 @@ namespace numtracer::inline numeric
     // inside the phase-A Dirac fold, for tokens almost no chain carries.
     bool hasC = false, hasTr = false;
     for (const network::DFac &d : chain) {
-      if (d.kind == network::DFac::Gamma || d.kind == network::DFac::Slash) ++nAntidiag;
-      else if (d.kind == network::DFac::C) hasC = true;
+      if (d.kind == network::DFac::Gamma || d.kind == network::DFac::Slash)
+        ++nAntidiag;
+      else if (d.kind == network::DFac::C)
+        hasC = true;
       if (d.transposed) hasTr = true;
     }
     ndetail::Factor F;
@@ -257,7 +277,7 @@ namespace numtracer::inline numeric
     // would silently overflow and under-size F.entries, corrupting the later index writes. Such a chain
     // is astronomically large anyway — refuse it loudly rather than miscompute.
     if (f > 15)
-      NT_THROW(std::runtime_error, "numeric_dirac: Dirac chain has too many free Lorentz legs "
+      NT_THROW(std::runtime_error, "trace_dirac_loop: Dirac chain has too many free Lorentz legs "
                                    "(4^f index space overflows a 32-bit int at f>=16)");
     int total = 1;
     for (int k = 0; k < f; ++k)
@@ -302,7 +322,7 @@ namespace numtracer::inline numeric
     // copy; slash blocks are already per-token and are transposed at their fill site. Built only when
     // the chain actually carries a transposed token — almost none do.
     // Held behind a pointer, not by value: by value it would default-construct ~40 Poly on EVERY
-    // numeric_dirac call for a feature almost no chain uses (+1.4% instructions on the fold).
+    // trace_dirac_loop call for a feature almost no chain uses (+1.4% instructions on the fold).
     struct TrBlocks {
       std::array<B2, 4> gP, gQ; ///< transposed gamma blocks (C's ride sP/sQ, see below)
     };
@@ -354,9 +374,11 @@ namespace numtracer::inline numeric
     // γ5 = diag(+I,−I) (Weyl): block-diagonal, so it costs no multiply and never flips the parity — it just
     // negates one running block (upper when the product is antidiagonal, lower when diagonal). A leading γ5
     // seeds the product as diag(+I,−I).
-    const B2 id2 = {PolyFactory::constant(nsym, Cx{1, 0}), PolyFactory::zero(nsym), PolyFactory::zero(nsym), PolyFactory::constant(nsym, Cx{1, 0})};
+    const B2 id2 = {PolyFactory::constant(nsym, Cx{1, 0}), PolyFactory::zero(nsym), PolyFactory::zero(nsym),
+                    PolyFactory::constant(nsym, Cx{1, 0})};
     auto neg2 = [&](const B2 &x) {
-      return B2{PolyFactory::zero(nsym) - x[0], PolyFactory::zero(nsym) - x[1], PolyFactory::zero(nsym) - x[2], PolyFactory::zero(nsym) - x[3]};
+      return B2{PolyFactory::zero(nsym) - x[0], PolyFactory::zero(nsym) - x[1], PolyFactory::zero(nsym) - x[2],
+                PolyFactory::zero(nsym) - x[3]};
     };
     // BARE commutator [A,B] = A·B − B·A is block-diagonal (A,B antidiagonal ⇒ A·B diagonal), like γ5 so it
     // never flips the parity: upper = P_a Q_b − P_b Q_a, lower = Q_a P_b − Q_b P_a, from the (upper-right,
@@ -426,9 +448,9 @@ namespace numtracer::inline numeric
             // cannot be hoisted out of the DFS — it is still only two 2x2 swaps, and only for a
             // transposed Comm token.
             if (d.transposed) {
-                Su = t2(Su);
-                Sl = t2(Sl);
-              }
+              Su = t2(Su);
+              Sl = t2(Sl);
+            }
             int nf = flat;
             if (aFree) nf = nf * 4 + muA;
             if (bFree) nf = nf * 4 + muB;
@@ -482,17 +504,25 @@ namespace numtracer::inline numeric
     walk(walk, 0, 0, seed0, seed1, false, true);
     return F;
   }
-#endif // NUMTRACER_DEFINE_BODIES
+
+  // ================================================================================================
+  // 2. Lorentz contraction: dense factor tensors and index elimination
+  // ================================================================================================
 
   namespace ndetail
   {
-    /// Externally referenced helper (test_projector_fusion): declared always, defined below.
-    NUMTRACER_FUNC void fuse_projectors(std::vector<LorentzFactor> &e, Cx &coeff);
-  } // namespace ndetail
-
-#if NUMTRACER_DEFINE_BODIES
-  namespace ndetail
-  {
+    /// Totally antisymmetric ε_{abcd}, ε_{0123}=+1.
+    inline double levi(int a, int b, int c, int d)
+    {
+      int idx[4] = {a, b, c, d};
+      double sgn = 1.0;
+      for (int i = 0; i < 4; ++i)
+        for (int j = i + 1; j < 4; ++j) {
+          if (idx[i] == idx[j]) return 0.0;
+          if (idx[i] > idx[j]) sgn = -sgn;
+        }
+      return sgn;
+    }
 
     /// @brief Build the dense `4^rank` tensor for one @ref LorentzFactor, entry by entry.
     ///
@@ -608,14 +638,13 @@ namespace numtracer::inline numeric
     /// The split is unconditional; `test_rank1_proje` grades the two forms by calling both builders
     /// directly. The dense builder is still reached, by every element the guard below rejects.
     inline void push_elem_factors(std::vector<Factor> &out, int nsym, const LorentzFactor &el,
-                                  const std::vector<std::array<Poly, 4>> &comp,
-                                  const std::vector<Poly> &atomDen)
+                                  const std::vector<std::array<Poly, 4>> &comp, const std::vector<Poly> &atomDen)
     {
       // atomS must be a real id with a filled denominator; a malformed net falls back to dense
       // rather than silently building a wrong factor. A self-contracted P_E (a == b) is a trace,
       // not a separable pair, so it goes dense too.
-      const bool canSplit = el.kind == LorentzFactor::ProjE && el.a != el.b && el.atom >= 0 &&
-                            el.atomS >= 0 && static_cast<std::size_t>(el.atomS) < atomDen.size();
+      const bool canSplit = el.kind == LorentzFactor::ProjE && el.a != el.b && el.atom >= 0 && el.atomS >= 0 &&
+                            static_cast<std::size_t>(el.atomS) < atomDen.size();
       if (!canSplit) {
         out.push_back(elem_factor(nsym, el, comp));
         return;
@@ -624,7 +653,7 @@ namespace numtracer::inline numeric
       const Poly at = PolyFactory::atom(nsym, el.atom);   // 1/k²
       const Poly atS = PolyFactory::atom(nsym, el.atomS); // 1/|k⃗|²
       std::array<Poly, 4> v{atomDen[static_cast<std::size_t>(el.atomS)], PolyFactory::zero(nsym),
-                             PolyFactory::zero(nsym), PolyFactory::zero(nsym)};
+                            PolyFactory::zero(nsym), PolyFactory::zero(nsym)};
       for (int i = 1; i < 4; ++i)
         v[static_cast<std::size_t>(i)] = PolyFactory::zero(nsym) - k[0] * k[static_cast<std::size_t>(i)];
       // The two scalar atoms ride on ONE leg, so the product over the pair is v_a v_b · at · atS.
@@ -818,7 +847,7 @@ namespace numtracer::inline numeric
     /// Throws (via @ref assert_no_open_ids) if the factor list does not close — see there for why an
     /// open index cannot simply be left free.
     inline Poly contract_factors(int nsym, std::vector<Factor> facs, const std::vector<Poly> &atomDen = {},
-                                  const std::vector<std::vector<int>> &units = {})
+                                 const std::vector<std::vector<int>> &units = {})
     {
       assert_no_open_ids(facs);
       // Algorithm (greedy min-width elimination), repeated until no shared ids remain:
@@ -892,7 +921,7 @@ namespace numtracer::inline numeric
 
     /// @brief Reduce a Dirac-trace @ref Factor to a scalar @ref Poly when there is NO surrounding
     ///        Lorentz net. Three cases: (a) no free legs → the scalar entry; (b) the trace is
-    ///        structurally zero (odd antidiagonal count — `numeric_dirac` zeroed every entry) → 0; (c)
+    ///        structurally zero (odd antidiagonal count — `trace_dirac_loop` zeroed every entry) → 0; (c)
     ///        every free-leg id is PAIRED (a γ^μ…γ^μ self-contraction, e.g. a dressed numerator whose
     ///        IDENT/SLASH choice left two free legs on the same id) → sum those ids via
     ///        @ref contract_factors. An UNPAIRED free leg with no Lorentz partner is a genuinely
@@ -900,7 +929,7 @@ namespace numtracer::inline numeric
     ///        This is what lets the dressed-collection combination loop produce odd / self-paired
     ///        chains (which the front-end odd-trace filter never sees) without a spurious abort.
     inline Poly close_free_legs(int nsym, const Factor &T, const std::vector<Poly> &atomDen = {},
-                                 const std::vector<std::vector<int>> &units = {})
+                                const std::vector<std::vector<int>> &units = {})
     {
       const std::vector<Poly> &entries = T.data();
       if (T.ids.empty()) return entries.empty() ? PolyFactory::constant(nsym, Cx{1, 0}) : entries[0];
@@ -925,7 +954,7 @@ namespace numtracer::inline numeric
         i = j;
       }
       if (paired) return contract_factors(nsym, {T}, atomDen, units); // self-contract paired legs
-      assert_no_open_ids({T});                                         // names the open index
+      assert_no_open_ids({T});                                        // names the open index
       NT_THROW(std::runtime_error, "numtracer: the Dirac chain has an open gamma index and there is no "
                                    "Lorentz network to contract it");
     }
@@ -950,53 +979,74 @@ namespace numtracer::inline numeric
     }
 
     /// @brief Trace each spinor loop of @p dirac into a Lorentz @ref Factor (one per loop). Each loop is
-    ///        an independent γ-trace; the gluon legs they share are contracted later via the Lorentz net
+    ///        an independent γ-trace; the Lorentz indices they share are contracted later via the Lorentz net
     ///        (or, with no Lorentz net, among themselves). Empty segments are skipped.
     inline std::vector<Factor> dirac_loop_factors(int nsym, const network::DiracChain &dirac,
                                                   const std::vector<std::array<Poly, 4>> &comp)
     {
       std::vector<Factor> fs;
       for (const network::DiracChain &seg : split_loops(dirac))
-        fs.push_back(numeric_dirac(nsym, seg, comp));
+        fs.push_back(trace_dirac_loop(nsym, seg, comp));
       return fs;
     }
 
     /// @brief Close a set of Dirac-loop Factors with NO surrounding Lorentz net: contract them together
-    ///        (gluon legs shared between loops, or a loop's self-paired legs, are summed). One loop with
+    ///        (indices shared between loops, or a loop's self-paired indices, are summed). One loop with
     ///        no free legs is its scalar; one loop with free legs defers to @ref close_free_legs (odd→0 /
     ///        paired self-contract / unpaired→throw).
     inline Poly close_loops(int nsym, const std::vector<Factor> &fs, const std::vector<Poly> &atomDen = {},
-                             const std::vector<std::vector<int>> &units = {})
+                            const std::vector<std::vector<int>> &units = {})
     {
       if (fs.empty()) return PolyFactory::constant(nsym, Cx{1, 0});
       if (fs.size() == 1) return close_free_legs(nsym, fs[0], atomDen, units);
       return contract_factors(nsym, fs, atomDen, units); // multiple loops: contract their shared legs
     }
+  } // namespace ndetail
 
-    // ──────────────────────────── projector-algebra fusion (T/L/E/M) ────────────────────────────
+  // ================================================================================================
+  // 3. Projector-algebra fusion (T/L/E/M), applied before the projectors are expanded
+  // ================================================================================================
+
+  namespace ndetail
+  {
+    /// Whether two projector factors carry the same momentum.
+    inline bool same_momentum(const LorentzFactor &x, const LorentzFactor &y)
+    {
+      return x.vid == y.vid && x.vlc == y.vlc;
+    }
 
     inline bool isProjKind(LorentzFactor::Kind k)
     {
-      return k == LorentzFactor::ProjT || k == LorentzFactor::ProjL || k == LorentzFactor::ProjE || k == LorentzFactor::ProjM;
+      return k == LorentzFactor::ProjT || k == LorentzFactor::ProjL || k == LorentzFactor::ProjE ||
+             k == LorentzFactor::ProjM;
     }
     /// `P_L ⟂ {P_T,P_E,P_M}` and `P_E ⟂ P_M` (on the same momentum) ⇒ their product is the zero tensor.
     inline bool projOrthogonal(LorentzFactor::Kind A, LorentzFactor::Kind B)
     {
-      auto lOrtho = [](LorentzFactor::Kind x) { return x == LorentzFactor::ProjT || x == LorentzFactor::ProjE || x == LorentzFactor::ProjM; };
+      auto lOrtho = [](LorentzFactor::Kind x) {
+        return x == LorentzFactor::ProjT || x == LorentzFactor::ProjE || x == LorentzFactor::ProjM;
+      };
       if (A == LorentzFactor::ProjL && lOrtho(B)) return true;
       if (B == LorentzFactor::ProjL && lOrtho(A)) return true;
-      if ((A == LorentzFactor::ProjE && B == LorentzFactor::ProjM) || (A == LorentzFactor::ProjM && B == LorentzFactor::ProjE)) return true;
+      if ((A == LorentzFactor::ProjE && B == LorentzFactor::ProjM) ||
+          (A == LorentzFactor::ProjM && B == LorentzFactor::ProjE))
+        return true;
       return false;
     }
     /// `tr P` in 4D: `tr P_T=3, tr P_L=1, tr P_E=1, tr P_M=2` (cf. test_projector_identity).
     inline int projTrace4D(LorentzFactor::Kind k)
     {
       switch (k) {
-      case LorentzFactor::ProjT: return 3;
-      case LorentzFactor::ProjL: return 1;
-      case LorentzFactor::ProjE: return 1;
-      case LorentzFactor::ProjM: return 2;
-      default: return 0;
+      case LorentzFactor::ProjT:
+        return 3;
+      case LorentzFactor::ProjL:
+        return 1;
+      case LorentzFactor::ProjE:
+        return 1;
+      case LorentzFactor::ProjM:
+        return 2;
+      default:
+        return 0;
       }
     }
     /// The projector of kind @p k on the outer indices @p a, @p b, keeping @p src's momentum and atoms.
@@ -1009,17 +1059,6 @@ namespace numtracer::inline numeric
       return f;
     }
 
-    /// @brief Projector-algebra fusion on one term's element list, applied BEFORE the projectors are
-    ///        expanded into `δ − kk/k²`. Two projectors on the **same momentum** contracting over a
-    ///        shared dummy Lorentz index collapse by the projector algebra:
-    ///          - idempotency `P·P → P` (one shared index) / `tr P` (both shared: T→3,L→1,E→1,M→2);
-    ///          - orthogonality `L⟂{T,E,M}`, `E⟂M` ⇒ the contraction is the zero tensor ⇒ the term dies.
-    ///        `T·E`/`T·M` are left untouched (they need `Pᵀ=Pᴱ+Pᴹ`; omitting an identity is value-safe).
-    ///        Value-preserving and a strict **no-op unless such a pair exists**, so non-redundant nets
-    ///        (≤ one projector per line) are unchanged. This is what keeps a transverse-vertex
-    ///        (`…ClassTrans`) derivation as compact as the bare one: the backend cannot otherwise
-    ///        re-cancel the redundant `kk/k²` of shifted lines (their multi-term `k²` denominator is not a
-    ///        single monomial — see @ref divThroughMonomialAtoms). Mutates `e` (rebuilt) and `coeff`.
     NUMTRACER_FUNC void fuse_projectors(std::vector<LorentzFactor> &e, Cx &coeff)
     {
       // cheap early-exit: nothing to fuse without ≥2 projector elements.
@@ -1037,14 +1076,20 @@ namespace numtracer::inline numeric
 
         // Lorentz-index multiplicity over the whole element list (a shared index is a dummy iff == 2).
         std::vector<int> mult(maxIdx + 1, 0);
-        auto bump = [&](int idx) { if (idx >= 0 && idx <= maxIdx) ++mult[idx]; };
+        auto bump = [&](int idx) {
+          if (idx >= 0 && idx <= maxIdx) ++mult[idx];
+        };
         for (const LorentzFactor &el : e) {
           if (el.kind == LorentzFactor::Epsilon) {
-            bump(el.a); bump(el.b); bump(el.c); bump(el.d);
+            bump(el.a);
+            bump(el.b);
+            bump(el.c);
+            bump(el.d);
           } else if (el.kind == LorentzFactor::Vector) {
             bump(el.a);
           } else { // Metric / ProjT / ProjL / ProjE / ProjM
-            bump(el.a); bump(el.b);
+            bump(el.a);
+            bump(el.b);
           }
         }
 
@@ -1091,47 +1136,10 @@ namespace numtracer::inline numeric
     }
 
   } // namespace ndetail
-#endif // NUMTRACER_DEFINE_BODIES
 
-  namespace ndetail
-  {
-    /// @brief Contract a diagram (Dirac chain ⊗ Lorentz network) to its scalar trace polynomial. The
-    ///        engine behind @ref Frame::trace; see there.
-    /// @param nsym     number of user symbols (Poly variable count)
-    /// @param dirac    the closed Dirac chain (may be empty for a pure-Lorentz diagram)
-    /// @param lor      the Lorentz network (an empty one is the scalar 1)
-    /// @param comp     component table `comp[vid]` = 4 Poly components of frame momentum `vid`
-    /// @param atomDen  projector denominators `atomDen[atom] = k²` (for atom cancellation)
-    /// @param units    unit-constraint groups (`Σ U² = 1`); empty when the frame has none
-    NUMTRACER_FUNC Poly contract(int nsym, const DiracChain &dirac, const LorentzNet &lor,
-                                  const std::vector<std::array<Poly, 4>> &comp, const std::vector<Poly> &atomDen,
-                                  const std::vector<std::vector<int>> &units = {});
-  } // namespace ndetail
-
-#if NUMTRACER_DEFINE_BODIES
-  /// @brief Append a collected-slot combination's open-leg net factors (@ref DSlotOpt::netFacs — a
-  ///        vector `p^μ`, a metric `g^{μν}`, …) to EVERY term of a Lorentz net, so the surrounding net
-  ///        closes their legs. This is the exact Lorentz structure the distributed diagram emits, which
-  ///        is why it can reuse all the validated contraction machinery unchanged.
-  ///
-  /// An empty @p facs returns @p lor untouched — the case for every option whose structure is purely
-  /// Dirac-side (the fast path).
-  ///
-  /// An empty @p lor is SEEDED with a unit product term first. "Append to every term" is a no-op on a
-  /// net with no terms, so appending straight into `lor` would DROP @p facs — silently, since the
-  /// result is still empty and the contraction then takes its `lor.empty()` shortcut into
-  /// @ref close_free_legs, where the option's now-unclosed legs abort (or, when they happen to pair
-  /// up, self-contract to a wrong number). An empty net means "the Lorentz rest is the scalar 1", and
-  /// that is exactly a default-constructed `LorentzTerm` (coefficient 1, no factors) — the same
-  /// thing the front end emits as `konst(1.0)`.
-  inline LorentzNet with_slot_facs(const LorentzNet &lor, const std::vector<LorentzFactor> &facs)
-  {
-    if (facs.empty()) return lor;
-    LorentzNet out = lor.empty() ? LorentzNet{LorentzTerm{}} : lor;
-    for (LorentzTerm &pt : out)
-      pt.e.insert(pt.e.end(), facs.begin(), facs.end());
-    return out;
-  }
+  // ================================================================================================
+  // 4. The pipeline: input checks, contract_net, contract
+  // ================================================================================================
 
   /// Multi-term denominator cancellation (@ref divThroughPolyAtoms) — on by default; `NT_GEN_NO_POLYDIV=1`
   /// disables it (the A/B control).
@@ -1165,12 +1173,15 @@ namespace numtracer::inline numeric
       }
       void add(const DFac &d)
       {
-        for (const auto &t : d.vlc) vid(t.second);
-        for (const auto &t : d.vlc2) vid(t.second);
+        for (const auto &t : d.vlc)
+          vid(t.second);
+        for (const auto &t : d.vlc2)
+          vid(t.second);
       }
       void add(const LorentzFactor &f)
       {
-        for (const auto &c : f.vlc) vid(c.second);
+        for (const auto &c : f.vlc)
+          vid(c.second);
         if (!f.is_projector()) return;
         if (f.vlc.empty()) vid(f.vid);
         if (f.kind != LorentzFactor::ProjM) atom(f.atom);
@@ -1178,12 +1189,14 @@ namespace numtracer::inline numeric
       }
       void add(const DiracChain &chain)
       {
-        for (const DFac &d : chain) add(d);
+        for (const DFac &d : chain)
+          add(d);
       }
       void add(const LorentzNet &lor)
       {
         for (const LorentzTerm &t : lor)
-          for (const LorentzFactor &f : t.e) add(f);
+          for (const LorentzFactor &f : t.e)
+            add(f);
       }
       void verify(std::size_t nMom, std::size_t nAtom) const
       {
@@ -1204,13 +1217,13 @@ namespace numtracer::inline numeric
     ///        them (with per-step unit and atom reductions when @p units is non-empty), then
     ///        reduce_units, monomial-atom and multi-term-atom (polydiv) cancellation.
     inline Poly contract_net(int nsym, const DiracChain &dirac, const LorentzNet &lor,
-                              const std::vector<std::array<Poly, 4>> &comp, const std::vector<Poly> &atomDen,
-                              const std::vector<std::vector<int>> &units)
+                             const std::vector<std::array<Poly, 4>> &comp, const std::vector<Poly> &atomDen,
+                             const std::vector<std::vector<int>> &units)
     {
       NT_STAT_ADD(traces, 1);
       // a component may hold SEVERAL independent spinor loops (e.g. a quark loop + the projection-closed
       // external line, tied only by gluon propagators) — trace each into its own Lorentz tensor; the
-      // gluon legs they share contract via the Lorentz net below. tr(1)=4 rides each loop's trace.
+      // Lorentz indices they share contract via the Lorentz net below. tr(1)=4 rides each loop's trace.
       std::vector<Factor> loops;
       {
         NT_STAT_TIMER(t_dirac);
@@ -1252,7 +1265,8 @@ namespace numtracer::inline numeric
             elems = &fused;
           }
           facs.reserve(loops.size() + elems->size());
-          for (const Factor &L : loops) facs.push_back({L.ids, {}, &L.data()});
+          for (const Factor &L : loops)
+            facs.push_back({L.ids, {}, &L.data()});
           for (const LorentzFactor &el : *elems)
             push_elem_factors(facs, nsym, el, comp, aden);
         }
@@ -1268,8 +1282,7 @@ namespace numtracer::inline numeric
         term = PolyFactory::scaled(nsym, term, co);
         result = std::move(result) + std::move(term);
       }
-      if (lor.empty())
-        result = close_loops(nsym, loops, aden, units);
+      if (lor.empty()) result = close_loops(nsym, loops, aden, units);
       // sin^2 -> 1 - cos^2 BEFORE cancellation: collapses bare-loop k²=l1²(cos²+sin²) to the monomial l1²
       // (so its atom cancels) and shrinks the polynomial to the FORM angular basis.
       {
@@ -1290,8 +1303,8 @@ namespace numtracer::inline numeric
     }
 
     NUMTRACER_FUNC Poly contract(int nsym, const DiracChain &dirac, const LorentzNet &lor,
-                                  const std::vector<std::array<Poly, 4>> &comp, const std::vector<Poly> &atomDen,
-                                  const std::vector<std::vector<int>> &units)
+                                 const std::vector<std::array<Poly, 4>> &comp, const std::vector<Poly> &atomDen,
+                                 const std::vector<std::vector<int>> &units)
     {
       InputScan scan;
       scan.add(dirac);
@@ -1300,256 +1313,10 @@ namespace numtracer::inline numeric
       return contract_net(nsym, dirac, lor, comp, atomDen, units);
     }
   } // namespace ndetail
-#endif // NUMTRACER_DEFINE_BODIES
 
-  // ───────────────────────────── dressed structure sums (symbolic dressing collection) ────────────
-  //
-  // A dressed propagator numerator like `Mq·δ + Z(p)·(γ·p)` is a SUM of Dirac structures whose
-  // per-structure coefficients are *runtime* dressings. The front-end keeps such a sum eager (it no
-  // longer distributes the diagram into one copy per structure), and the generator hands it here as a
-  // Dirac chain with SLOT tokens: each slot is the structure sum of one dressed numerator. We collect
-  // it WITHOUT the `2^D`-diagram blowup: enumerate the structure choices, contract each concrete chain
-  // with the EXISTING @ref ndetail::contract (so all the validated Dirac/Lorentz machinery is reused
-  // verbatim), and accumulate the results into ONE @ref DPoly keyed by the dressing monomial. The whole
-  // diagram then lowers to ONE trace function whose dressing factors the shared CSE/Horner collects.
-
-  /// @brief One structure option of a collected Dirac slot: a numeric
-  ///        coefficient × a product of dressing atoms (`dress`) × a Dirac structure, where the
-  ///        structure is
-  ///          - a **Dirac-token chain** @ref toks spliced in place of the slot (spinor `din→dout`);
-  ///            its FREE-Lorentz tokens (a `gamma(μ)` / an open `comm` leg) are open legs on the
-  ///            Dirac side, and
-  ///          - a set of **Lorentz-net factors** @ref netFacs (a vector `p^μ`, a metric `g^{μν}`, …)
-  ///            carrying any remaining open legs, appended to the surrounding net.
-  ///
-  /// The union of the two sets' free Lorentz ids is the slot's shared open-leg set `{μ₁,…,μ_k}`, closed
-  /// by the surrounding net — the SAME set for every option (so the net contracts a fixed leg set
-  /// regardless of structure choice). This one form covers every case, any leg count `k ≥ 0`:
-  ///  - propagator numerator `δ` ⇒ `toks={}, netFacs={}`; slash `γ·p̸` ⇒ `toks={slash(vlc)}` (k=0);
-  ///  - single-gluon vertex T1 `γ^μ` ⇒ `toks={gamma(μ)}`; T4 `p̸₁γ^μ` ⇒ `toks={slash(p1),gamma(μ)}`;
-  ///    T7 `σ^{μν}p̸_ν` ⇒ `toks={comm(μ,vlc)}` (k=1);
-  ///  - open leg on a vector `p^μ·δ` ⇒ `netFacs={Vector(μ,p)}`; two-gluon `g^{μν}·δ` ⇒
-  ///    `netFacs={Metric(μ,ν)}`; two open γ's ⇒ `toks={gamma(μ),gamma(ν)}` (k=2), etc.
-  struct DSlotOpt {
-    Cx coeff{1, 0};
-    std::vector<int> dress; ///< dressing-atom ids (need not be pre-sorted; merged sorted on use)
-    std::vector<network::DFac> toks; ///< Dirac-token chain spliced for this option (free-Lorentz tokens = open legs)
-    std::vector<LorentzFactor> netFacs; ///< extra Lorentz-net factors for this option (open legs on vectors/metrics/…)
-  };
-  /// @brief A dressed numerator = the sum of its structure options.
-  using DSlot = std::vector<DSlotOpt>;
-  /// @brief One token of a dressed Dirac chain: either a FIXED @ref network::DFac (γ / slash / γ5 /
-  ///        commutator) or a SLOT reference (an index into the diagram's slot list).
-  struct DChainTok {
-    bool isSlot = false;
-    network::DFac fac{network::DFac::Gamma, -1, {}, -1, false, {}};
-    int slot = -1;
-    /// @brief Splice this slot's chain TRANSPOSED (slot tokens only; a fixed token carries its own
-    ///        `DFac::transposed` instead).
-    ///
-    /// A slot is a sum of chains, and @f$(A_1\cdots A_n)^T = A_n^T\cdots A_1^T@f$ — so transposing
-    /// one means reversing each option's token list and transposing every token in it. That has to
-    /// happen HERE, at the splice, rather than in the front end: `$dsCache`/`$dslCache` key on the
-    /// slot expression, so a Mathematica-side transposed slot would collide with its untransposed
-    /// twin in the cache. The option's `netFacs` are pure Lorentz tensors on the open legs and are
-    /// unaffected by a spinor transpose.
-    bool transposed = false;
-  };
-  inline DChainTok dtfix(network::DFac f) { return {false, std::move(f), -1, false}; }
-  inline DChainTok dtslot(int s) { return {true, {network::DFac::Gamma, -1, {}, -1, false, {}}, s, false}; }
-  /// @brief A slot reference spliced transposed. See @ref DChainTok::transposed.
-  inline DChainTok dtrslot(int s) { return {true, {network::DFac::Gamma, -1, {}, -1, false, {}}, s, true}; }
-
-  namespace ndetail
-  {
-    /// @brief Dressed-slot analogue of @ref contract: returns the collected @ref DPoly (one channel
-    ///        per dressing monomial). The engine behind the dressed @ref Frame::contract.
-    NUMTRACER_FUNC DPoly contract_dressed(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
-                                          const LorentzNet &lor, const std::vector<std::array<Poly, 4>> &comp,
-                                          const std::vector<Poly> &atomDen,
-                                          const std::vector<std::vector<int>> &units = {});
-    /// @brief STRUCTURAL variant of @ref contract_dressed: contract the collected slots into a PLAIN
-    ///        @ref Poly, DISCARDING the dressing dimension (the dressing monomial keys are summed
-    ///        away). The generator strips each option's dressing (`coeff`→1, `dress`→{}) into a
-    ///        per-sub-term scalar/monomial and feeds the dressing-free structure here, so the trace
-    ///        table dedups on structure alone (dressing variants of one concrete trace collapse) and
-    ///        each entry is a plain `Poly` with no dressing dimension. The 4^(#collapsed loop)
-    ///        tr(1)=4 factor is STRUCTURAL (it depends only on the concrete chain) and is kept in the
-    ///        returned trace. Only meaningful when every option's `dress` is empty (the generator
-    ///        guarantees this); if fed genuine dressings it would silently sum them.
-    NUMTRACER_FUNC Poly contract_structural(int nsym, const std::vector<DChainTok> &chain,
-                                             const std::vector<DSlot> &slots, const LorentzNet &lor,
-                                             const std::vector<std::array<Poly, 4>> &comp,
-                                             const std::vector<Poly> &atomDen,
-                                             const std::vector<std::vector<int>> &units = {});
-    /// @brief The projector denominators of @p lors: `atomDen[atom] = k²` and `atomDen[atomS] = |k⃗|²`.
-    NUMTRACER_FUNC std::vector<Poly> collect_atom_denoms(int nsym, const std::vector<LorentzNet> &lors,
-                                                          const std::vector<std::array<Poly, 4>> &comp);
-  } // namespace ndetail
-
-#if NUMTRACER_DEFINE_BODIES
-  namespace ndetail
-  {
-    /// Enumerate the Cartesian product of slot-structure choices, contract each concrete Dirac chain
-    /// via @p contract (an `Poly`-returning closure that runs the full Dirac+Lorentz contraction), and
-    /// collect the results into one @ref DPoly keyed by the dressing monomial. Each slot is referenced
-    /// at most once in @p chain (a numerator occupies one chain position). @p contract receives the
-    /// concrete Dirac chain AND this combination's extra Lorentz-net factors (the chosen options'
-    /// @ref DSlotOpt::netFacs — open legs on vectors/metrics/…); empty for every option whose structure
-    /// is purely Dirac-side ⇒ the caller takes a byte-identical fast path.
-    ///
-    /// The enumeration is factored out of @ref dress_collect so the two accumulation policies share it:
-    /// the DPoly collection (`emit(dmono, mp)` → `out.add(dmono, mp)`) and the STRUCTURAL Poly reduction
-    /// (@ref dress_collect_mp: `emit(_, mp)` → `out += mp`, dropping the dressing key). @p emit is called
-    /// once per surviving combination with the sorted dressing monomial and the (coeff·trace) `Poly`.
-    template <class ContractFn, class Emit>
-    inline void dress_enumerate(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
-                                ContractFn &&contract, Emit &&emit)
-    {
-      const int nSlots = static_cast<int>(slots.size());
-      // The dressed chain is a quark line with ≥1 closed spinor loop ((LoopSep markers)+1). A combination
-      // that collapses a WHOLE loop to the identity (every slot on it takes the δ option, no fixed γ) leaves
-      // an empty segment: split_loops drops it and close_loops returns 1, silently losing that loop's
-      // tr(1)=4 — a 4× undercount (e.g. the all-mass channel of a Yukawa self-energy quark loop). Count the
-      // loops up front so each combination can restore 4^(#collapsed loops). Flows whose every loop keeps a
-      // fixed γ (Zq/ZAqbq{1,4,7}, …) never collapse (nEmpty==0).
-      int nloops = 1;
-      for (const DChainTok &tok : chain)
-        if (!tok.isSlot && tok.fac.kind == network::DFac::LoopSep) ++nloops;
-      std::vector<int> choice(nSlots, 0);
-      bool done = false;
-      while (!done) {
-        // build the concrete chain + accumulate this combination's numeric coeff and dressing monomial
-        Cx combCoeff{1, 0};
-        DMono dressMono;
-        network::DiracChain concrete;
-        concrete.reserve(chain.size());
-        std::vector<LorentzFactor> extraNet; // this combination's options' net factors (usually empty)
-        for (const DChainTok &tok : chain) {
-          if (!tok.isSlot) {
-            concrete.push_back(tok.fac);
-            continue;
-          }
-          const DSlotOpt &opt = slots[tok.slot][choice[tok.slot]];
-          combCoeff = combCoeff * opt.coeff;
-          dressMono.insert(dressMono.end(), opt.dress.begin(), opt.dress.end());
-          // General collected Dirac slot: splice this option's Dirac-token chain in place of
-          // the slot (its free-Lorentz tokens are open legs), and collect its Lorentz-net factors — the
-          // surrounding net closes every open leg for all structure choices alike. An option with an
-          // empty `toks` is the spinor identity δ (tr(1)=4 restored by nCollapsed below when a whole
-          // loop collapses); empty `netFacs` ⇒ no net change (the fast path).
-          if (tok.transposed) {
-            // (A1..An)^T = An^T..A1^T: reverse the option's chain and transpose every token in it.
-            // netFacs are pure Lorentz and untouched. Loop accounting below is order-insensitive
-            // (it counts LoopSep markers and split_loops segments), so reversing is safe here.
-            for (auto it = opt.toks.rbegin(); it != opt.toks.rend(); ++it)
-              concrete.push_back(network::transposed(*it));
-          } else {
-            concrete.insert(concrete.end(), opt.toks.begin(), opt.toks.end());
-          }
-          extraNet.insert(extraNet.end(), opt.netFacs.begin(), opt.netFacs.end());
-        }
-        if (!(combCoeff.re == 0 && combCoeff.im == 0)) {
-          // restore tr(1)=4 for every spinor loop that collapsed to the identity in this combination
-          const int nCollapsed = nloops - static_cast<int>(split_loops(concrete).size());
-          for (int c = 0; c < nCollapsed; ++c) combCoeff = combCoeff * Cx{4, 0};
-          Poly mp = contract(concrete, extraNet);
-          if (!mp.empty()) {
-            mp = mp * PolyFactory::constant(nsym, combCoeff);
-            emit(dmono_sorted(std::move(dressMono)), std::move(mp));
-          }
-        }
-        // odometer over the slot choices: advance the lowest slot, carrying into the next on wrap.
-        if (nSlots == 0) break;
-        int k = 0;
-        for (; k < nSlots; ++k) {
-          if (++choice[k] < static_cast<int>(slots[k].size())) break;
-          choice[k] = 0;
-        }
-        if (k == nSlots) done = true;
-      }
-    }
-
-    /// @brief The DPoly collection: accumulate each combination into its dressing-monomial channel.
-    template <class ContractFn>
-    inline DPoly dress_collect(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
-                               ContractFn &&contract)
-    {
-      DPoly out = DPolyFactory::zero(nsym);
-      dress_enumerate(nsym, chain, slots, std::forward<ContractFn>(contract),
-                      [&](const DMono &d, Poly &&mp) { out.add(d, mp); });
-      return out;
-    }
-
-    /// @brief The STRUCTURAL Poly reduction: sum every combination into ONE plain Poly,
-    ///        discarding the dressing monomial. Correct only when the slots carry no dressing (the
-    ///        generator strips it out first); see @ref contract_structural. The debug
-    ///        assert below makes that precondition checkable instead of comment-only: fed genuine
-    ///        dressings, this would silently sum structures that belong in different channels.
-    ///
-    /// The left-to-right accumulation is deliberate and is NOT a quadratic hazard: the generator
-    /// expands each structure×dressing combination into its own SINGLE-option sub-term
-    /// (mathematica/CodegenGenerator.m), so every caller has exactly one combination. A tree fold would
-    /// reassociate the sums (≤ 1 ulp) and could shift the emitted literals for no gain.
-    template <class ContractFn>
-    inline Poly dress_collect_mp(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
-                                  ContractFn &&contract)
-    {
-#ifndef NDEBUG
-      for (const DSlot &s : slots)
-        for (const DSlotOpt &o : s)
-          assert(o.dress.empty() && "dress_collect_mp requires dressing-free slots (lever (b))");
-#endif
-      Poly out = PolyFactory::zero(nsym);
-      dress_enumerate(nsym, chain, slots, std::forward<ContractFn>(contract),
-                      [&](const DMono &, Poly &&mp) { out = std::move(out) + std::move(mp); });
-      return out;
-    }
-  } // namespace ndetail
-
-  namespace ndetail
-  {
-    /// @ref InputScan over a dressed diagram: the fixed tokens, EVERY slot option (so each structure
-    /// combination is covered by one scan) and the Lorentz net.
-    inline void check_dressed_inputs(const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
-                                     const LorentzNet &lor, std::size_t nMom, std::size_t nAtom)
-    {
-      InputScan scan;
-      for (const DChainTok &tok : chain)
-        if (!tok.isSlot) scan.add(tok.fac);
-      for (const DSlot &slot : slots)
-        for (const DSlotOpt &opt : slot) {
-          for (const DFac &d : opt.toks) scan.add(d);
-          for (const LorentzFactor &f : opt.netFacs) scan.add(f);
-        }
-      scan.add(lor);
-      scan.verify(nMom, nAtom);
-    }
-
-    NUMTRACER_FUNC DPoly contract_dressed(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
-                                          const LorentzNet &lor, const std::vector<std::array<Poly, 4>> &comp,
-                                          const std::vector<Poly> &atomDen, const std::vector<std::vector<int>> &units)
-    {
-      check_dressed_inputs(chain, slots, lor, comp.size(), atomDen.size());
-      return dress_collect(nsym, chain, slots, [&](const DiracChain &d, const std::vector<LorentzFactor> &slotFacs) {
-        return slotFacs.empty() ? contract_net(nsym, d, lor, comp, atomDen, units)
-                                : contract_net(nsym, d, with_slot_facs(lor, slotFacs), comp, atomDen, units);
-      });
-    }
-
-    NUMTRACER_FUNC Poly contract_structural(int nsym, const std::vector<DChainTok> &chain,
-                                             const std::vector<DSlot> &slots, const LorentzNet &lor,
-                                             const std::vector<std::array<Poly, 4>> &comp,
-                                             const std::vector<Poly> &atomDen,
-                                             const std::vector<std::vector<int>> &units)
-    {
-      check_dressed_inputs(chain, slots, lor, comp.size(), atomDen.size());
-      return dress_collect_mp(nsym, chain, slots, [&](const DiracChain &d, const std::vector<LorentzFactor> &slotFacs) {
-        return slotFacs.empty() ? contract_net(nsym, d, lor, comp, atomDen, units)
-                                : contract_net(nsym, d, with_slot_facs(lor, slotFacs), comp, atomDen, units);
-      });
-    }
-  } // namespace ndetail
+  // ================================================================================================
+  // 5. Projector denominators k² for the frame
+  // ================================================================================================
 
   /// @brief Build the projector inverse-atom denominators by scanning the Lorentz nets for every
   ///        projector kind. Each carries its momentum `k` (a frame momentum `vid`, or a linear
@@ -1626,354 +1393,7 @@ namespace numtracer::inline numeric
           }
     return atomDen;
   }
-#endif // NUMTRACER_DEFINE_BODIES
-
-  /// @brief `NT_GEN_POLYSTATS` verbosity: 0 off, 1 the summary counts, 2 the per-monomial key dump.
-  ///
-  /// Level 2 is a DIFFERENT report, not a superset of level 1: the dump is meant to be piped through
-  /// `sort -u` to count distinct monomials across traces, and the summary lines would corrupt that.
-  inline int polystats_level()
-  {
-    static const int lvl = static_cast<int>(env_int("NT_GEN_POLYSTATS", 0));
-    return lvl;
-  }
-
-  /// @brief Significant decimal digits kept when snapping a lowered coefficient (@ref snap_coeff).
-  ///
-  /// The numeric backend contracts components in `double`, so one correctly-rounded frame literal
-  /// (`Sqrt[3]/2 -> 0.86602540378443865`, from the 120-degree symmetric point) is sprayed by ~1e4
-  /// double operations into thousands of near-duplicates of the SAME mathematical constant:
-  /// `16.000000000000007` and `16.000000000000004` both mean 16, reached by different association
-  /// orders. That matters because the SSA CSE keys constants on RAW BITS
-  /// (`codegen/real_cse.hpp` ihash/ieq), so each variant becomes its own RCONST, every downstream
-  /// RMUL that consumes it also differs, and one dirty ulp at a leaf duplicates an entire subtree.
-  /// The bit-exact folds (`== 1.0` in `rmul`, `== 0.0` in `rconst`) miss for the same reason,
-  /// emitting free multiplies.
-  ///
-  /// The trace sums cancel heavily (a coefficient perturbation is amplified ~1e6), so do NOT pick
-  /// this from the literal-collapse count alone: 14 captures the speed win at no accuracy cost, 12
-  /// buys a further 2% for a 1000x accuracy loss. Re-measure the table in
-  /// docs/NUMTRACER_DESIGN_NOTES.md before changing it.
-  inline constexpr int kCoeffSnapDigits = 14;
-
-  /// @brief Round @p v to @ref kCoeffSnapDigits significant decimal digits.
-  ///
-  /// Applied at the single point where a polynomial coefficient becomes a codegen `LMono::c` — i.e.
-  /// AFTER all polynomial arithmetic and after the noise prune (`ndetail::prune_tol`) — so it cannot
-  /// perturb a cancellation, only canonicalise what survived. Perturbation is ~1e-12 relative, three
-  /// orders below the numeric-vs-FORM correctness gate.
-  ///
-  /// It is also the chokepoint where a NON-FINITE coefficient is caught. Nothing downstream stops one:
-  /// `RBuilder::ieq` (`codegen/real_cse.hpp`) compares constants with `==`, so a NaN never matches
-  /// itself and `find_or_add` appends a fresh SSA slot on every call, and the printer would write a
-  /// literal `nan` into a committed kernel. A non-finite coefficient is always an upstream bug (a
-  /// division by an identically-zero denominator, an uninitialised component), so it aborts here,
-  /// where the trace is still identifiable.
-  inline double snap_coeff(double v)
-  {
-    if (!std::isfinite(v))
-      NT_THROW(std::runtime_error,
-               "snap_coeff: non-finite (NaN/Inf) polynomial coefficient reached the lowering — it "
-               "would be emitted as a literal `nan` and would defeat the SSA constant CSE");
-    if (v == 0.0) return v;
-    char buf[40];
-    std::snprintf(buf, sizeof(buf), "%.*e", kCoeffSnapDigits - 1, v);
-    return std::strtod(buf, nullptr);
-  }
-
-  /// @brief Lower a contracted diagram polynomial into the shared env via the CSE + Horner back-end
-  ///        (`gdetail::best_into`). User symbols intern as `SymKind::var`, surviving inverse atoms
-  ///        as `SymKind::inv`. Returns an @ref network::GenProg (real, or complex when the polynomial
-  ///        carries an imaginary coefficient).
-  /// @param realOnly when true, emit a REAL program even if the polynomial has imaginary coefficients
-  ///        — the caller has proven only `Re(this trace)` is consumed (its assembly coefficient is
-  ///        real). `Re(Σ c·mono) = Σ Re(c)·mono` for real monomials, so the imaginary half is dead;
-  ///        skipping it avoids computing+returning a `std::complex` whose `.imag()` nobody reads.
-  NUMTRACER_FUNC network::GenProg to_genprog(const Poly &p, network::GlobalEnv &g, bool realOnly = false);
-  NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly = false);
-
-#if NUMTRACER_DEFINE_BODIES
-  namespace ndetail
-  {
-    /// @brief One dressing channel of a lowering: the dressing atoms @ref dress shared by every
-    ///        monomial of @ref poly. A plain @ref Poly is a single channel with no dressing atoms.
-    struct LowerChannel {
-      const DMono *dress;
-      const Poly *poly;
-    };
-
-    /// @brief Noise-prune threshold of one channel: @ref kNoisePruneRelTol times its largest
-    ///        coefficient component.
-    ///
-    /// A NUMERIC frame fixes the external momenta to concrete components, so exact (analytic)
-    /// cancellations in a trace surface as tiny residual coefficients (~1e-12 … 1e-30 against real
-    /// coefficients of O(10²)): round-off, not physics. They do not affect the value, but each costs
-    /// runtime arithmetic, and on the dense 1/4/7 trace about half the monomials are such noise.
-    inline double prune_tol(const Poly &mp)
-    {
-      double maxabs = 0.0;
-      for (const auto &[m, c] : mp.terms)
-        maxabs = std::max(maxabs, std::max(std::fabs(c.re), std::fabs(c.im)));
-      return kNoisePruneRelTol * maxabs;
-    }
-    inline bool keep_coeff(const Cx &c, double tol) { return std::max(std::fabs(c.re), std::fabs(c.im)) >= tol; }
-
-    /// @brief Append `(idOf(a), multiplicity)` for each run of equal ids in the sorted atom list @p atoms.
-    template <class Atoms, class IdOf>
-    void push_atom_runs(std::vector<std::pair<int, int>> &vp, const Atoms &atoms, IdOf idOf)
-    {
-      for (int i = 0; i < (int)atoms.size();) {
-        int j = i;
-        while (j < (int)atoms.size() && atoms[j] == atoms[i])
-          ++j;
-        vp.push_back({idOf(atoms[i]), j - i});
-        i = j;
-      }
-    }
-
-    /// @brief Append the kept monomials of one channel to the real (and, when @p cplx, imaginary)
-    ///        lowering lists.
-    ///
-    /// Env ids intern in first-seen order, which fixes the emitted kernel: the channel's dressing
-    /// atoms (`SymKind::dress`) first, then per monomial its user symbols (`SymKind::var`) and its
-    /// surviving inverse atoms (`SymKind::inv`). ONE walk builds both halves of a complex trace; the
-    /// im list holds an entry for EVERY kept monomial (`snap(c.im)`, possibly 0.0).
-    inline void append_monos(const LowerChannel &ch, network::GlobalEnv &g, bool cplx,
-                             std::vector<network::LMono> &monosRe, std::vector<network::LMono> &monosIm)
-    {
-      const Poly &mp = *ch.poly;
-      const double tol = prune_tol(mp);
-      std::vector<std::pair<int, int>> drvp;
-      push_atom_runs(drvp, *ch.dress, [&](int a) { return g.dr_id(a); });
-      for (const auto &[m, c] : mp.terms) {
-        if (!keep_coeff(c, tol)) continue;
-        std::vector<std::pair<int, int>> vp = drvp;
-        for (int k = 0; k < mp.nsym; ++k)
-          if (m.e[k] > 0) vp.push_back({g.var_id(k), m.e[k]});
-        push_atom_runs(vp, m.atoms, [&](int a) { return g.inv_id(a); });
-        std::sort(vp.begin(), vp.end());
-        if (cplx) {
-          network::LMono lmIm;
-          lmIm.c = snap_coeff(c.im);
-          lmIm.vp = vp; // copy — the re half moves it below
-          monosIm.push_back(std::move(lmIm));
-        }
-        network::LMono lm;
-        lm.c = snap_coeff(c.re);
-        lm.vp = std::move(vp);
-        monosRe.push_back(std::move(lm));
-      }
-    }
-
-    /// @brief A complex env leaf in one monomial: the env ids of its real and imaginary halves and its
-    ///        power (see `network::GlobalEnv::cplxAtom`).
-    struct CxLeaf {
-      int re, im, n;
-    };
-
-    /// @brief Push `(idOf(a), multiplicity)` runs of @p atoms like @ref push_atom_runs, except that a
-    ///        run of a complex leaf (@p isCplx) goes to @p cx as its (Re, Im) slot pair instead.
-    template <class Atoms, class IsCplx, class IdOf, class ImIdOf>
-    void push_atom_runs_cplx(std::vector<std::pair<int, int>> &vp, std::vector<CxLeaf> &cx, const Atoms &atoms,
-                             IsCplx isCplx, IdOf idOf, ImIdOf imIdOf)
-    {
-      for (int i = 0; i < (int)atoms.size();) {
-        int j = i;
-        while (j < (int)atoms.size() && atoms[j] == atoms[i])
-          ++j;
-        if (isCplx(atoms[i]))
-          cx.push_back({idOf(atoms[i]), imIdOf(atoms[i]), j - i});
-        else
-          vp.push_back({idOf(atoms[i]), j - i});
-        i = j;
-      }
-    }
-
-    /// @brief @ref append_monos for an env with complex leaves.
-    ///
-    /// A monomial carrying complex leaves `(re_l + i im_l)^{n_l}` is expanded binomially into real
-    /// monomials, each with the complex coefficient `c · C(n,j) i^j`, so every `i` moves into the
-    /// coefficients and the trace bodies stay real arithmetic. A monomial with one complex leaf of power
-    /// n becomes n+1 monomials. Pieces whose half is an exact zero are dropped from that half.
-    inline void append_monos_cplx(const LowerChannel &ch, network::GlobalEnv &g, bool cplx,
-                                  std::vector<network::LMono> &monosRe, std::vector<network::LMono> &monosIm)
-    {
-      const Poly &mp = *ch.poly;
-      const double tol = prune_tol(mp);
-      std::vector<std::pair<int, int>> drvp;
-      std::vector<CxLeaf> drcx;
-      push_atom_runs_cplx(
-          drvp, drcx, *ch.dress, [&](int a) { return g.dress_cplx(a); }, [&](int a) { return g.dr_id(a); },
-          [&](int a) { return g.dr_im_id(a); });
-      std::vector<CxLeaf> cx;
-      std::vector<std::pair<Cx, std::vector<std::pair<int, int>>>> pieces, next;
-      for (const auto &[m, c] : mp.terms) {
-        if (!keep_coeff(c, tol)) continue;
-        std::vector<std::pair<int, int>> vp = drvp;
-        cx = drcx;
-        for (int k = 0; k < mp.nsym; ++k)
-          if (m.e[k] > 0) vp.push_back({g.var_id(k), m.e[k]});
-        push_atom_runs_cplx(
-            vp, cx, m.atoms, [&](int a) { return g.atom_cplx(a); }, [&](int a) { return g.inv_id(a); },
-            [&](int a) { return g.inv_im_id(a); });
-        pieces.assign(1, {c, std::move(vp)});
-        for (const CxLeaf &l : cx) {
-          next.clear();
-          for (const auto &[co, pvp] : pieces) {
-            // (re + i im)^n = Σ_j C(n,j) i^j re^(n-j) im^j; i^j cycles 1, i, -1, -i
-            double binom = 1.0;
-            for (int j = 0; j <= l.n; ++j) {
-              static constexpr Cx ipow[4] = {{1.0, 0.0}, {0.0, 1.0}, {-1.0, 0.0}, {0.0, -1.0}};
-              const Cx &ij = ipow[j & 3];
-              std::vector<std::pair<int, int>> v = pvp;
-              if (l.n - j > 0) v.push_back({l.re, l.n - j});
-              if (j > 0) v.push_back({l.im, j});
-              next.push_back({Cx{binom * (co.re * ij.re - co.im * ij.im), binom * (co.re * ij.im + co.im * ij.re)},
-                              std::move(v)});
-              binom = binom * static_cast<double>(l.n - j) / static_cast<double>(j + 1);
-            }
-          }
-          pieces.swap(next);
-        }
-        for (auto &[co, pvp] : pieces) {
-          std::sort(pvp.begin(), pvp.end());
-          const double reC = snap_coeff(co.re), imC = snap_coeff(co.im);
-          if (cplx && imC != 0.0) {
-            network::LMono lmIm;
-            lmIm.c = imC;
-            lmIm.vp = pvp; // copy — the re half may move it below
-            monosIm.push_back(std::move(lmIm));
-          }
-          if (reC == 0.0) continue;
-          network::LMono lm;
-          lm.c = reC;
-          lm.vp = std::move(pvp);
-          monosRe.push_back(std::move(lm));
-        }
-      }
-    }
-
-    /// @brief Does channel @p ch carry a complex leaf in a kept monomial? Such a monomial makes the
-    ///        trace complex even when its coefficient is real.
-    inline bool channel_has_cplx_leaf(const LowerChannel &ch, const network::GlobalEnv &g, double tol)
-    {
-      for (int a : *ch.dress)
-        if (g.dress_cplx(a)) return true;
-      for (const auto &[m, c] : ch.poly->terms)
-        if (keep_coeff(c, tol))
-          for (int a : m.atoms)
-            if (g.atom_cplx(a)) return true;
-      return false;
-    }
-
-    /// @brief `NT_GEN_POLYSTATS` report of the monomials handed to the Horner lowering.
-    ///
-    /// Level 1: the input term count and the kept monomial count. Monomial count is canonical
-    /// (independent of any factorisation strategy), so comparing it against the emitted instruction
-    /// count says whether a large op count comes from the ALGEBRA or from weak LOWERING.
-    /// Level 2: each monomial's key (env id ^ power). Piped through `sort -u` it counts how many
-    /// monomials summed over all traces are DISTINCT, i.e. what cross-trace term collection (which
-    /// FormTracer gets by summing all diagrams before expanding) could save.
-    inline void dump_polystats(std::size_t nTerms, const std::vector<network::LMono> &monos)
-    {
-      if (polystats_level() == 1)
-        std::fprintf(stderr, "[polystats] terms=%zu kept=%zu\n", nTerms, monos.size());
-      if (polystats_level() == 2)
-        for (const auto &lm : monos) {
-          std::string key;
-          for (const auto &[id, pw] : lm.vp)
-            key += std::to_string(id) + "^" + std::to_string(pw) + " ";
-          std::fprintf(stderr, "[mono] %s\n", key.c_str());
-        }
-    }
-
-    /// @brief Lower the channels into @p builder as ONE monomial list, so the shared CSE/Horner
-    ///        (`gdetail::best_into`) collects the dressing factors across channels.
-    ///
-    /// The noise prune is PER CHANNEL, not one global tolerance: each channel is reweighted at
-    /// runtime by its dressing product, which can swing by many orders across the loop domain, so a
-    /// tolerance taken from the largest channel would delete a small channel's genuine terms.
-    inline std::pair<int, int> lower_channels(const std::vector<LowerChannel> &chans, network::GlobalEnv &g,
-                                              network::rdetail::RBuilder &builder, bool realOnly)
-    {
-      const bool cplxLeaves = g.has_complex_leaves();
-      bool cplx = false;
-      if (!realOnly)
-        for (const LowerChannel &ch : chans) {
-          const double tol = prune_tol(*ch.poly);
-          for (const auto &[m, c] : ch.poly->terms)
-            if (keep_coeff(c, tol) && (c.im > tol || c.im < -tol)) {
-              cplx = true;
-              break;
-            }
-          if (!cplx && cplxLeaves) cplx = channel_has_cplx_leaf(ch, g, tol);
-          if (cplx) break;
-        }
-      std::size_t nTerms = 0;
-      for (const LowerChannel &ch : chans)
-        nTerms += ch.poly->terms.size();
-      std::vector<network::LMono> monosRe, monosIm;
-      monosRe.reserve(nTerms);
-      if (cplx) monosIm.reserve(nTerms);
-      for (const LowerChannel &ch : chans)
-        if (cplxLeaves)
-          append_monos_cplx(ch, g, cplx, monosRe, monosIm);
-        else
-          append_monos(ch, g, cplx, monosRe, monosIm);
-      dump_polystats(nTerms, monosRe);
-      const int reRoot = network::gdetail::best_into(std::move(monosRe), builder);
-      if (!cplx) {
-        if (polystats_level() == 1) std::fprintf(stderr, "[polystats] ssa instrs=%zu\n", builder.ins.size());
-        return {reRoot, network::kRealProgram};
-      }
-      const int imRoot = network::gdetail::best_into(std::move(monosIm), builder);
-      if (polystats_level() == 1) std::fprintf(stderr, "[polystats] ssa instrs=%zu (re+im)\n", builder.ins.size());
-      return {reRoot, imRoot};
-    }
-  } // namespace ndetail
-
-  /// @brief Lower ONE polynomial into @p builder; returns `{reRoot, imRoot}` with
-  ///        `imRoot == network::kRealProgram` when the polynomial is real. @ref to_genprog is this plus
-  ///        a fresh builder.
-  NUMTRACER_FUNC std::pair<int, int> lower_into(const Poly &p, network::GlobalEnv &g,
-                                                network::rdetail::RBuilder &builder, bool realOnly)
-  {
-    static const DMono noDress;
-    return ndetail::lower_channels({{&noDress, &p}}, g, builder, realOnly);
-  }
-
-  NUMTRACER_FUNC network::GenProg to_genprog(const Poly &p, network::GlobalEnv &g, bool realOnly)
-  {
-    network::rdetail::RBuilder builder;
-    const auto [reRoot, imRoot] = lower_into(p, g, builder, realOnly);
-    network::GenProg gp{std::move(builder.ins), reRoot};
-    gp.rootIm = imRoot;
-    return gp;
-  }
-
-  /// @brief @ref DPoly counterpart of the @ref Poly `lower_into`. Each kinematic monomial is emitted
-  ///        exactly as in the @ref Poly overload and additionally carries its dressing monomial's
-  ///        atoms as `SymKind::dress` leaves (@ref network::GlobalEnv::dr_id). A `DPoly` with a single
-  ///        empty dressing monomial reduces to exactly the @ref Poly path.
-  NUMTRACER_FUNC std::pair<int, int> lower_into(const DPoly &p, network::GlobalEnv &g,
-                                                network::rdetail::RBuilder &builder, bool realOnly)
-  {
-    std::vector<ndetail::LowerChannel> chans;
-    chans.reserve(p.terms.size());
-    for (const auto &[d, mp] : p.terms)
-      chans.push_back({&d, &mp});
-    return ndetail::lower_channels(chans, g, builder, realOnly);
-  }
-
-  NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly)
-  {
-    network::rdetail::RBuilder builder;
-    const auto [reRoot, imRoot] = lower_into(p, g, builder, realOnly);
-    network::GenProg gp{std::move(builder.ins), reRoot};
-    gp.rootIm = imRoot;
-    return gp;
-  }
 
 #endif // NUMTRACER_DEFINE_BODIES
 
-} // namespace numtracer::numeric
+} // namespace numtracer::inline engine

@@ -329,7 +329,7 @@ diracParities[Power[b_, n_Integer?Positive]] := With[{s = diracParities[b]},
    Infinity (= {1, Infinity}) would skip.
    Counts _ntGamma ONLY: ntSigma (2 γ), ntDeltaDirac, ntC (= γ^2 γ^4) and γ5 are all parity-even
    (block-diagonal in the Weyl basis). Keep in step with the C++ counter nAntidiag
-   (numeric_contract.hpp / network/dirac.hpp). *)
+   (contract.hpp / network/dirac.hpp). *)
 diracParities[e_] := {Mod[Count[e, _ntGamma, {0, Infinity}], 2]};
 
 (* The odd-trace verdict itself: a γ5-free diagram every one of whose branches is an odd closed

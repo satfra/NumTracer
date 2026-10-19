@@ -1,4 +1,4 @@
-// The generator's sub-term dedup (numeric/trace_fold.hpp): phase A contracts each DISTINCT Dirac
+// The generator's sub-term dedup (engine/trace_fold.hpp): phase A contracts each DISTINCT Dirac
 // trace once, phase B folds each net's traces with its own scalars as a balanced binary-counter tree.
 //
 // Why this test exists. The dedup only does anything on a flow with MANY sub-terms per net, and every
@@ -16,16 +16,16 @@
 //   - both backends: Poly (plain) and DPoly (dressed)
 //   - the degenerate shapes that the binary counter gets wrong if the carry is off by one: 0, 1, 2, 3
 //     and 7 terms (7 = 0b111 leaves three unmerged partials on the stack -> the leftover sweep)
-#include "numtracer/numeric/frame.hpp"
+#include "numtracer/engine/frame.hpp"
 #include "engine_test_util.hpp"
-#include "numtracer/numeric/trace_fold.hpp"
+#include "numtracer/engine/trace_fold.hpp"
 
 #include <cstdio>
 #include <numeric>
 #include <vector>
 
 using namespace numtracer;
-using namespace numtracer::numeric;
+using namespace numtracer;
 
 namespace
 {

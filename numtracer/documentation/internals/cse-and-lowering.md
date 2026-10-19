@@ -24,7 +24,7 @@ builder.
 
 ## From a Poly to a real monomial list
 
-Lowering starts in `numeric::to_genprog`, which flattens the `Poly` into a list of `LMono`
+Lowering starts in `network::to_genprog`, which flattens the `Poly` into a list of `LMono`
 (`lower.hpp`) — the lowering's own monomial type:
 
 ```cpp

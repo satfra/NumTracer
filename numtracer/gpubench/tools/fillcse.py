@@ -3,7 +3,7 @@
 
 fill() is the one part of the emitted kernel that never goes through NumTracer's hash-consed SSA:
 trace bodies are lowered by real_cse.hpp's RBuilder, while fill() is printed textually by
-mpoly_to_cpp (numeric_driver.hpp:46). The result is visible in the production kernels — nf2 ZA4
+mpoly_to_cpp (poly_cpp.hpp:46). The result is visible in the production kernels — nf2 ZA4
 issues 51 transcendental calls for 4 distinct values, ZAAqbq1/2 issue 103 for 4 — and the same
 subexpression that was just stored into f[4] is re-substituted verbatim inside f[1], f[2], f[8]...
 

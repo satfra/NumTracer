@@ -11,19 +11,19 @@
 /// `Poly::operator*`/`operator+` verbatim, so the numeric backend's hot path is untouched and only
 /// diagrams that genuinely carry a dressed structure sum pay for the dressing layer.
 ///
-/// At lowering (@ref numtracer::numeric::to_genprog) each dressing atom becomes a `SymKind::dress`
+/// At lowering (@ref numtracer::network::to_genprog) each dressing atom becomes a `SymKind::dress`
 /// env leaf (@ref network::GlobalEnv::dr_id) — an opaque runtime value the kernel evaluates once,
 /// exactly like an `inv(1/k²)` leaf — and the shared CSE/Horner pass collects the dressing factors
 /// across monomials (FormTracer parity).
 #pragma once
 
-#include "numtracer/numeric/mpoly.hpp"
+#include "numtracer/poly/mpoly.hpp"
 
 #include <algorithm>
 #include <utility>
 #include <vector>
 
-namespace numtracer::inline numeric
+namespace numtracer::inline poly
 {
 
   /// @brief A dressing monomial: a sorted multiset of dressing-atom ids (the product of runtime
@@ -66,7 +66,7 @@ namespace numtracer::inline numeric
 
     // Sanctioned construction paths (see @ref Poly). The in-header DPoly arithmetic constructs its
     // results directly.
-    friend class Frame;
+    friend class engine::Frame;
     friend struct DPolyFactory;
     friend DPoly operator+(const DPoly &a, const DPoly &b);
     friend DPoly operator*(const DPoly &a, const DPoly &b);
@@ -171,7 +171,7 @@ namespace numtracer::inline numeric
     return r;
   }
 
-  namespace ndetail
+  namespace pdetail
   {
     /// @brief Raw numeric evaluation of a dressed polynomial: `x[i]` = user symbol i; `atomVal[aid]` =
     ///        value of `1/D_aid`; `drVal[id]` = value of dressing atom `id`. Equals the distributed sum
@@ -194,6 +194,6 @@ namespace numtracer::inline numeric
       }
       return s;
     }
-  } // namespace ndetail
+  } // namespace pdetail
 
-} // namespace numtracer::numeric
+} // namespace numtracer::inline poly

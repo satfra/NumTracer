@@ -8,7 +8,7 @@
 /// TUs is an ODR violation on the inline hot paths) and never install it.
 ///
 /// Include constraints (same as the rest of the numeric engine): this header is pulled into
-/// `mpoly.hpp`/`numeric_contract.hpp`, which the `-O0 -fno-exceptions` net-builder TUs may see —
+/// `mpoly.hpp`/`contract.hpp`, which the `-O0 -fno-exceptions` net-builder TUs may see —
 /// so no `<thread>`, no `<mutex>`, no exceptions. Aggregation uses an atomic intrusive list of
 /// heap-allocated (deliberately leaked) per-thread counter blocks; the dump walks the list after
 /// phase A's workers have joined (trace_fold.hpp owns the dump).
@@ -21,7 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace numtracer::inline numeric::stats
+namespace numtracer::stats
 {
 
   using nt_u64 = std::uint64_t;
@@ -50,8 +50,8 @@ namespace numtracer::inline numeric::stats
     nt_u64 dpa_trials = 0;     ///< trial divisions attempted (past the lead pre-filter)
     nt_u64 dpa_exact = 0;      ///< trial divisions that were exact
     nt_u64 dpa_noop = 0;       ///< divThroughPolyAtoms pass-throughs (no multi-term atom present)
-    // Dirac fold (numeric_contract.hpp)
-    nt_u64 nd_calls = 0;       ///< numeric_dirac invocations (spinor loops)
+    // Dirac fold (contract.hpp)
+    nt_u64 nd_calls = 0;       ///< trace_dirac_loop invocations (spinor loops)
     nt_u64 nd_tokens = 0;      ///< Σ chain tokens
     nt_u64 nd_assign = 0;      ///< Σ 4^f free-leg assignments folded
     nt_u64 nd_odd_skip = 0;    ///< odd-parity chains skipped (zero tensor, no arithmetic)
@@ -125,10 +125,10 @@ namespace numtracer::inline numeric::stats
     }
   };
 
-} // namespace numtracer::numeric::stats
+} // namespace numtracer::stats
 
-#define NT_STAT_ADD(field, v) (::numtracer::numeric::stats::tls().field += (v))
-#define NT_STAT_TIMER(field) ::numtracer::numeric::stats::Timer nt_stat_timer_##field(&::numtracer::numeric::stats::PhaseACounters::field)
+#define NT_STAT_ADD(field, v) (::numtracer::stats::tls().field += (v))
+#define NT_STAT_TIMER(field) ::numtracer::stats::Timer nt_stat_timer_##field(&::numtracer::stats::PhaseACounters::field)
 
 #else // !NT_PHASEA_STATS
 

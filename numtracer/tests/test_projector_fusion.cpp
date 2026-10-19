@@ -14,14 +14,14 @@
 #include <random>
 #include <vector>
 
-#include "numtracer/numeric/numeric_contract.hpp"
-#include "numtracer/numeric/frame.hpp"
+#include "numtracer/engine/contract.hpp"
+#include "numtracer/engine/frame.hpp"
 #include "engine_test_util.hpp"
 
 using numtracer::Cx;
 using namespace numtracer;
-namespace nm = numtracer::numeric;
-namespace nd = numtracer::numeric::ndetail;
+namespace nm = numtracer;
+namespace nd = numtracer::engine::ndetail;
 
 // momenta: k = vid 0, a = vid 1, b = vid 2, q = vid 3 (a second projector momentum)
 constexpr int kVid = 0, aVid = 1, bVid = 2, qVid = 3;
@@ -141,10 +141,10 @@ int main()
   for (int it = 0; it < 200; ++it) {
     std::vector<double> x(nsym);
     for (double &v : x) v = U(rng);
-    const double kk = nm::ndetail::eval(k2, x, {}).re;
-    const double kss = nm::ndetail::eval(ks2, x, {}).re;
+    const double kk = nm::pdetail::eval(k2, x, {}).re;
+    const double kss = nm::pdetail::eval(ks2, x, {}).re;
     const std::vector<double> av = {1.0 / kk, 0.0, 1.0 / kss};
-    auto e = [&](const nm::Poly &p) { return nm::ndetail::eval(p, x, av).re; };
+    auto e = [&](const nm::Poly &p) { return nm::pdetail::eval(p, x, av).re; };
     wEq = std::max(wEq, std::fabs(e(redT) - e(simT)));
     wChain = std::max(wChain, std::fabs(e(redChain) - e(simT)));
     wOrtho = std::max(wOrtho, std::fabs(e(orthoLT)));

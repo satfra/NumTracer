@@ -3,7 +3,7 @@
 // ==============================================================================
 
 #include "numtracer/numtracer.hpp"
-#include "numtracer/numeric/trace_fold.hpp"
+#include "numtracer/engine/trace_fold.hpp"
 
 #include <iostream>
 #include <string>
@@ -153,8 +153,8 @@ int main(int argc, char** argv){
   GlobalEnv genv;
   std::vector<GenProg> progs;
   std::vector<int> realOnly = {0,0,0,0,0,0};
-  long netWindow = numtracer::numeric::net_window((long)sidx.size(), workersB);
-  numtracer::numeric::check_group_partition(groups, 66);
+  long netWindow = numtracer::engine::net_window((long)sidx.size(), workersB);
+  numtracer::engine::check_group_partition(groups, 66);
   frame.fold_groups_streaming_dressed(sidx, dsc, sdr, groups, traceTable, nCache, workersB, netWindow, trace,
     [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },
     [&](size_t gi, DPoly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });

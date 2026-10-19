@@ -25,7 +25,7 @@
 
 #include "numtracer/core/config.hpp"        // NT_THROW (exception-optional guard for -fno-exceptions builds)
 #include "numtracer/core/export.hpp"        // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
-#include "numtracer/numeric/tolerances.hpp" // kZeroSnapTol
+#include "numtracer/poly/tolerances.hpp" // kZeroSnapTol
 #include "numtracer/sun/sun_data.hpp"       // SUNData<N> tables, Mat<N>, matmul, trace, Cx, sun_detail::FEntry
 
 #include <algorithm>
@@ -449,7 +449,7 @@ namespace numtracer::inline network
     ///        silently closed away.
     ///
     /// The adjoint sector has the same hazard as the Lorentz one (see
-    /// @ref numtracer::numeric::ndetail::assert_no_open_ids), by two different mechanisms:
+    /// @ref numtracer::engine::ndetail::assert_no_open_ids), by two different mechanisms:
     ///   * an open adjoint index on an `f` or a generator is DENSE-SUMMED over `0..N²−2` — `f^{abc}f^{abd}`
     ///     with `c`,`d` open would give 24 instead of the rank-2 `N δ^{cd}`;
     ///   * an open index on a `δ` is worse: union-find identifies the δ's two labels, the class is then
@@ -738,7 +738,7 @@ namespace numtracer::inline network
     /// is round-off, well below any genuine rational magnitude.
     inline void snap_zero(Cx &c)
     {
-      using numeric::kZeroSnapTol;
+      using poly::kZeroSnapTol;
       if (std::fabs(c.re) < kZeroSnapTol) c.re = 0.0;
       if (std::fabs(c.im) < kZeroSnapTol) c.im = 0.0;
     }

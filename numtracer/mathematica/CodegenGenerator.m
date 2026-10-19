@@ -347,9 +347,9 @@ ntGenPreambles[hasDressed_, colMainDecls_String, colourUnitsQ_] :=
       "#include \"numtracer/network/network.hpp\"\n#include \"numtracer/network/dirac.hpp\"\n#include \"numtracer/core/lit.hpp\"\n#include <utility>\n" <>
 (* dressed nets put their big DChainTok/DSlot literal builders on these parallel -O0 units (a huge
    braced-init in the serial main TU compiles ~quadratically); they need the dressed-token types from
-   numeric_contract.hpp. Non-dressed units don't include it. *)
+   contract_dressed.hpp. Non-dressed units don't include it. *)
         If[hasDressed,
-          "#include \"numtracer/numeric/numeric_contract.hpp\"\n",
+          "#include \"numtracer/engine/contract_dressed.hpp\"\n",
           ""
         ] <>
 (* colour-net chunk defs ride the units (stage 2); they build SUNNet literals through function-local
@@ -373,7 +373,7 @@ ntGenPreambles[hasDressed_, colMainDecls_String, colourUnitsQ_] :=
 (* the two contraction phases (phase A: contract each distinct trace once over a flat work list;
    phase B: fold each net's traces as a balanced tree). Host-only (it spawns threads) and MAIN-TU
    ONLY — the net-builder units are compiled -fno-exceptions and must not see it. *)
-            "#include \"numtracer/numeric/trace_fold.hpp\"\n\n",
+            "#include \"numtracer/engine/trace_fold.hpp\"\n\n",
             "#include <iostream>\n#include <string>\n#include <utility>\n#include <iterator>\n#include <vector>\n#include <array>\n#include <cstdlib>\n",
             "#include <thread>\n#include <atomic>\n#include <mutex>\n#include <chrono>\n#include <cstdio>\n#include <algorithm>\n#include <system_error>\n",
             "#include <sstream>\n#include <unordered_map>\n",
@@ -527,7 +527,7 @@ ntGenDeclHeader[hasDressed_, cseDecls_String, chunkDecls_String] :=
       "#include \"numtracer/network/dirac.hpp\"\n",
       "#include <vector>\n",
         If[hasDressed,
-          "#include \"numtracer/numeric/numeric_contract.hpp\"\n",
+          "#include \"numtracer/engine/contract_dressed.hpp\"\n",
           ""
         ],
       "\nusing namespace numtracer;\n\n",
@@ -736,7 +736,7 @@ ntGenMainPhaseA[nSub_, nReused_, hasDressed_, mIdx_] :=
             "    return sdch[k].empty()\n" <> "      ? cframe.trace(sdn[k], sln[k])\n" <> "      : cframe.trace_structural(sdch[k], sdsl[k], sln[k]);\n",
             "    return cframe.trace(sdn[k], sln[k]);\n"]],
         "  };\n",
-        (* PHASE A — contract each distinct trace once, parallel over a FLAT work list (numeric/trace_fold.hpp). *)
+        (* PHASE A — contract each distinct trace once, parallel over a FLAT work list (engine/trace_fold.hpp). *)
         "\n  // ---------------------------------------------------------------------------------------------\n",
         "  // PHASE A: contract each distinct trace.\n",
         "  // ---------------------------------------------------------------------------------------------\n\n",
@@ -767,7 +767,7 @@ ntGenMainPhaseA[nSub_, nReused_, hasDressed_, mIdx_] :=
         "  auto tB = std::chrono::steady_clock::now();\n"]|>];
 
 (* the groups table, the symbol environment, and PHASE B + group accumulation + lowering, FUSED into
-   one streaming pass (numeric/trace_fold.hpp's fold_groups_streaming). `groups` partitions the nets,
+   one streaming pass (engine/trace_fold.hpp's fold_groups_streaming). `groups` partitions the nets,
    so a net's folded polynomial is needed by exactly one group and dies once that group has absorbed
    it; only a window of nets and group accumulators is ever live.
    ORDER INVARIANT: each group left-folds its members in group order, and the sink runs on the calling
@@ -800,11 +800,11 @@ ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_, ncomp_] :=
                   Table["0", {nGrp}]],
                 ","
               ] <> "};\n",
-            "  long netWindow = numtracer::numeric::net_window((long)sidx.size(), workersB);\n",
-(* UNCONDITIONAL and FATAL (check_group_partition in numeric/trace_fold.hpp). `groups` must
+            "  long netWindow = numtracer::engine::net_window((long)sidx.size(), workersB);\n",
+(* UNCONDITIONAL and FATAL (check_group_partition in engine/trace_fold.hpp). `groups` must
    PARTITION the nets: a duplicate folds a net in twice, a gap silently drops one, and either is a
    wrong kernel with no other symptom. O(nNet), once per generation, so never gate it on a flag. *)
-            "  numtracer::numeric::check_group_partition(groups, " <> ToString[nNet] <> ");\n",
+            "  numtracer::engine::check_group_partition(groups, " <> ToString[nNet] <> ");\n",
 (* The dressed fold reads the plain-Poly trace table + the per-sub-term dressing monomials sdr and
    builds the per-net DPoly channel by channel (fold_groups_streaming_dressed). *)
             If[hasDressed,

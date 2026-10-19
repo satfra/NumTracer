@@ -19,10 +19,10 @@
 // (T random per point); the loop's temporal component l0 (a summed Matsubara frequency) and all
 // spatial components are random — a genuinely broken-O(4) Dirac × projector trace. Prints
 // ALL TESTS PASSED / exits non-zero on failure.
-#include "numtracer/numeric/numeric_contract.hpp"
+#include "numtracer/engine/contract.hpp"
 #include "engine_test_util.hpp"
 using namespace numtracer; // the typed builders (LorentzIndex, Momentum, …) the tests spell unqualified
-#include "numtracer/numeric/frame.hpp"
+#include "numtracer/engine/frame.hpp"
 
 #include <array>
 #include <cmath>
@@ -31,7 +31,7 @@ using namespace numtracer; // the typed builders (LorentzIndex, Momentum, …) t
 #include <vector>
 
 using numtracer::Cx;
-namespace nm = numtracer::numeric;
+namespace nm = numtracer;
 namespace network = numtracer::network;
 
 // 8 symbols: external p = vars 0..3 (vid 0), loop l = vars 4..7 (vid 1). The internal quark momentum
@@ -89,7 +89,7 @@ int main()
       if (mu > 0) ls2v += ll[mu] * ll[mu];
     }
     const std::vector<double> atomVal = {1.0 / l2v, 1.0 / ls2v};
-    const double num = nm::ndetail::eval(N, x, atomVal).re;
+    const double num = nm::pdetail::eval(N, x, atomVal).re;
 
     // closed-form oracle
     double PE[4][4], PM[4][4];

@@ -3,7 +3,7 @@
 ///
 /// An independent, brute-structure evaluator for the all-slash Dirac chain, kept in the
 /// test tree (`tests/oracle/`) as ground truth for the numeric contraction engine's unit
-/// gate (`test_numeric_contract`). It is not part of the shipped engine.
+/// gate (`test_contract`). It is not part of the shipped engine.
 ///
 /// A chain
 /// `tr(p̸₁ … p̸_K)` evaluated by multiplying slashed-momentum matrices and taking

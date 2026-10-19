@@ -7,17 +7,17 @@
 /// intermediate), whereas the same contraction runs in a fraction of the memory and time at
 /// runtime. So the contraction is a codegen step: a small C++ program builds the network (the
 /// contraction stays in C++), contracts each diagram numerically → lowers it (see
-/// @ref numtracer::numeric::to_genprog), and **prints** a committed header of straight-line
+/// @ref numtracer::network::to_genprog), and **prints** a committed header of straight-line
 /// `trN(const double* f)` functions — the same flat form as a FORM reference kernel. The kernel
 /// computes the shared `f[]` once per call and invokes them.
 #pragma once
 
-#include "numtracer/core/export.hpp"   // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
-#include "numtracer/core/envvar.hpp"   // env_flag / env_int — the single truth test for NT_* switches
-#include "numtracer/core/hash.hpp"     // splitmix64_finalise / hash_combine (GlobalEnv)
-#include "numtracer/core/intern_table.hpp"
 #include "numtracer/codegen/lower.hpp"
 #include "numtracer/codegen/precision.hpp" // float vs double emission
+#include "numtracer/core/envvar.hpp"       // env_flag / env_int — the single truth test for NT_* switches
+#include "numtracer/core/export.hpp"       // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
+#include "numtracer/core/hash.hpp"         // splitmix64_finalise / hash_combine (GlobalEnv)
+#include "numtracer/core/intern_table.hpp"
 #include "numtracer/network/network.hpp" // LorentzNet / LorentzFactor / GenProg
 
 #include <climits>
@@ -36,10 +36,10 @@ namespace numtracer::inline network
 
   /// @brief What an env slot holds. The integer values are hashed (@ref GlobalEnv::SymHash); keep them.
   enum class SymKind : int {
-    sp = 0,    ///< scalar product `sp(a,b)` of fundamental momenta
-    inv = 1,   ///< inverse `inv(id)` = `1/q_id²`
-    dress = 2, ///< dressing / regulator call `dress(id)`
-    var = 3,   ///< raw user symbol `var(id)` (numeric backend)
+    sp = 0,       ///< scalar product `sp(a,b)` of fundamental momenta
+    inv = 1,      ///< inverse `inv(id)` = `1/q_id²`
+    dress = 2,    ///< dressing / regulator call `dress(id)`
+    var = 3,      ///< raw user symbol `var(id)` (numeric backend)
     inv_im = 4,   ///< imaginary half of a complex `inv(id)` (see @ref GlobalEnv::cplxAtom)
     dress_im = 5, ///< imaginary half of a complex `dress(id)` (see @ref GlobalEnv::cplxDress)
   };
@@ -83,7 +83,7 @@ namespace numtracer::inline network
     /// a dressing value, complex). Such a leaf rides a REAL slot pair, `inv`/`dress` holding its real
     /// part and `inv_im`/`dress_im` its imaginary part; the lowering expands `(re + i im)^n`
     /// binomially into the monomial coefficients, so every trace body stays real arithmetic.
-    /// Both vectors stay EMPTY unless some leaf is complex (see `numeric::mark_complex_atoms`), and
+    /// Both vectors stay EMPTY unless some leaf is complex (see `mark_complex_atoms`), and
     /// the lowering then takes exactly its real-only path.
     std::vector<char> cplxAtom;  ///< inv atom id → 1 if its denominator `k²` is complex
     std::vector<char> cplxDress; ///< dressing id → 1 if its runtime value is complex
@@ -123,8 +123,7 @@ namespace numtracer::inline network
     /// order. Only the first @p maxOrders variants are BUILT (each is a deep copy of the monomial set).
     /// The variant SEQUENCE is frozen: reordering it would change which ordering wins a tie on op
     /// count, and with it the emitted kernel bytes.
-    inline std::vector<std::vector<LMono>> make_orderings(const std::vector<LMono> &monos,
-                                                          std::size_t maxOrders = 8)
+    inline std::vector<std::vector<LMono>> make_orderings(const std::vector<LMono> &monos, std::size_t maxOrders = 8)
     {
       // Each ordering sorts monomial INDICES with the comparator on the monomials it refers to: the
       // same comparisons give the same permutation as sorting copies, without moving LMonos around.
@@ -135,11 +134,13 @@ namespace numtracer::inline network
           deg[i] += e;
       auto sortedBy = [&](auto less) {
         std::vector<std::uint32_t> idx(n);
-        for (std::size_t i = 0; i < n; ++i) idx[i] = static_cast<std::uint32_t>(i);
+        for (std::size_t i = 0; i < n; ++i)
+          idx[i] = static_cast<std::uint32_t>(i);
         std::sort(idx.begin(), idx.end(), less);
         std::vector<LMono> v;
         v.reserve(n);
-        for (std::uint32_t i : idx) v.push_back(monos[i]);
+        for (std::uint32_t i : idx)
+          v.push_back(monos[i]);
         return v;
       };
       auto vp = [&](std::uint32_t i) -> const auto & { return monos[i].vp; };
@@ -276,13 +277,12 @@ namespace numtracer::inline network
     ///    site instead of occupying its own declaration line.
     ///
     /// Both rewrites are unconditional (both measured as wins).
-    struct EmitPlan
-    {
-      std::vector<int> use;       ///< total references: instruction operands + result roots
-      std::vector<int> consumer;  ///< single consuming instruction, or -2 (root / >1 consumers)
-      std::vector<char> fmaFold;  ///< MUL folded into its single ADD consumer
-      std::vector<char> negFold;  ///< NEG folded into its single ADD consumer (spelled as a subtract)
-      std::vector<char> cInline;  ///< RCONST inlined at its single use site
+    struct EmitPlan {
+      std::vector<int> use;      ///< total references: instruction operands + result roots
+      std::vector<int> consumer; ///< single consuming instruction, or -2 (root / >1 consumers)
+      std::vector<char> fmaFold; ///< MUL folded into its single ADD consumer
+      std::vector<char> negFold; ///< NEG folded into its single ADD consumer (spelled as a subtract)
+      std::vector<char> cInline; ///< RCONST inlined at its single use site
     };
 
     /// @brief Does @p r name an RNEG whose only consumer is the RADD @p c? Such a NEG is spelled as
@@ -294,9 +294,8 @@ namespace numtracer::inline network
     /// and the order in which the two callers try `b` before `a` — is stated once, here.
     inline bool neg_foldable(const std::vector<RInstr> &ins, const EmitPlan &pl, int r, int c)
     {
-      return r >= 0 && r < static_cast<int>(ins.size()) &&
-             ins[static_cast<std::size_t>(r)].op == RNEG && pl.use[static_cast<std::size_t>(r)] == 1 &&
-             pl.consumer[static_cast<std::size_t>(r)] == c;
+      return r >= 0 && r < static_cast<int>(ins.size()) && ins[static_cast<std::size_t>(r)].op == RNEG &&
+             pl.use[static_cast<std::size_t>(r)] == 1 && pl.consumer[static_cast<std::size_t>(r)] == c;
     }
 
     inline EmitPlan make_plan(const std::vector<RInstr> &ins, const int *roots, std::size_t nroots)
@@ -320,7 +319,8 @@ namespace numtracer::inline network
         } else if (in.op == RNEG)
           touch(in.a, i);
       }
-      for (std::size_t r = 0; r < nroots; ++r) touch(roots[r], -2);
+      for (std::size_t r = 0; r < nroots; ++r)
+        touch(roots[r], -2);
       // At most ONE folded MUL per consumer (an fma has one addend); prefer operand `a`.
       auto foldable = [&](int r, int c) {
         return r >= 0 && r < n && ins[r].op == RMUL && pl.use[r] == 1 && pl.consumer[r] == c;
@@ -489,9 +489,10 @@ namespace numtracer::inline network
       if (!noinline && device_target()) {
         static const std::size_t noinlineMinInstr = [] {
           const char *e = std::getenv("NT_GEN_NOINLINE_MIN");
-          if (e == nullptr || *e == '\0') return static_cast<std::size_t>(500); // empty means unset,
-                                                                               // NOT the very
-                                                                               // aggressive 0 below
+          if (e == nullptr || *e == '\0')
+            return static_cast<std::size_t>(500); // empty means unset,
+                                                  // NOT the very
+                                                  // aggressive 0 below
           // "off" / any negative value disables the gate outright (all-inline emission). It needs
           // its own spelling because the natural guess, 0, means the OPPOSITE here: the test is
           // `nInstr > N`, so 0 out-of-lines everything. Anything unparsable reads as "off" too:
@@ -531,8 +532,7 @@ namespace numtracer::inline network
   /// @brief Print a lowered program as a straight-line C++ function `name(const double* f)`.
   ///        `decor` is the function decorator/prefix (e.g. `"static KOKKOS_INLINE_FUNCTION"`
   ///        for a device-callable kernel); the default keeps the emitted bytes unchanged.
-  NUMTRACER_FUNC void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name,
-                               const std::string &decor)
+  NUMTRACER_FUNC void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name, const std::string &decor)
   {
     // Per-function inline decision: see @ref edetail::eff_decor. `__attribute__((noinline))` is
     // honoured by both g++ and nvcc; fill()/powr stay inline.
@@ -550,7 +550,8 @@ namespace numtracer::inline network
       out << effDecor << " nt_complex_t " << name << "([[maybe_unused]] const " << codegen::emit_real_type()
           << " *f) {\n";
       out << std::setprecision(17);
-      for (std::size_t i = 0; i < p.ins.size(); ++i) edetail::emit_stmt(out, p.ins, i, pl);
+      for (std::size_t i = 0; i < p.ins.size(); ++i)
+        edetail::emit_stmt(out, p.ins, i, pl);
       out << "  return nt_complex_t{";
       opnd(p.root);
       out << ", ";
@@ -565,7 +566,8 @@ namespace numtracer::inline network
       return;
     }
     out << std::setprecision(17);
-    for (std::size_t i = 0; i < p.ins.size(); ++i) edetail::emit_stmt(out, p.ins, i, pl);
+    for (std::size_t i = 0; i < p.ins.size(); ++i)
+      edetail::emit_stmt(out, p.ins, i, pl);
     out << "  return ";
     opnd(p.root);
     out << ";\n}\n";
@@ -579,12 +581,24 @@ namespace numtracer::inline network
     for (std::size_t i = 0; i < g.syms.size(); ++i) {
       auto [kind, a, b] = g.syms[i];
       switch (kind) {
-      case SymKind::sp: out << "//   f[" << i << "] = sp(" << a << "," << b << ")\n"; break;
-      case SymKind::inv: out << "//   f[" << i << "] = inv(" << a << ")\n"; break;
-      case SymKind::dress: out << "//   f[" << i << "] = dress(" << a << ")\n"; break;
-      case SymKind::var: out << "//   f[" << i << "] = var(" << a << ")\n"; break;
-      case SymKind::inv_im: out << "//   f[" << i << "] = imag inv(" << a << ")\n"; break;
-      case SymKind::dress_im: out << "//   f[" << i << "] = imag dress(" << a << ")\n"; break;
+      case SymKind::sp:
+        out << "//   f[" << i << "] = sp(" << a << "," << b << ")\n";
+        break;
+      case SymKind::inv:
+        out << "//   f[" << i << "] = inv(" << a << ")\n";
+        break;
+      case SymKind::dress:
+        out << "//   f[" << i << "] = dress(" << a << ")\n";
+        break;
+      case SymKind::var:
+        out << "//   f[" << i << "] = var(" << a << ")\n";
+        break;
+      case SymKind::inv_im:
+        out << "//   f[" << i << "] = imag inv(" << a << ")\n";
+        break;
+      case SymKind::dress_im:
+        out << "//   f[" << i << "] = imag dress(" << a << ")\n";
+        break;
       }
     }
   }
@@ -622,10 +636,10 @@ namespace numtracer::inline network
     for (std::size_t i = 0; i < g.syms.size(); ++i) {
       auto [kind, a, b] = g.syms[i];
       out << "  f[" << i << "] = "
-          << (kind == SymKind::sp      ? fm.sp(a, b)
-              : kind == SymKind::inv   ? fm.inv(a)
-              : kind == SymKind::dress ? fm.dress(a)
-              : kind == SymKind::var   ? fm.var(a)
+          << (kind == SymKind::sp       ? fm.sp(a, b)
+              : kind == SymKind::inv    ? fm.inv(a)
+              : kind == SymKind::dress  ? fm.dress(a)
+              : kind == SymKind::var    ? fm.var(a)
               : kind == SymKind::inv_im ? fm.invIm(a)
                                         : fm.dressIm(a))
           << ";\n";
@@ -634,4 +648,4 @@ namespace numtracer::inline network
   }
 #endif // NUMTRACER_DEFINE_BODIES
 
-} // namespace numtracer::network
+} // namespace numtracer::inline network

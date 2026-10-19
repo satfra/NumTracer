@@ -1,9 +1,9 @@
 /// @file spinor_mat.hpp
-/// @brief A 4×4 spinor matrix whose entries are @ref numtracer::numeric::Poly, plus the γ/slash
+/// @brief A 4×4 spinor matrix whose entries are @ref numtracer::poly::Poly, plus the γ/slash
 ///        builders the numeric Dirac trace multiplies.
 ///
 /// The numeric contraction backend contracts a Dirac chain as a product of 4×4 matrices whose
-/// entries are polynomials in the frame's scalar symbols (@ref numtracer::numeric::Poly): the γ
+/// entries are polynomials in the frame's scalar symbols (@ref numtracer::poly::Poly): the γ
 /// matrices stay numeric (constant entries) while only the user's momentum data enters as
 /// polynomial coefficients. This header holds that matrix type (`Mat4`), its product/trace, and
 /// the leaf builders — `gammaC` (a numeric γ^μ), `cmatC` (the charge-conjugation matrix C) and
@@ -13,12 +13,12 @@
 #pragma once
 
 #include "numtracer/dirac/dirac_data.hpp" // kGamma, kC (Euclidean Weyl)
-#include "numtracer/numeric/mpoly.hpp"    // Poly
+#include "numtracer/poly/mpoly.hpp"    // Poly
 
 #include <array>
 #include <utility> // std::move
 
-namespace numtracer::inline numeric
+namespace numtracer::inline engine
 {
 
   /// @brief A 4×4 spinor matrix whose entries are @ref Poly (numeric γ, symbolic momentum data).
@@ -69,7 +69,7 @@ namespace numtracer::inline numeric
   /// @brief The numeric charge-conjugation matrix `C` (a constant 4×4 of `Poly`).
   ///
   /// Reads @ref numtracer::dirac::kC, which is the single source of truth for `C`; the fold in
-  /// `numeric_dirac` takes this matrix's DIAGONAL Weyl blocks (C is block-diagonal, unlike γ^μ).
+  /// `trace_dirac_loop` takes this matrix's DIAGONAL Weyl blocks (C is block-diagonal, unlike γ^μ).
   inline Mat4 cmatC(int nsym)
   {
     Mat4 S(nsym);
@@ -100,4 +100,4 @@ namespace numtracer::inline numeric
     return S;
   }
 
-} // namespace numtracer::numeric
+} // namespace numtracer::inline engine

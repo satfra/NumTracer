@@ -20,8 +20,8 @@
 #pragma once
 
 #include "numtracer/core/envvar.hpp" // env_flag / env_int — the single truth test for NT_* switches
-#include "numtracer/numeric/dpoly.hpp"
-#include "numtracer/numeric/mpoly.hpp"
+#include "numtracer/poly/dpoly.hpp"
+#include "numtracer/poly/mpoly.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -37,7 +37,7 @@
 
 #include <unistd.h> // sysconf(_SC_PAGESIZE) for the RSS profile
 
-namespace numtracer::inline numeric
+namespace numtracer::inline engine
 {
 
   /// @brief Construct an empty polynomial of the phase-B backend type `P` at symbol-space size `nsym`.
@@ -567,4 +567,4 @@ namespace numtracer::inline numeric
         std::forward<Sink>(sink));
   }
 
-} // namespace numtracer::inline numeric
+} // namespace numtracer::inline engine

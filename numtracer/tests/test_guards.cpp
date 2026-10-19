@@ -12,7 +12,7 @@
 //        {sigma,gamma,gamma} (4 gammas, nonzero trace) was reported as an odd chain and returned a
 //        structural ZERO, while {sigma,gamma} (3 gammas, vanishing trace) passed the even gate into
 //        trace_rec, whose pair_factor read the Comm's empty vlc and silently collapsed it. This
-//        function is the cross-validation ORACLE in test_numeric_contract.cpp, so a wrong verdict
+//        function is the cross-validation ORACLE in test_contract.cpp, so a wrong verdict
 //        here would "confirm" a wrong engine result.
 //   (D2) Poly::atom narrowed the atom id to int16 with no check; aid>=32768 wrapped to a different
 //        (or negative) id, so the term carried somebody else's denominator into the cancellation.
@@ -40,8 +40,9 @@
 #include "engine_test_util.hpp"
 #include "numtracer/network/network.hpp"
 #include "numtracer/network/sun_net.hpp"
-#include "numtracer/numeric/frame.hpp"
-#include "numtracer/numeric/numeric_contract.hpp"
+#include "numtracer/engine/frame.hpp"
+#include "numtracer/engine/contract.hpp"
+#include "numtracer/codegen/lower_poly.hpp"
 #include "numtracer/sun/sun_data.hpp"
 
 #include <array>
@@ -124,7 +125,7 @@ int main() {
 
   // ---- D2 / D3 / D4: numeric-engine silent-corruption guards ---------------------------------
   {
-    using namespace numtracer::numeric;
+    using namespace numtracer;
     Frame env(ntest::names(4));
     ok("Poly::atom accepts the largest in-range id", !throws([&] { (void)env.inv_denominator(32767); }));
     ok("Poly::atom rejects an id that would wrap int16", throws([&] { (void)env.inv_denominator(32768); }));
@@ -175,7 +176,7 @@ int main() {
 
   // ---- E1a: an open LORENTZ index must throw, not be summed over 0..3 ------------------------
   {
-    using namespace numtracer::numeric;
+    using namespace numtracer;
     using namespace numtracer::network;
     // The step-04 frame: p = (p0,0,0,0) along axis 0, l = (l0,l1,0,0) in the 0-1 plane.
     const int nsym = 3;
@@ -197,7 +198,7 @@ int main() {
     // ANCHOR: the closed contraction p·P(l)·p = p²(1−cos²θ) is untouched by the guard.
     {
       LorentzNet lor = {LorentzTerm{Cx{1, 0}, {ntest::fvec(mu, {{1.0, 0}}), ntest::fprojT(mu, nu, {{1.0, 1}}, 0), ntest::fvec(nu, {{1.0, 0}})}}};
-      const double got = ndetail::eval(ntest::contract(env, DiracChain{}, lor, comp, atomDen), x, av).re;
+      const double got = pdetail::eval(ntest::contract(env, DiracChain{}, lor, comp, atomDen), x, av).re;
       const double cth = l0 / std::sqrt(l2v);
       ok("open-index guard: closed p.P(l).p still exact", std::fabs(got - Pm * Pm * (1 - cth * cth)) < 1e-12);
     }
@@ -212,7 +213,7 @@ int main() {
     // tr(γ^μ p̸ γ_μ q̸) = −8 p·q in d = 4.
     {
       const DiracChain ch = {gamma(LorentzIndex{mu}), slash(Momentum{{{1.0, 0}}}), gamma(LorentzIndex{mu}), slash(Momentum{{{1.0, 1}}})};
-      const double got = ndetail::eval(ntest::contract(env, ch, LorentzNet{}, comp, atomDen), x, av).re;
+      const double got = pdetail::eval(ntest::contract(env, ch, LorentzNet{}, comp, atomDen), x, av).re;
       ok("open-index guard: self-paired gamma legs still contract", std::fabs(got - (-8.0 * Pm * l0)) < 1e-12);
     }
   }
@@ -259,12 +260,12 @@ int main() {
     const Poly x0 = env.var(0);
     const Poly withAtom = x0 * env.inv_denominator(1);
     ok("eval: too few symbol values throws (was a silent wrong number)",
-       throws([&] { (void)ndetail::eval(x0, {1.0}, {}); }));
-    ok("eval: missing atom value throws (was a segfault)", throws([&] { (void)ndetail::eval(withAtom, {1.0, 2.0}, {0.5}); }));
-    ok("eval: all values present still evaluates", !throws([&] { (void)ndetail::eval(withAtom, {1.0, 2.0}, {0.5, 0.25}); }));
+       throws([&] { (void)pdetail::eval(x0, {1.0}, {}); }));
+    ok("eval: missing atom value throws (was a segfault)", throws([&] { (void)pdetail::eval(withAtom, {1.0, 2.0}, {0.5}); }));
+    ok("eval: all values present still evaluates", !throws([&] { (void)pdetail::eval(withAtom, {1.0, 2.0}, {0.5, 0.25}); }));
     DPoly dp = env.dzero();
     dp.add({3}, x0);
-    ok("eval: missing dressing value throws", throws([&] { (void)ndetail::eval(dp, {1.0, 2.0}, {}, {1.0}); }));
+    ok("eval: missing dressing value throws", throws([&] { (void)pdetail::eval(dp, {1.0, 2.0}, {}, {1.0}); }));
     ok("Frame::var out of range throws", throws([&] { (void)env.var(2); }));
 
     std::vector<std::array<Poly, 4>> comp(1, {x0, env.zero(), env.zero(), env.zero()});

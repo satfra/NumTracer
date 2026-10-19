@@ -1,7 +1,7 @@
 // Correctness gate for the dressing-collection layer (symbolic dressing collection).
 //
 // Validates:
-//   A) DPoly arithmetic — add / operator+ / operator* collect over dressing monomials, and ndetail::eval()
+//   A) DPoly arithmetic — add / operator+ / operator* collect over dressing monomials, and pdetail::eval()
 //      equals the manual sum.
 //   B) Dressing-free reduction — a dressed chain with NO slots produces a DPoly with a single empty
 //      dressing monomial whose Poly is bit-equal to ndetail::contract(...), and to_genprog(DPoly) emits
@@ -10,18 +10,19 @@
 //   C) Dressed contraction — a quark line with dressed numerators S(p)=Mq·δ + Z(p)·p̸ kept EAGER and
 //      collected into one DPoly equals the explicit distributed sum Σ_combos (∏dressings)·trace, both
 //      evaluated at random points (≤1e-10), with the trace computed ONCE instead of per combination.
-#include "numtracer/numeric/frame.hpp"
+#include "numtracer/engine/frame.hpp"
 #include "engine_test_util.hpp"
 using namespace numtracer; // the typed builders (LorentzIndex, Momentum, …) the tests spell unqualified
-#include "numtracer/numeric/numeric_contract.hpp"
-#include "numtracer/numeric/trace_fold.hpp" // fold_net_dressed (lever (b) assembly)
+#include "numtracer/engine/contract_dressed.hpp"
+#include "numtracer/codegen/lower_poly.hpp"
+#include "numtracer/engine/trace_fold.hpp" // fold_net_dressed (lever (b) assembly)
 
 #include <cstdio>
 #include <random>
 #include <vector>
 
 using numtracer::Cx;
-namespace nm = numtracer::numeric;
+namespace nm = numtracer;
 namespace network = numtracer::network;
 
 static double cdiff(Cx a, Cx b) { return std::abs(a.re - b.re) + std::abs(a.im - b.im); }
@@ -50,8 +51,8 @@ int main()
     std::vector<double> x = {0.4, -0.7};
     std::vector<double> atomVal;            // none
     std::vector<double> drVal = {1.5, -2.0}; // d0=1.5, d1=-2.0
-    Cx esum = nm::ndetail::eval(sum, x, atomVal, drVal);
-    Cx eprod = nm::ndetail::eval(prod, x, atomVal, drVal);
+    Cx esum = nm::pdetail::eval(sum, x, atomVal, drVal);
+    Cx eprod = nm::pdetail::eval(prod, x, atomVal, drVal);
     // manual
     double av = 1.5 * x[0] + 3.0;
     double bv = 1.5 * x[1] + (-2.0) * 2.0;
@@ -132,7 +133,7 @@ int main()
       c.push_back(network::gamma(LorentzIndex{101}));
       if (cq == 1) c.push_back(network::slash(Momentum{{{1.0, 1}}}));
       nm::Poly t = ntest::contract(env, c, lor, comp, {});
-      return nm::ndetail::eval(t, x, {});
+      return nm::pdetail::eval(t, x, {});
     };
 
     int worst = 0;
@@ -142,7 +143,7 @@ int main()
       for (double &v : x)
         v = U(rng);
       std::vector<double> drVal = {U(rng), U(rng), U(rng)}; // Mq, Z(p), Z(q)
-      Cx collected = nm::ndetail::eval(dp, x, {}, drVal);
+      Cx collected = nm::pdetail::eval(dp, x, {}, drVal);
       // distributed: Σ (dressing product) · trace(choice)
       Cx dist{0, 0};
       for (int cp = 0; cp < 2; ++cp)
@@ -179,7 +180,7 @@ int main()
       if (cp == 1) c.push_back(network::slash(Momentum{{{1.0, 0}}}));
       c.push_back(network::gamma(LorentzIndex{102}));
       c.push_back(network::gamma(LorentzIndex{103}));
-      return nm::ndetail::eval(ntest::contract(env, c, lor, comp, {}), x, {});
+      return nm::pdetail::eval(ntest::contract(env, c, lor, comp, {}), x, {});
     };
     int worst = 0;
     double maxerr = 0.0;
@@ -188,7 +189,7 @@ int main()
       for (double &v : x)
         v = U(rng);
       std::vector<double> drVal = {U(rng), U(rng)};
-      Cx collected = nm::ndetail::eval(dp, x, {}, drVal);
+      Cx collected = nm::pdetail::eval(dp, x, {}, drVal);
       Cx dist{0, 0};
       for (int cp = 0; cp < 2; ++cp) {
         double w = (cp == 0 ? drVal[0] : drVal[1]);
@@ -226,7 +227,7 @@ int main()
       if (cp == 1) c.push_back(network::slash(Momentum{{{1.0, 0}}}));
       c.push_back(network::comm(LorentzIndex{102}, LorentzIndex{103}));
       if (cq == 1) c.push_back(network::slash(Momentum{{{1.0, 1}}}));
-      return nm::ndetail::eval(ntest::contract(env, c, lor, comp, {}), x, {});
+      return nm::pdetail::eval(ntest::contract(env, c, lor, comp, {}), x, {});
     };
     int worst = 0;
     double maxerr = 0.0;
@@ -235,7 +236,7 @@ int main()
       for (double &v : x)
         v = U(rng);
       std::vector<double> drVal = {U(rng), U(rng), U(rng)};
-      Cx collected = nm::ndetail::eval(dp, x, {}, drVal);
+      Cx collected = nm::pdetail::eval(dp, x, {}, drVal);
       Cx dist{0, 0};
       for (int cp = 0; cp < 2; ++cp)
         for (int cq = 0; cq < 2; ++cq) {
@@ -275,7 +276,7 @@ int main()
       if (cp == 1) c.push_back(network::slash(Momentum{{{1.0, 0}}}));
       c.push_back(network::comm(LorentzIndex{101}, Momentum{{{1.0, 2}}}));
       if (cq == 1) c.push_back(network::slash(Momentum{{{1.0, 1}}}));
-      return nm::ndetail::eval(ntest::contract(env, c, lor, comp, {}), x, {});
+      return nm::pdetail::eval(ntest::contract(env, c, lor, comp, {}), x, {});
     };
     int worst = 0;
     double maxerr = 0.0;
@@ -284,7 +285,7 @@ int main()
       for (double &v : x)
         v = U(rng);
       std::vector<double> drVal = {U(rng), U(rng), U(rng)};
-      Cx collected = nm::ndetail::eval(dp, x, {}, drVal);
+      Cx collected = nm::pdetail::eval(dp, x, {}, drVal);
       Cx dist{0, 0};
       for (int cp = 0; cp < 2; ++cp)
         for (int cq = 0; cq < 2; ++cq) {
@@ -327,7 +328,7 @@ int main()
       if (cp == 0) c.push_back(network::gamma(LorentzIndex{200}));            // γ^μ
       else c.push_back(network::comm(LorentzIndex{200}, Momentum{{{1.0, 0}}}));      // σ^{μν}p̸_ν
       c.push_back(network::gamma(LorentzIndex{101}));
-      return nm::ndetail::eval(ntest::contract(env, c, lor, comp, {}), x, {});
+      return nm::pdetail::eval(ntest::contract(env, c, lor, comp, {}), x, {});
     };
     int worst = 0;
     double maxerr = 0.0;
@@ -336,7 +337,7 @@ int main()
       for (double &v : x)
         v = U(rng);
       std::vector<double> drVal = {U(rng), U(rng)};
-      Cx collected = nm::ndetail::eval(dp, x, {}, drVal);
+      Cx collected = nm::pdetail::eval(dp, x, {}, drVal);
       Cx dist{0, 0};
       for (int cp = 0; cp < 2; ++cp) {
         double w = (cp == 0 ? drVal[0] : drVal[1]);
@@ -421,11 +422,11 @@ int main()
         for (double &v : x)
           v = U(rng);
         std::vector<double> drVal = {U(rng), U(rng), U(rng), U(rng)};
-        Cx collected = nm::ndetail::eval(dp, x, {}, drVal);
+        Cx collected = nm::pdetail::eval(dp, x, {}, drVal);
         Cx dist{0, 0};
         for (int cp = 0; cp < 4; ++cp) {
           auto cn = optChainNet(cp, cfg.pre, cfg.post, cfg.base);
-          Cx tr = nm::ndetail::eval(ntest::contract(env, cn.first, cn.second, comp, {}), x, {});
+          Cx tr = nm::pdetail::eval(ntest::contract(env, cn.first, cn.second, comp, {}), x, {});
           dist = dist + Cx{tr.re * drVal[cp], tr.im * drVal[cp]};
         }
         double e = cdiff(collected, dist);
@@ -473,12 +474,12 @@ int main()
         std::vector<double> x(nsym);
         for (double &v : x) v = U(rng);
         std::vector<double> drVal = {U(rng), U(rng), U(rng)};
-        Cx collected = nm::ndetail::eval(dp, x, {}, drVal);
+        Cx collected = nm::pdetail::eval(dp, x, {}, drVal);
         Cx dist{0, 0};
         for (int cp = 0; cp < 3; ++cp) {
           network::DiracChain c = cfg.pre;
           for (const network::DFac &d : sV[cp].toks) c.push_back(d);
-          Cx tr = nm::ndetail::eval(ntest::contract(env, c, base, comp, {}), x, {});
+          Cx tr = nm::pdetail::eval(ntest::contract(env, c, base, comp, {}), x, {});
           dist = dist + Cx{tr.re * drVal[cp], tr.im * drVal[cp]};
         }
         double e = cdiff(collected, dist);
@@ -531,14 +532,14 @@ int main()
       std::vector<double> x(nsym);
       for (double &v : x) v = U(rng);
       std::vector<double> drVal = {U(rng), U(rng), U(rng)};
-      Cx collected = nm::ndetail::eval(dp, x, {}, drVal);
+      Cx collected = nm::pdetail::eval(dp, x, {}, drVal);
       Cx dist{0, 0};
       for (int cp = 0; cp < 3; ++cp) {
         network::DiracChain c = pre;
         for (const network::DFac &d : sV[cp].toks) c.push_back(d);
         LorentzNet net = base;
         for (const LorentzFactor &e : sV[cp].netFacs) net[0].e.push_back(toNElem(e));
-        Cx tr = nm::ndetail::eval(ntest::contract(env, c, net, comp, {}), x, {});
+        Cx tr = nm::pdetail::eval(ntest::contract(env, c, net, comp, {}), x, {});
         mag[cp] = std::max(mag[cp], std::abs(tr.re) + std::abs(tr.im));
         dist = dist + Cx{tr.re * drVal[cp], tr.im * drVal[cp]};
       }
@@ -604,11 +605,11 @@ int main()
       std::vector<double> x(nsym);
       for (double &v : x) v = U(rng);
       std::vector<double> drVal = {U(rng), U(rng)};
-      Cx a = nm::ndetail::eval(trComm, x, {}), b = nm::ndetail::eval(trMet, x, {});
+      Cx a = nm::pdetail::eval(trComm, x, {}), b = nm::pdetail::eval(trMet, x, {});
       magComm = std::max(magComm, std::abs(a.re) + std::abs(a.im));
       magMet = std::max(magMet, std::abs(b.re) + std::abs(b.im));
       Cx dist{a.re * drVal[0] + b.re * drVal[1], a.im * drVal[0] + b.im * drVal[1]};
-      double e = std::max(cdiff(nm::ndetail::eval(dpN, x, {}, drVal), dist), cdiff(nm::ndetail::eval(dpV, x, {}, drVal), dist));
+      double e = std::max(cdiff(nm::pdetail::eval(dpN, x, {}, drVal), dist), cdiff(nm::pdetail::eval(dpV, x, {}, drVal), dist));
       maxerr = std::max(maxerr, e);
       if (e >= 1e-10) ++worst;
     }
@@ -717,7 +718,7 @@ int main()
       for (double &v : x)
         v = U(rng);
       std::vector<double> drVal = {U(rng), U(rng), U(rng)};
-      double e = cdiff(nm::ndetail::eval(ref, x, {}, drVal), nm::ndetail::eval(asmb, x, {}, drVal));
+      double e = cdiff(nm::pdetail::eval(ref, x, {}, drVal), nm::pdetail::eval(asmb, x, {}, drVal));
       maxerr = std::max(maxerr, e);
       if (e >= 1e-10) ++worst;
     }
@@ -757,7 +758,7 @@ int main()
       std::vector<double> x(nsym);
       for (double &v : x)
         v = UU(rg);
-      const Cx got = nm::ndetail::eval(ab, x, {});
+      const Cx got = nm::pdetail::eval(ab, x, {});
       const double want = (x[0] + x[25]) * (x[3] + x[29]);
       maxerr = std::max(maxerr, std::fabs(got.re - want));
       if (std::fabs(got.re - want) >= 1e-10 || std::fabs(got.im) >= 1e-12) ++worst;
@@ -766,8 +767,8 @@ int main()
     std::vector<double> one(nsym, 0.0), neg(nsym, 0.0);
     one[7] = 1.0;
     neg[7] = -1.0;
-    const bool powOk = std::fabs(nm::ndetail::eval(hi, one, {}).re - 1.0) < 1e-12 &&
-                       std::fabs(nm::ndetail::eval(hi, neg, {}).re - 1.0) < 1e-12 && hi.size() == 1;
+    const bool powOk = std::fabs(nm::pdetail::eval(hi, one, {}).re - 1.0) < 1e-12 &&
+                       std::fabs(nm::pdetail::eval(hi, neg, {}).re - 1.0) < 1e-12 && hi.size() == 1;
 
     // (iii) ORDER: x_i must sort ascending in i across the inline→heap boundary, exactly as the old
     //       element-wise exponent-vector comparison did. Build Σ x_i and read the term order back.

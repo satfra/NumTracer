@@ -23,13 +23,13 @@
 /// so the engine is frame-agnostic.
 ///
 /// This header is the polynomial type alone; the 4×4 spinor matrix of `Poly` (`Mat4`) and the
-/// γ/slash builders that consume it live in `numeric/spinor_mat.hpp`.
+/// γ/slash builders that consume it live in `engine/spinor_mat.hpp`.
 #pragma once
 
 #include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
 #include "numtracer/core/cx.hpp"
-#include "numtracer/numeric/stats.hpp"
-#include "numtracer/numeric/tolerances.hpp" // kPolyDivRelTol
+#include "numtracer/core/stats.hpp"
+#include "numtracer/poly/tolerances.hpp" // kPolyDivRelTol
 #include "numtracer/third_party/gch/small_vector.hpp"
 
 #include <algorithm>
@@ -48,7 +48,12 @@
 #include <utility>
 #include <vector>
 
-namespace numtracer::inline numeric
+namespace numtracer::inline engine
+{
+  class Frame; // befriended by Poly / DPoly below; defined in engine/frame.hpp
+}
+
+namespace numtracer::inline poly
 {
 
   using numtracer::Cx;
@@ -283,8 +288,7 @@ namespace numtracer::inline numeric
   // ONLY sanctioned way to mint one is a @ref Frame (which holds a fixed `nsym`). @ref PolyFactory
   // is a tiny internal attorney that re-exposes the same factories to the trusted cross-header engine
   // code (contraction / trace-fold), which already threads a single `nsym` and must not route through a
-  // user-facing Frame. Only names are needed here; the definitions live below / in `numeric/frame.hpp`.
-  class Frame;
+  // user-facing Frame. Only names are needed here; the definitions live below / in `engine/frame.hpp`.
   struct PolyFactory;
 
   /// @brief Multivariate polynomial: monomial → complex coefficient, over `nsym` user symbols.
@@ -304,7 +308,7 @@ namespace numtracer::inline numeric
     // Sanctioned construction paths (see the note above @ref Poly). The Frame and the internal attorney
     // reach the nsym-taking ctor/factories; the in-header arithmetic operators construct result
     // polynomials directly (they already have a definite `nsym` from their operands).
-    friend class Frame;
+    friend class engine::Frame;
     friend struct PolyFactory;
     friend Poly operator+(const Poly &a, const Poly &b);
     friend Poly operator-(const Poly &a, const Poly &b);
@@ -1410,7 +1414,7 @@ namespace numtracer::inline numeric
   inline Poly operator-(double c, const Poly &p) { return PolyFactory::constant(p.nsym, Cx{c, 0}) - p; }
   inline Poly operator-(const Poly &p) { return PolyFactory::zero(p.nsym) - p; }
 
-  namespace ndetail
+  namespace pdetail
   {
     /// @brief Raw numeric evaluation: `x[i]` = user symbol i; `atomVal[aid]` = value of `1/D_aid`
     ///        (the caller supplies the reciprocal already evaluated). Prefer @ref Frame::eval, which
@@ -1439,7 +1443,7 @@ namespace numtracer::inline numeric
       }
       return s;
     }
-  } // namespace ndetail
+  } // namespace pdetail
 
   /// @brief Does every monomial of @p p carry an EVEN power of fundamental symbol @p sym?
   ///
@@ -1467,4 +1471,4 @@ namespace numtracer::inline numeric
     return true;
   }
 
-} // namespace numtracer::inline numeric
+} // namespace numtracer::inline poly

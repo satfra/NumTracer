@@ -13,8 +13,8 @@
 ///
 /// Index conventions: `mu = 0..3` corresponds to @f$\gamma^1..\gamma^4@f$; spinor
 /// indices `i, j = 0..3`. The values are stored as plain `constexpr` tables, read by
-/// `numeric/spinor_mat.hpp`, and
-/// are cross-checked against the Clifford algebra in `tests/test_numeric_contract.cpp`
+/// `engine/spinor_mat.hpp`, and
+/// are cross-checked against the Clifford algebra in `tests/test_contract.cpp`
 /// (sections A/F for the gammas, H for `kC` below) -- that test is the safety net for
 /// these tables, which nothing else would notice were wrong.
 #pragma once
@@ -58,7 +58,7 @@ inline constexpr Cx kGamma5[4][4] = {{Cx{1, 0}, Cx{0, 0}, Cx{0, 0}, Cx{0, 0}},
 /// @brief The charge-conjugation matrix @f$C = \gamma^2\gamma^4@f$ in this (Euclidean, Weyl) basis.
 ///
 /// Defined so that it satisfies the standard identities, all verified against these tables in
-/// `tests/test_numeric_contract.cpp` section H:
+/// `tests/test_contract.cpp` section H:
 /// @f[
 ///   C^T = C^{-1} = -C^\dagger = -C, \qquad
 ///   C\gamma_\mu^T C^{-1} = -\gamma_\mu, \qquad

@@ -5,7 +5,7 @@
 /// against the INTEGRATED numeric-vs-FORM error, not a pointwise round-off floor.
 #pragma once
 
-namespace numtracer::inline numeric
+namespace numtracer::inline poly
 {
   /// @brief Relative noise-prune tolerance: a monomial whose |coefficient| is below this fraction of
   ///        the largest coefficient is round-off from the numeric frame (a ~10-order gap separates it
@@ -22,4 +22,4 @@ namespace numtracer::inline numeric
   ///        These factors are exact rationals (× generator traces), so anything this small is the
   ///        √3 round-off the generator-table arithmetic leaves behind, well below any genuine value.
   inline constexpr double kZeroSnapTol = 1e-9;
-} // namespace numtracer::numeric
+} // namespace numtracer::inline poly

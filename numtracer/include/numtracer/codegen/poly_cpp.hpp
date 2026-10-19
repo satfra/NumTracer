@@ -1,14 +1,14 @@
-/// @file numeric_driver.hpp
+/// @file poly_cpp.hpp
 /// @brief Render an @ref Poly (a projector denominator `k²`, or any component expression) as a C++
 ///        expression in the user symbol names, for the generator's `FillFormulas` — the
 ///        `inv(atom) = 1/k²` and `var(k) = <name>` slots, including the (Re, Im) halves of a COMPLEX
 ///        `1/k²` (a finite-density frame; see @ref inv_fill_cpp).
 ///
 /// The contraction driver itself is `contract_traces` + `fold_groups_streaming`
-/// (numeric/trace_fold.hpp), emitted by mathematica/CodegenGenerator.m.
+/// (engine/trace_fold.hpp), emitted by mathematica/CodegenGenerator.m.
 #pragma once
 
-#include "numtracer/numeric/mpoly.hpp"
+#include "numtracer/poly/mpoly.hpp"
 #include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
 #include "numtracer/codegen/precision.hpp"
 #include "numtracer/codegen/gen.hpp" // network::GlobalEnv (mark_complex_atoms)
@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-namespace numtracer::inline numeric {
+namespace numtracer::inline network {
 
 /// @brief An imaginary part above this is a genuine complex coefficient (not round-off).
 inline constexpr double kRealCoeffTol = 1e-12;
@@ -108,4 +108,4 @@ inline void mark_complex_atoms(network::GlobalEnv &g, const std::vector<Poly> &a
     }
 }
 
-} // namespace numtracer::numeric
+} // namespace numtracer::inline network

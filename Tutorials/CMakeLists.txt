@@ -33,13 +33,13 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# An install older than this checkout lacks the API the tutorials use (numeric/frame.hpp). Look at
+# An install older than this checkout lacks the API the tutorials use (engine/frame.hpp). Look at
 # its headers BEFORE importing it: once its targets are imported, the in-tree fallback cannot be added.
 set(_nt_try_installed TRUE)
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../numtracer/CMakeLists.txt)
   find_path(_nt_installed_inc numtracer/numtracer.hpp HINTS $ENV{HOME}/.local/share/NumTracer/include
             NO_DEFAULT_PATH)
-  if(_nt_installed_inc AND NOT EXISTS ${_nt_installed_inc}/numtracer/numeric/frame.hpp)
+  if(_nt_installed_inc AND NOT EXISTS ${_nt_installed_inc}/numtracer/engine/frame.hpp)
     message(WARNING "The installed NumTracer (${_nt_installed_inc}) predates this checkout; using the "
                     "in-tree library. Re-install: cmake --install numtracer/build")
     set(_nt_try_installed FALSE)

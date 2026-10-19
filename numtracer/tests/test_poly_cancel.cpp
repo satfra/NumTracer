@@ -1,4 +1,4 @@
-// Correctness gate for the inverse-atom CANCELLATION passes in numeric/mpoly.hpp:
+// Correctness gate for the inverse-atom CANCELLATION passes in poly/mpoly.hpp:
 //   divThroughMonomialAtoms — denominator is a single monomial (bare/unit-direction loop)
 //   divThroughPolyAtoms     — denominator is a genuine polynomial (shifted line, k² non-monomial)
 //
@@ -20,17 +20,17 @@
 //      1.5-2.5x MORE emitted SSA on 8/8 flows, precisely because it splits one group into two. It
 //      passed value preservation the whole time. Term count is the invariant that catches it.
 //   4. IDEMPOTENCE. Both passes are documented as running to a fixed point.
-#include "numtracer/numeric/frame.hpp"
+#include "numtracer/engine/frame.hpp"
 #include "engine_test_util.hpp"
 using namespace numtracer; // the typed builders (LorentzIndex, Momentum, …) the tests spell unqualified
-#include "numtracer/numeric/mpoly.hpp"
+#include "numtracer/poly/mpoly.hpp"
 
 #include <cmath>
 #include <cstdio>
 #include <random>
 #include <vector>
 
-namespace nm = numtracer::numeric;
+namespace nm = numtracer;
 using numtracer::Cx;
 
 static int g_fails = 0;
@@ -60,11 +60,11 @@ static bool evalAt(const nm::Poly &p, const std::vector<double> &x, const std::v
 {
   std::vector<double> inv(atomDen.size(), 0.0);
   for (std::size_t a = 0; a < atomDen.size(); ++a) {
-    const Cx d = nm::ndetail::eval(atomDen[a], x, {});
+    const Cx d = nm::pdetail::eval(atomDen[a], x, {});
     if (std::fabs(d.re) < 1e-3 || std::fabs(d.im) > 1e-12) return false;
     inv[a] = 1.0 / d.re;
   }
-  out = nm::ndetail::eval(p, x, inv);
+  out = nm::pdetail::eval(p, x, inv);
   return true;
 }
 

@@ -27,8 +27,10 @@
 #pragma once
 
 #include "numtracer/codegen/gen.hpp"              // GlobalEnv / FillFormulas / emit_fill
-#include "numtracer/numeric/numeric_contract.hpp" // Poly/DPoly/Mat4, LorentzNet, DiracChain, ndetail::contract*
-#include "numtracer/numeric/numeric_driver.hpp"   // poly_to_cpp
+#include "numtracer/engine/contract.hpp"         // Poly/Mat4, LorentzNet, DiracChain, ndetail::contract
+#include "numtracer/engine/contract_dressed.hpp" // DSlot/DChainTok, ndetail::contract_dressed/_structural
+#include "numtracer/codegen/lower_poly.hpp"      // to_genprog
+#include "numtracer/codegen/poly_cpp.hpp"   // poly_to_cpp
 
 #include <algorithm>
 #include <array>
@@ -43,10 +45,10 @@
 #include <utility>
 #include <vector>
 
-namespace numtracer::inline numeric
+namespace numtracer::inline engine
 {
 
-  // Forward declarations of the host-only trace-fold templates (`numeric/trace_fold.hpp`). That header
+  // Forward declarations of the host-only trace-fold templates (`engine/trace_fold.hpp`). That header
   // spawns threads and is forbidden in the -fno-exceptions net-builder TUs, so `frame.hpp` must NOT
   // include it. The @ref Frame methods that forward here are member templates whose bodies are only
   // instantiated in the generator's main TU, where `trace_fold.hpp` is already included — so these
@@ -200,7 +202,7 @@ namespace numtracer::inline numeric
 
     /// The slashed 4×4 matrix of a momentum given by its components.
     /// @warning Freezes the symbol list
-    Mat4 slashC(const std::array<Poly, 4> &comp) const { return ::numtracer::numeric::slashC(frozen_nsym(), comp); }
+    Mat4 slashC(const std::array<Poly, 4> &comp) const { return ::numtracer::engine::slashC(frozen_nsym(), comp); }
 
     // ── momenta and indices ──────────────────────────────────────────────────────────────────────
 
@@ -380,7 +382,7 @@ namespace numtracer::inline numeric
     }
 
     /// The polynomial's value at @p pt; the projector denominators it carries are evaluated there too.
-    Cx eval(const Poly &p, const Point &pt) const { return ndetail::eval(p, checked(pt).x, atom_values(pt, {&p})); }
+    Cx eval(const Poly &p, const Point &pt) const { return pdetail::eval(p, checked(pt).x, atom_values(pt, {&p})); }
 
     /// A dressed polynomial's value; `dressings[id]` is the value of dressing `id`.
     Cx eval(const DPoly &p, const Point &pt, const std::vector<double> &dressings) const
@@ -388,7 +390,7 @@ namespace numtracer::inline numeric
       std::vector<const Poly *> parts;
       for (const auto &[d, mp] : p.terms)
         parts.push_back(&mp);
-      return ndetail::eval(p, checked(pt).x, atom_values(pt, parts), dressings);
+      return pdetail::eval(p, checked(pt).x, atom_values(pt, parts), dressings);
     }
 
     // ── lowering to C++ ──────────────────────────────────────────────────────────────────────────
@@ -456,7 +458,7 @@ namespace numtracer::inline numeric
     // ── trace-fold phases (generated code; member templates over the free templates above) ────────
     template <class P, class TraceFn> std::vector<P> contract_traces(long nCache, unsigned W, TraceFn &&trace) const
     {
-      return ::numtracer::numeric::contract_traces<P>(nsym(), nCache, W, std::forward<TraceFn>(trace));
+      return ::numtracer::engine::contract_traces<P>(nsym(), nCache, W, std::forward<TraceFn>(trace));
     }
 
     /// Streaming phase B: folds each group's nets on demand and drains straight to `sink`, so no net
@@ -467,7 +469,7 @@ namespace numtracer::inline numeric
                           const std::vector<std::vector<int>> &groups, const std::vector<P> &traceTable, long nCache,
                           unsigned W, long window, TraceFn &&trace, ScaleFn &&scale, Sink &&sink) const
     {
-      ::numtracer::numeric::fold_groups_streaming<P>(nsym(), traceIdx, subScale, groups, traceTable, nCache, W, window,
+      ::numtracer::engine::fold_groups_streaming<P>(nsym(), traceIdx, subScale, groups, traceTable, nCache, W, window,
                                                      std::forward<TraceFn>(trace), std::forward<ScaleFn>(scale),
                                                      std::forward<Sink>(sink));
     }
@@ -482,7 +484,7 @@ namespace numtracer::inline numeric
                                        long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
                                        Sink &&sink) const
     {
-      ::numtracer::numeric::fold_groups_streaming_dressed(nsym(), traceIdx, subScale, subDress, groups, traceTable,
+      ::numtracer::engine::fold_groups_streaming_dressed(nsym(), traceIdx, subScale, subDress, groups, traceTable,
                                                           nCache, W, window, std::forward<TraceFn>(trace),
                                                           std::forward<ScaleFn>(scale), std::forward<Sink>(sink));
     }
@@ -566,7 +568,7 @@ namespace numtracer::inline numeric
       if (a < 0 || static_cast<std::size_t>(a) >= atomDen_.size() || atomDen_[static_cast<std::size_t>(a)].empty())
         NT_THROW(std::invalid_argument,
                  ("Frame::eval: atom " + std::to_string(a) + " is not registered in this frame").c_str());
-      return ndetail::eval(atomDen_[static_cast<std::size_t>(a)], pt.x, {});
+      return pdetail::eval(atomDen_[static_cast<std::size_t>(a)], pt.x, {});
     }
 
     /// `1/k²` of atom @p a at @p pt; refuses an unregistered atom and a vanishing denominator.
@@ -674,4 +676,4 @@ namespace numtracer::inline numeric
   inline Poly operator*(double c, Symbol s) { return c * Poly(s); }
   inline Poly operator*(Symbol s, double c) { return c * Poly(s); }
 
-} // namespace numtracer::inline numeric
+} // namespace numtracer::inline engine

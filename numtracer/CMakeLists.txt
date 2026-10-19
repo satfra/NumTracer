@@ -66,7 +66,7 @@ endif()
 # functions are declared in the headers and defined once in src/numtracer.cpp (see core/export.hpp).
 # This affects only how the engine ships; the kernel it *emits* stays standalone header-only C++.
 
-# The generator's parallel net fold (numeric/trace_fold.hpp) spawns std::threads, and sun_net.hpp
+# The generator's parallel net fold (engine/trace_fold.hpp) spawns std::threads, and sun_net.hpp
 # takes a std::mutex, so every binary that links the engine needs the platform thread library. On
 # glibc >= 2.34 the pthread symbols are in libc and this is a no-op; on the older glibc that most
 # clusters still run, libstdc++'s std::thread anchor references pthread_create/pthread_join and the
@@ -253,10 +253,10 @@ if(NUMTRACER_BUILD_TESTS)
   set_tests_properties(color_su5 PROPERTIES PASS_REGULAR_EXPRESSION "^5\n")
   nt_add_test(test_sun_tables tests/test_sun_tables.cpp NAME sun_tables HEADER_ONLY)
 
-  # Numeric (matrix-product) contraction backend (numeric/*): Poly-entry gamma trace via 4x4
+  # Numeric (matrix-product) contraction backend (engine/*, poly/*): Poly-entry gamma trace via 4x4
   # matrix products + projector index-sum, vs chiral_gamma_trace and direct numeric contraction;
   # validates the monomial-vs-non-monomial projector-atom cancellation. The Part-B correctness gate.
-  nt_add_test(test_numeric_contract tests/test_numeric_contract.cpp NAME numeric_contract)
+  nt_add_test(test_contract tests/test_contract.cpp NAME contract)
 
   # Projector identities for the numeric backend: transverse P_T and longitudinal P_L factors
   # (nprojT / nprojL) checked against the 4x4 oracle and the algebraic identities (P_T+P_L=δ,
@@ -268,7 +268,7 @@ if(NUMTRACER_BUILD_TESTS)
   # structural folds (all symmetric slot variants, chains, traces, no-op negatives) + value-preserving.
   nt_add_test(test_projector_fusion tests/test_projector_fusion.cpp NAME projector_fusion)
 
-  # Dressing-collection layer (numeric/dpoly.hpp + the dressed contraction): DPoly arithmetic, the
+  # Dressing-collection layer (poly/dpoly.hpp + the dressed contraction): DPoly arithmetic, the
   # dressing-free reduction (DPoly == Poly path, same emitted program), and a dressed quark line
   # collected-vs-distributed. The symbolic-dressing-collection correctness gate.
   nt_add_test(test_dpoly tests/test_dpoly.cpp NAME dpoly)
@@ -301,7 +301,7 @@ if(NUMTRACER_BUILD_TESTS)
   # typed labels, SUN groups, and the lowered program run through interpret() against its polynomial.
   nt_add_test(test_frame tests/test_frame.cpp NAME frame)
 
-  # The generator's sub-term dedup (numeric/trace_fold.hpp): the balanced tree fold vs the left fold
+  # The generator's sub-term dedup (engine/trace_fold.hpp): the balanced tree fold vs the left fold
   # it replaces, and every trace-cache regime. This is the ONLY test that sees the fold: the dedup
   # needs many sub-terms per net, and every flow in tests/gen has exactly one — so the flow tests and
   # even the codegen test are blind to it. Includes a work bound (a botched carry still returns the

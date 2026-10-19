@@ -22,8 +22,8 @@
 //
 // k, a, b carry symbolic Poly components; each net is contracted once and evaluated at many points.
 // Build via the test CMake (adds -I include). Prints ALL TESTS PASSED / exits non-zero on failure.
-#include "numtracer/numeric/numeric_contract.hpp"
-#include "numtracer/numeric/frame.hpp"
+#include "numtracer/engine/contract.hpp"
+#include "numtracer/engine/frame.hpp"
 #include "engine_test_util.hpp"
 
 #include <array>
@@ -34,7 +34,7 @@
 
 using numtracer::Cx;
 using namespace numtracer;
-namespace nm = numtracer::numeric;
+namespace nm = numtracer;
 namespace network = numtracer::network;
 
 // 12 symbols: k = vars 0..3 (vid 0), a = vars 4..7 (vid 1), b = vars 8..11 (vid 2).
@@ -145,7 +145,7 @@ int main()
       if (mu > 0) ks2v += kk[mu] * kk[mu]; // |k⃗|² (spatial atom)
     }
     const std::vector<double> atomVal = {1.0 / k2v, 1.0 / ks2v};
-    auto E = [&](const nm::Poly &p) { return re(nm::ndetail::eval(p, x, atomVal)); };
+    auto E = [&](const nm::Poly &p) { return re(nm::pdetail::eval(p, x, atomVal)); };
 
     // oracle 4×4 projector matrices and double contractions (ks2v = |k⃗|² computed above)
     double PT[4][4], PL[4][4], PM[4][4], PE[4][4];

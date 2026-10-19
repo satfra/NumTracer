@@ -2,11 +2,11 @@
 /// @brief The closed gamma-chain tokens (@ref DFac / @ref DiracChain) the generator builds, plus
 ///        `dirac_value`, a Wick-pairing trace used as a TEST ORACLE.
 ///
-/// The production trace is `numeric_dirac` (numeric/numeric_contract.hpp): it multiplies the chain
+/// The production trace is `trace_dirac_loop` (engine/contract.hpp): it multiplies the chain
 /// as 4×4 Weyl-block matrices of polynomials and handles every token kind. `dirac_value` instead
 /// folds a FREE/SLASH-only chain into a Lorentz @ref LorentzNet (metrics / vectors over the free legs)
-/// by the Wick pairing recursion — an independent algorithm that tests/test_numeric_contract.cpp
-/// grades `numeric_dirac` against. It refuses every token kind it cannot trace.
+/// by the Wick pairing recursion — an independent algorithm that tests/test_contract.cpp
+/// grades `trace_dirac_loop` against. It refuses every token kind it cannot trace.
 ///
 /// A chain is a list of trace-ordered tokens (already cyclically closed by the front-end's
 /// `orderDiracFacs`, mathematica/CodegenNets.m): each is either a FREE gluon leg `γ^μ` (an open
@@ -59,7 +59,7 @@ namespace numtracer::inline network
     /// Where it does not, the network wants @f$M^T@f$ — that is not a gamma identity, it is what
     /// following the cycle means. The front-end walk (`orderDiracFacs`) knows which factors it
     /// entered backwards and marks them; this flag carries that marking. Handled entirely at
-    /// BLOCK-PRECOMPUTE time in `numeric_dirac`, so the fold itself is unaffected.
+    /// BLOCK-PRECOMPUTE time in `trace_dirac_loop`, so the fold itself is unaffected.
     ///
     /// Placed HERE, between `nu` and `vlc2`, so it lands in existing padding: sizeof(DFac) stays 64
     /// (72 at the end cost +1.4% instructions in the fold).
@@ -169,14 +169,14 @@ namespace numtracer::inline network
     // non-Gamma token as a slash and reads its `vlc`, which for a Comm (σ) built from two FREE legs
     // is EMPTY — vec_lc then folds to the zero 4-vector and the trace silently collapses. LoopSep is
     // not a gamma at all and would be paired as one. Neither can be traced here, so refuse them
-    // rather than return a plausible-looking wrong answer. (The production engine, numeric_dirac,
+    // rather than return a plausible-looking wrong answer. (The production engine, trace_dirac_loop,
     // handles both.)
     for (const DFac &d : chain)
       if (d.kind == DFac::Comm)
         NT_THROW(std::runtime_error,
                  "dirac_value: chain contains a Comm (sigma) token, which the Wick-pairing "
                  "recursion cannot trace (pair_factor would read its empty vlc and silently "
-                 "collapse the trace). Use numeric_dirac for sigma-bearing chains.");
+                 "collapse the trace). Use trace_dirac_loop for sigma-bearing chains.");
       else if (d.kind == DFac::LoopSep)
         NT_THROW(std::runtime_error,
                  "dirac_value: chain contains a LoopSep marker — split the chain into its "
@@ -185,19 +185,19 @@ namespace numtracer::inline network
         NT_THROW(std::runtime_error,
                  "dirac_value: chain contains a TRANSPOSED token. The Wick-pairing recursion pairs "
                  "factors by the Clifford algebra and has no notion of a factor's index order, so it "
-                 "would silently trace the untransposed factor. Use numeric_dirac.");
+                 "would silently trace the untransposed factor. Use trace_dirac_loop.");
       else if (d.kind == DFac::Gamma5)
         NT_THROW(std::runtime_error,
                  "dirac_value: chain contains a gamma5 token. The Wick-pairing recursion knows only "
                  "the four Clifford generators — pair_factor would read gamma5's empty vlc as a "
-                 "zero slash and silently return a wrong trace. Use numeric_dirac.");
+                 "zero slash and silently return a wrong trace. Use trace_dirac_loop.");
       else if (d.kind == DFac::C)
         NT_THROW(std::runtime_error,
                  "dirac_value: chain contains a charge-conjugation (C) token. The Wick-pairing "
                  "recursion knows only the Clifford algebra, and C is not a gamma — pair_factor "
-                 "would read its empty vlc and silently collapse the trace. Use numeric_dirac, "
+                 "would read its empty vlc and silently collapse the trace. Use trace_dirac_loop, "
                  "or fold C away in the front end before tracing here.");
-    // Gamma parity. Count ONLY the antidiagonal-block tokens, exactly as numeric_dirac does: a Comm
+    // Gamma parity. Count ONLY the antidiagonal-block tokens, exactly as trace_dirac_loop does: a Comm
     // is two gammas, a LoopSep none and a C two, so all contribute 0 mod 2. Keep the two counts in
     // step even though those kinds are refused above.
     std::size_t nAntidiag = 0;

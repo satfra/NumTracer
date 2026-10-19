@@ -17,34 +17,36 @@
 
 // Core: the constexpr complex NTTP, the compile-time constant carrier, the dense complex matrix,
 // and the compiled-vs-header-only export gate.
-#include "numtracer/core/cx.hpp"      // IWYU pragma: export
-#include "numtracer/core/lit.hpp"     // IWYU pragma: export
-#include "numtracer/core/cmat.hpp"    // IWYU pragma: export
-#include "numtracer/core/export.hpp"  // IWYU pragma: export
+#include "numtracer/core/cmat.hpp"   // IWYU pragma: export
+#include "numtracer/core/cx.hpp"     // IWYU pragma: export
+#include "numtracer/core/export.hpp" // IWYU pragma: export
+#include "numtracer/core/lit.hpp"    // IWYU pragma: export
 
 // Typed-out tables (cross-checked against the runtime oracles): Euclidean Weyl gamma matrices and
 // the SU(2)/SU(3) structure/generator data.
 #include "numtracer/dirac/dirac_data.hpp" // IWYU pragma: export
-#include "numtracer/sun/sun_data.hpp"      // IWYU pragma: export
+#include "numtracer/sun/sun_data.hpp"     // IWYU pragma: export
 
 // Tensor network: the generic network, the Dirac-chain tokens, and the numeric SU(N) fold.
-#include "numtracer/network/network.hpp" // IWYU pragma: export
 #include "numtracer/network/dirac.hpp"   // IWYU pragma: export
+#include "numtracer/network/network.hpp" // IWYU pragma: export
 #include "numtracer/network/sun_net.hpp" // IWYU pragma: export
 
 // Numeric contraction engine: the polynomial types, the 4x4 chiral spinor trace, the contractor,
 // and the all-diagram driver.
-#include "numtracer/numeric/mpoly.hpp"            // IWYU pragma: export
-#include "numtracer/numeric/dpoly.hpp"            // IWYU pragma: export
-#include "numtracer/numeric/spinor_mat.hpp"       // IWYU pragma: export
-#include "numtracer/numeric/numeric_contract.hpp" // IWYU pragma: export
-#include "numtracer/numeric/numeric_driver.hpp"   // IWYU pragma: export
-#include "numtracer/numeric/frame.hpp"            // IWYU pragma: export
+#include "numtracer/codegen/lower_poly.hpp"      // IWYU pragma: export
+#include "numtracer/codegen/poly_cpp.hpp"        // IWYU pragma: export
+#include "numtracer/engine/contract.hpp"         // IWYU pragma: export
+#include "numtracer/engine/contract_dressed.hpp" // IWYU pragma: export
+#include "numtracer/engine/frame.hpp"            // IWYU pragma: export
+#include "numtracer/engine/spinor_mat.hpp"       // IWYU pragma: export
+#include "numtracer/poly/dpoly.hpp"              // IWYU pragma: export
+#include "numtracer/poly/mpoly.hpp"              // IWYU pragma: export
 
 // Codegen: the real-SSA CSE, the Poly lowering, the emitter, and the emitted-kernel support layer
 // (numtracer::complex / numtracer::compute) that a generated kernel compiles against.
-#include "numtracer/codegen/real_cse.hpp" // IWYU pragma: export
-#include "numtracer/codegen/lower.hpp"    // IWYU pragma: export
-#include "numtracer/codegen/gen.hpp"      // IWYU pragma: export
-#include "numtracer/codegen/runtime.hpp"  // IWYU pragma: export
+#include "numtracer/codegen/gen.hpp"       // IWYU pragma: export
 #include "numtracer/codegen/interpret.hpp" // IWYU pragma: export
+#include "numtracer/codegen/lower.hpp"     // IWYU pragma: export
+#include "numtracer/codegen/real_cse.hpp"  // IWYU pragma: export
+#include "numtracer/codegen/runtime.hpp"   // IWYU pragma: export

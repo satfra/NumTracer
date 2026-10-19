@@ -1,7 +1,7 @@
 # The numeric contraction engine
 
-> Headers: `numeric/{numeric_contract,mpoly}.hpp`,
-> `network/{network,dirac,sun_net}.hpp` · Namespaces: `numtracer::numeric`, `numtracer::network`
+> Headers: `engine/{contract,contract_dressed}.hpp`, `codegen/lower_poly.hpp`, `poly/mpoly.hpp`,
+> `network/{network,dirac,sun_net}.hpp` · Namespaces: `numtracer::engine`, `numtracer::poly`, `numtracer::network`
 
 This is the heart of how NumTracer generates a kernel. Given one diagram — a closed Dirac chain, a
 pure-Lorentz network of projectors and metrics, and an SU($N$) network — it contracts everything
@@ -17,13 +17,13 @@ Neither intermediate is ever formed. The result is already a small polynomial.
 
 ## The polynomial it works in
 
-`numeric/mpoly.hpp` defines `Poly`, the arithmetic currency of the whole engine: a multivariate
+`poly/mpoly.hpp` defines `Poly`, the arithmetic currency of the whole engine: a multivariate
 polynomial over the frame's scalar symbols that also tracks surviving inverse propagator
 denominators `1/k²`. Everything below produces and combines `Poly`s through addition,
 multiplication, monomial-level cancellation of `k²·(1/k²)` (`divThroughMonomialAtoms`), and
 collection of equal-momentum propagator groups (`reduce_units`).
 
-Every `Poly` (and `DPoly`) is minted through a `numtracer::Frame` (`numeric/frame.hpp`), which
+Every `Poly` (and `DPoly`) is minted through a `numtracer::Frame` (`engine/frame.hpp`), which
 fixes the symbol list — and with it the symbol-space size `nsym` — **once**: you write
 `frame.mono(...)`, `frame.inv_denominator(...)`, `frame.var(i)`, `frame.zero()`, and contract with
 `frame.trace(...)`. Because the frame carries `nsym`, the raw size-taking factories never appear in
@@ -93,7 +93,7 @@ passes decide whether the factor dies or lives.
 that exact pattern — a sorted multiset of runtime-call ids carried on each term — for structures
 that must stay symbolic to the end of the trace rather than cancel:
 
-* **`DPoly`** (`numeric/dpoly.hpp`) — a **dressed Dirac numerator** like `Mq·δ + Z(p)·γ·p` is a
+* **`DPoly`** (`poly/dpoly.hpp`) — a **dressed Dirac numerator** like `Mq·δ + Z(p)·γ·p` is a
   *sum* of structures with runtime coefficients. Rather than distribute the diagram into `2^D`
   traces, the front-end keeps it eager and the engine collects one `DPoly`: a map from a
   **dressing-atom multiset** (`DMono`) to the kinematic `Poly` it multiplies. The coefficient
@@ -107,7 +107,7 @@ that must stay symbolic to the end of the trace rather than cancel:
   combinations that share a concrete Dirac structure and differ only in dressing collapse to **one**
   contraction — a 6.2× reduction in distinct traces on the dense quark–gluon flows, and what makes
   full-basis `ZAAqbq1` generate at all. The `DPoly` is then built in phase B, where
-  `fold_net_dressed` (`numeric/trace_fold.hpp`) routes each sub-term's scaled `Poly` into its
+  `fold_net_dressed` (`engine/trace_fold.hpp`) routes each sub-term's scaled `Poly` into its
   dressing channel. The alternative — collecting the `DPoly` during contraction
   (`Frame::trace` with slots, engine entry `ndetail::contract_dressed`) — is still the reference
   implementation and what `tests/test_dpoly.cpp` grades against, but it re-contracts once per
@@ -124,7 +124,7 @@ them would tax the hot undressed path and blur the "this factor can cancel" inva
 ## Step 1 — the Dirac trace as matrix products
 
 A closed Dirac chain is traced by **multiplying 4×4 matrices**, not by enumerating index
-pairings. `numeric/spinor_mat.hpp` builds each gamma `gammaC(mu)` and each slashed propagator
+pairings. `engine/spinor_mat.hpp` builds each gamma `gammaC(mu)` and each slashed propagator
 `slashC(components)` as a 4×4 matrix whose *entries are `Poly`s* (numeric gamma data, symbolic
 momenta), multiplies the chain with `matmul`, and reads off `mtrace`. Because the gamma matrices
 are Hermitian and chiral (block-antidiagonal in the Weyl basis), the products stay sparse and
@@ -139,7 +139,7 @@ carried through and contracted into the Lorentz network in the next step.
 The pure-Lorentz half of a diagram — metrics $\delta_{\mu\nu}$, vectors $a^\mu$, transverse
 projectors $P_{\mu\nu}(l)$, Levi-Civita $\varepsilon$ — is assembled with the
 builders (`metric`, `vec`, `projT`, … and `*`, `+`, scalar multiples) into a `LorentzNet`, and
-joined with the Dirac tensor from step 1. `numeric/numeric_contract.hpp` contracts it by
+joined with the Dirac tensor from step 1. `engine/contract.hpp` contracts it by
 **bounded variable elimination** (`eliminate` / `contract_factors`): it sums one shared Lorentz
 index at a time over its four values, each element evaluated through the frame's component table,
 so the work is bounded by the network's treewidth rather than by $2^{np}$. The result is a single
@@ -171,13 +171,13 @@ itself is unchanged, so flows without diagonal dressings are byte-identical.)
 
 ## Step 4 — out to the lowering
 
-Each diagram's `Poly` is handed to `to_genprog` (`numeric_contract.hpp`), which lowers it into
+Each diagram's `Poly` is handed to `to_genprog` (`codegen/lower_poly.hpp`), which lowers it into
 one shared fundamental-symbol environment (`network`'s `GlobalEnv`) via the
 [CSE + Horner lowering](cse-and-lowering.md), returning a `GenProg`. The emitted generator drives
-that over every diagram through the two parallel phases of `numeric/trace_fold.hpp`
+that over every diagram through the two parallel phases of `engine/trace_fold.hpp`
 (`contract_traces` then `fold_groups_streaming`), and prints the `trN(const double* f)` functions
 plus the `fill` that computes the frame symbols once per call. `poly_to_cpp`
-(`numeric/numeric_driver.hpp`) renders a momentum component or a propagator denominator as a C++
+(`codegen/poly_cpp.hpp`) renders a momentum component or a propagator denominator as a C++
 expression for the `fill` body.
 
 ## Why the kernel is compact and fast
@@ -190,7 +190,7 @@ intermediate blow-ups.
 Two cancellations then keep the emitted polynomial small, and they are where the compactness actually
 comes from:
 
-- **Unit-vector constraints** (`reduce_units`, `numeric/mpoly.hpp`). The loop momentum is written as
+- **Unit-vector constraints** (`reduce_units`, `poly/mpoly.hpp`). The loop momentum is written as
   magnitude × unit direction, so `ΣUμ² = 1` holds exactly; rewriting `U_last² → 1 − Σ_{μ<last} Uμ²`
   bounds the last component to power ≤ 1 and collapses the bare-loop denominator `Σ(l·Uμ)² = l²·ΣUμ²`
   to the monomial `l²`, which then cancels.

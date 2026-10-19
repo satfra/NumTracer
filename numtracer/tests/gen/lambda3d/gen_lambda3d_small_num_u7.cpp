@@ -8,7 +8,7 @@
 #include "numtracer/network/dirac.hpp"
 #include "numtracer/core/lit.hpp"
 #include <utility>
-#include "numtracer/numeric/numeric_contract.hpp"
+#include "numtracer/engine/contract_dressed.hpp"
 #include "numtracer/network/sun_net.hpp"
 #endif
 

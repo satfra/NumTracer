@@ -6,7 +6,7 @@
 #include "numtracer/network/network.hpp"
 #include "numtracer/network/dirac.hpp"
 #include <vector>
-#include "numtracer/numeric/numeric_contract.hpp"
+#include "numtracer/engine/contract_dressed.hpp"
 using namespace numtracer;
 const LorentzNet& lc0();
 const LorentzNet& lc1();

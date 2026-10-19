@@ -1420,7 +1420,7 @@ ntEmitGeneratorSources[coreNets_, restScalars_, colourNets_, groups_, ncomp_, fi
       ntLog["[prof] emitNumericGenerator: ", ntT, " s"]];
     declFile = StringReplace[genFile, ".cpp" -> "_nets.hh"];
 (* Precompiled-header source for the -O0 net-builder units. Deliberately a SUPERSET of what any
-   one unit includes (a unit skips numeric_contract.hpp when the flow has no dressed nets, and
+   one unit includes (a unit skips contract_dressed.hpp when the flow has no dressed nets, and
    sun_net.hpp when it is colour-free). The PCH is built once, so an unused header costs little. *)
     pchFile = StringReplace[genFile, ".cpp" -> "_pch.hh"];
     unitFiles = Table[StringReplace[genFile, ".cpp" -> "_u" <> ToString[u - 1] <> ".cpp"], {u, 1, Length[genUnits]}];
@@ -1435,7 +1435,7 @@ ntEmitGeneratorSources[coreNets_, restScalars_, colourNets_, groups_, ncomp_, fi
             "// net-builder units; see the NT_GEN_PCH guard in each unit TU.\n#pragma once\n" <>
             "#include \"numtracer/network/network.hpp\"\n#include \"numtracer/network/dirac.hpp\"\n" <>
             "#include \"numtracer/core/lit.hpp\"\n#include <utility>\n" <>
-            "#include \"numtracer/numeric/numeric_contract.hpp\"\n#include \"numtracer/network/sun_net.hpp\"\n"];
+            "#include \"numtracer/engine/contract_dressed.hpp\"\n#include \"numtracer/network/sun_net.hpp\"\n"];
 (* each unit #includes the shared decl header so its net builders can call the cross-unit CSE
    accessors (lc<k>()/dc<k>()) and sibling net builders, parsed once per TU. *)
           Module[{uInc = "#include \"" <> FileNameTake[declFile] <> "\"\n"},

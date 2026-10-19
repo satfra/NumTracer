@@ -14,7 +14,7 @@
 /// shape reached under a different coefficient would otherwise intern separately and be recomputed.
 /// @ref numtracer::network::gdetail::best_into in `codegen/gen.hpp` is what materialises that scalar
 /// (once per trace) and hands an ordinary slot to the numeric backend
-/// (@ref numtracer::numeric::to_genprog), which is also what builds the @ref LMono set.
+/// (@ref numtracer::network::to_genprog), which is also what builds the @ref LMono set.
 #pragma once
 
 #include "numtracer/codegen/real_cse.hpp"

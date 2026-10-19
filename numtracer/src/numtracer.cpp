@@ -12,8 +12,10 @@
 
 // Pulls the whole engine: numeric contraction + driver, SU(N) folding, lowering/CSE, polynomial
 // arithmetic. With NUMTRACER_COMPILING_LIB set, every split header emits its definitions here once.
-#include "numtracer/numeric/numeric_contract.hpp"
-#include "numtracer/numeric/numeric_driver.hpp"
+#include "numtracer/engine/contract.hpp"
+#include "numtracer/engine/contract_dressed.hpp"
+#include "numtracer/codegen/lower_poly.hpp"
+#include "numtracer/codegen/poly_cpp.hpp"
 #include "numtracer/network/sun_net.hpp"
 #include "numtracer/codegen/gen.hpp"
 

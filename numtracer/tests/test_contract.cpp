@@ -1,6 +1,6 @@
 // Part B (task #24): correctness gate for the numeric (matrix-product) contraction backend.
 //
-// Validates the engine in et/numeric/* against independent numeric ground truth:
+// Validates the engine in engine/* against independent numeric ground truth:
 //   A) all-slash Dirac chains tr(p̸₁…p̸_K), K=2..10, vs the chiral γ-trace oracle chiral_gamma_trace<K>;
 //   B) a free-leg chain closed by a metric, tr(γ^μ p̸ γ_μ q̸) = Σ_μ tr(γ^μ p̸ γ^μ q̸), vs a direct
 //      numeric 4×4 contraction;
@@ -14,8 +14,9 @@
 #include "numtracer/dirac/dirac_data.hpp"  // kGamma, kGamma5, kC
 #include "engine_test_util.hpp"
 using namespace numtracer; // the typed builders (LorentzIndex, Momentum, …) the tests spell unqualified
-#include "numtracer/numeric/frame.hpp"
-#include "numtracer/numeric/numeric_contract.hpp"
+#include "numtracer/engine/frame.hpp"
+#include "numtracer/engine/contract.hpp"
+#include "numtracer/engine/contract_dressed.hpp"
 
 #include <cmath>
 #include <array>
@@ -27,7 +28,7 @@ using namespace numtracer; // the typed builders (LorentzIndex, Momentum, …) t
 
 using numtracer::Cx;
 using numtracer::dirac::kGamma;
-namespace nm = numtracer::numeric;
+namespace nm = numtracer;
 namespace network = numtracer::network;
 
 // ---- tiny numeric 4×4 complex matrix ground truth -------------------------------------------
@@ -124,7 +125,7 @@ int main()
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
-    Cx sym = nm::ndetail::eval(tr, x, {});
+    Cx sym = nm::pdetail::eval(tr, x, {});
     // ground truth
     double P[12][4];
     for (int m = 0; m < K; ++m)
@@ -182,7 +183,7 @@ int main()
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
-    Cx sym = nm::ndetail::eval(tr, x, {});
+    Cx sym = nm::pdetail::eval(tr, x, {});
     double p[4], q[4];
     for (int mu = 0; mu < 4; ++mu) {
       p[mu] = x[static_cast<std::size_t>(mu)];
@@ -234,7 +235,7 @@ int main()
         k2v += kc[mu] * kc[mu];
     }
     std::vector<double> atomVal = {1.0 / k2v};
-    Cx sym = nm::ndetail::eval(tr, x, atomVal);
+    Cx sym = nm::pdetail::eval(tr, x, atomVal);
     // ground truth
     double p[4], q[4], kc[4] = {x[8], monomial ? 0.0 : x[9], 0, 0};
     for (int mu = 0; mu < 4; ++mu) {
@@ -280,7 +281,7 @@ int main()
     double k2v = x[8] * x[8] + x[9] * x[9];
     std::vector<double> atomVal(8, 0.0);
     atomVal[7] = 1.0 / k2v;
-    Cx sym = nm::ndetail::eval(tr, x, atomVal);
+    Cx sym = nm::pdetail::eval(tr, x, atomVal);
     double p[4], q[4], kc[4] = {x[8], x[9], 0, 0};
     for (int mu = 0; mu < 4; ++mu) {
       p[mu] = x[static_cast<std::size_t>(mu)];
@@ -324,10 +325,10 @@ int main()
       v = U(rng);
     std::vector<double> av(92, 0.0);
     for (int a : {90, 91}) {
-      double dv = nm::ndetail::eval(atomDen[static_cast<std::size_t>(a)], x, {}).re;
+      double dv = nm::pdetail::eval(atomDen[static_cast<std::size_t>(a)], x, {}).re;
       av[static_cast<std::size_t>(a)] = dv != 0 ? 1.0 / dv : 0.0;
     }
-    double err = cdiff(nm::ndetail::eval(mine, x, av), nm::ndetail::eval(ref, x, av));
+    double err = cdiff(nm::pdetail::eval(mine, x, av), nm::pdetail::eval(ref, x, av));
     std::printf("  monomials mine=%d ref=%d  |mine-ref|=%.2e  %s\n", mine.size(), ref.size(), err,
                 err < 1e-10 ? "ok" : "FAIL");
     if (!(err < 1e-10)) ++fails;
@@ -350,7 +351,7 @@ int main()
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
-    Cx sym = nm::ndetail::eval(tr, x, {});
+    Cx sym = nm::pdetail::eval(tr, x, {});
     double P[8][4];
     for (int m = 0; m < K; ++m)
       for (int mu = 0; mu < 4; ++mu)
@@ -392,7 +393,7 @@ int main()
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
-    Cx sym = nm::ndetail::eval(tr, x, {});
+    Cx sym = nm::pdetail::eval(tr, x, {});
     double P[4][4];
     for (int m = 0; m < 4; ++m)
       for (int mu = 0; mu < 4; ++mu)
@@ -434,11 +435,11 @@ int main()
     // G1) both-free [γ^a, γ^b]: rank-2 tensor T^{ab} = tr([γ^a,γ^b] p̸ q̸), 16 entries.
     {
       network::DiracChain chain = {network::comm(LorentzIndex{100}, LorentzIndex{101}), network::slash(Momentum{{{1.0, 0}}}), network::slash(Momentum{{{1.0, 1}}})};
-      auto T = nm::numeric_dirac(nsym, chain, comp);
+      auto T = nm::ndetail::trace_dirac_loop(nsym, chain, comp);
       double err = 0, maxabs = 0;
       for (int a = 0; a < 4; ++a)
         for (int b = 0; b < 4; ++b) {
-          Cx sym = nm::ndetail::eval(T.entries[static_cast<std::size_t>(a * 4 + b)], x, {});
+          Cx sym = nm::pdetail::eval(T.entries[static_cast<std::size_t>(a * 4 + b)], x, {});
           Cx num = nTrace(nMul(nMul(nCommM(nGamma(a), nGamma(b)), nSlash(p)), nSlash(q)));
           maxabs = std::max(maxabs, std::abs(num.re) + std::abs(num.im));
           err = std::max(err, cdiff(sym, num));
@@ -450,8 +451,8 @@ int main()
     // G2) both-slash [r̸, p̸]: scalar T = tr([r̸,p̸] p̸ q̸) (no open legs).
     {
       network::DiracChain chain = {network::comm(Momentum{{{1.0, 2}}}, Momentum{{{1.0, 0}}}), network::slash(Momentum{{{1.0, 0}}}), network::slash(Momentum{{{1.0, 1}}})};
-      auto T = nm::numeric_dirac(nsym, chain, comp);
-      Cx sym = nm::ndetail::eval(T.entries[0], x, {});
+      auto T = nm::ndetail::trace_dirac_loop(nsym, chain, comp);
+      Cx sym = nm::pdetail::eval(T.entries[0], x, {});
       Cx num = nTrace(nMul(nMul(nCommM(nSlash(r), nSlash(p)), nSlash(p)), nSlash(q)));
       double err = cdiff(sym, num);
       std::printf("  G2 slash/slash tr([r,p] p q): |num|=%.2e |sym-num|=%.2e %s\n", std::abs(num.re) + std::abs(num.im),
@@ -461,10 +462,10 @@ int main()
     // G3) free-slash [γ^a, r̸]: rank-1 tensor T^{a} = tr([γ^a,r̸] p̸ q̸), 4 entries.
     {
       network::DiracChain chain = {network::comm(LorentzIndex{100}, Momentum{{{1.0, 2}}}), network::slash(Momentum{{{1.0, 0}}}), network::slash(Momentum{{{1.0, 1}}})};
-      auto T = nm::numeric_dirac(nsym, chain, comp);
+      auto T = nm::ndetail::trace_dirac_loop(nsym, chain, comp);
       double err = 0, maxabs = 0;
       for (int a = 0; a < 4; ++a) {
-        Cx sym = nm::ndetail::eval(T.entries[static_cast<std::size_t>(a)], x, {});
+        Cx sym = nm::pdetail::eval(T.entries[static_cast<std::size_t>(a)], x, {});
         Cx num = nTrace(nMul(nMul(nCommM(nGamma(a), nSlash(r)), nSlash(p)), nSlash(q)));
         maxabs = std::max(maxabs, std::abs(num.re) + std::abs(num.im));
         err = std::max(err, cdiff(sym, num));
@@ -534,7 +535,7 @@ int main()
     say("C gamma_mu^T C^-1 == -gamma_mu (all mu)", okg);
     say("C gamma5^T C^-1 == +gamma5", nEq(nMul(nMul(C, nT(g5)), Cinv), g5));
     // C is block-DIAGONAL in the Weyl split: like gamma5 it must not flip the antidiagonal parity
-    // that numeric_dirac uses to zero odd traces, and it costs no full 2x2 multiply.
+    // that trace_dirac_loop uses to zero odd traces, and it costs no full 2x2 multiply.
     bool blockDiag = true;
     for (int i = 0; i < 4; ++i)
       for (int j = 0; j < 4; ++j)
@@ -573,7 +574,7 @@ int main()
     fails += fH;
   }
 
-  // ---- I) the DFac::C ENGINE token, traced by numeric_dirac, vs the same explicit 4x4 product. C is
+  // ---- I) the DFac::C ENGINE token, traced by trace_dirac_loop, vs the same explicit 4x4 product. C is
   //         block-diagonal like gamma5, so it must not flip the antidiagonal parity — I4 is the
   //         check that it does not (an odd gamma/slash count still traces to 0 with a C present). ---
   std::printf("\n== I: DFac::C engine token vs direct 4x4 ==\n");
@@ -709,7 +710,7 @@ int main()
               (m == mu) ? nm::PolyFactory::constant(nsym, Cx{1, 0}) : nm::PolyFactory::zero(nsym);
       nm::Poly tr = ntest::contract(env, chain, {}, comp, {});
       const std::vector<double> x(static_cast<std::size_t>(nsym), 0.0);
-      const Cx got = nm::ndetail::eval(tr, x, {});
+      const Cx got = nm::pdetail::eval(tr, x, {});
       ++tested;
       if (std::abs(truth.re) + std::abs(truth.im) > 1e-9) ++nonzero;
       if (cdiff(got, truth) > 1e-9) {
@@ -732,7 +733,7 @@ int main()
   //
   // A slot is a sum of chains, so (A1..An)^T = An^T..A1^T -- transposing one means reversing the
   // option's token list and transposing each token, which happens at the dress_enumerate splice
-  // (numeric_contract.hpp) rather than in the front end, because the slot caches key on the slot
+  // (contract_dressed.hpp) rather than in the front end, because the slot caches key on the slot
   // expression. Grade that splice against the explicitly reversed-and-transposed chain, which goes
   // through the ordinary (non-dressed) path and so shares none of the splice logic.
   std::printf("\n== K: transposed slot splice vs an explicit reversed chain ==\n");
@@ -762,7 +763,7 @@ int main()
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
-    const Cx a = nm::ndetail::eval(viaSlot, x, {}), b = nm::ndetail::eval(viaExplicit, x, {}), c = nm::ndetail::eval(viaPlain, x, {});
+    const Cx a = nm::pdetail::eval(viaSlot, x, {}), b = nm::pdetail::eval(viaExplicit, x, {}), c = nm::pdetail::eval(viaPlain, x, {});
     const double err = cdiff(a, b);
     std::printf("  dtrslot vs explicit reversed chain: |a|=%.3e |a-b|=%.3e %s\n",
                 std::abs(a.re) + std::abs(a.im), err, err < 1e-12 ? "ok" : "FAIL");

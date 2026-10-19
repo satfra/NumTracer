@@ -13,9 +13,9 @@
 // are not errors. Grading is against the scale of the terms involved, never pointwise-relative — a
 // structurally-zero contraction leaves fp residue in one form and an exact 0 in the other, and a
 // relative test would call that a 100% error.
-#include "numtracer/numeric/frame.hpp"
+#include "numtracer/engine/frame.hpp"
 #include "engine_test_util.hpp"
-#include "numtracer/numeric/numeric_contract.hpp"
+#include "numtracer/engine/contract.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -23,7 +23,7 @@
 #include <vector>
 
 using namespace numtracer;
-using namespace numtracer::numeric;
+using namespace numtracer;
 
 namespace
 {
@@ -79,7 +79,7 @@ namespace
     const double ks2 = x8[1] * x8[1] + x8[2] * x8[2] + x8[3] * x8[3];
     const std::vector<double> x(x8.begin(), x8.end());
     const std::vector<double> atomVal = {1.0 / k2, 1.0 / ks2};
-    return ndetail::eval(poly, x, atomVal).re;
+    return pdetail::eval(poly, x, atomVal).re;
   }
 
   /// Contract one Lorentz network, forcing either the dense or the rank-1 ProjE factorisation.
