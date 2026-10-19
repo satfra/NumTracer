@@ -90,6 +90,46 @@ int main() {
     rep("SU(5) d_fund loop (=5)", sun_value({sun5.delta(FundIndex{0}, FundIndex{1}), sun5.delta(FundIndex{1}, FundIndex{0})}), Cx{5, 0});
   }
 
+  // ---- symmetric d^{abc} = 2 tr({T^a,T^b} T^c): numeric net == analytic ----------------------
+  std::printf("[symmetric d^{abc} — numeric vs analytic]\n");
+  {
+    // d^{abc} d^{abc} = (N^2-4)(N^2-1)/N: SU(3) -> 40/3, SU(5) -> 504/5, SU(2) -> 0 (d vanishes).
+    auto dd = [](SUN &su) { return sun_value({su.d(AdjIndex{0}, AdjIndex{1}, AdjIndex{2}), su.d(AdjIndex{0}, AdjIndex{1}, AdjIndex{2})}); };
+    rep("SU(3) d.d closed (=40/3)", dd(sun3), Cx{40.0 / 3.0, 0});
+    rep("SU(5) d.d closed (=504/5)", dd(sun5), Cx{504.0 / 5.0, 0});
+    rep("SU(2) d.d closed (=0)", dd(sun2), Cx{0, 0});
+    // d is symmetric: permuting one factor's labels leaves d.d unchanged (f.f would flip sign).
+    rep("SU(3) d^{abc} d^{bca} (=40/3)", sun_value({sun3.d(AdjIndex{0}, AdjIndex{1}, AdjIndex{2}), sun3.d(AdjIndex{1}, AdjIndex{2}, AdjIndex{0})}), Cx{40.0 / 3.0, 0});
+    rep("SU(3) d^{abc} d^{bac} (=40/3)", sun_value({sun3.d(AdjIndex{0}, AdjIndex{1}, AdjIndex{2}), sun3.d(AdjIndex{1}, AdjIndex{0}, AdjIndex{2})}), Cx{40.0 / 3.0, 0});
+    // d^{acd} d^{bcd} δ^{ab}: the δ route through the union-find gives the same 40/3.
+    rep("SU(3) d^{acd} d^{bcd} δ^{ab} (=40/3)", sun_value({sun3.d(AdjIndex{0}, AdjIndex{2}, AdjIndex{3}), sun3.d(AdjIndex{1}, AdjIndex{2}, AdjIndex{3}), sun3.delta(AdjIndex{0}, AdjIndex{1})}), Cx{40.0 / 3.0, 0});
+    // f^{abc} d^{abc} = 0 (antisymmetric against symmetric).
+    rep("SU(3) f.d closed (=0)", sun_value({sun3.f(AdjIndex{0}, AdjIndex{1}, AdjIndex{2}), sun3.d(AdjIndex{0}, AdjIndex{1}, AdjIndex{2})}), Cx{0, 0});
+    // traceless: d^{aab} = 0, closed here against a second traceless d^{bcc}.
+    rep("SU(3) d^{aab} d^{bcc} (=0)", sun_value({sun3.d(AdjIndex{0}, AdjIndex{0}, AdjIndex{1}), sun3.d(AdjIndex{1}, AdjIndex{2}, AdjIndex{2})}), Cx{0, 0});
+    // tr(T^a T^b T^c) = (d^{abc} + i f^{abc})/4, so d^{abc} tr(T^a T^b T^c) = d.d/4: SU(3) -> 10/3.
+    // This goes through the generator traces, independently of the d table it is contracted against.
+    rep("SU(3) d T T T (=10/3)", sun_value({sun3.d(AdjIndex{0}, AdjIndex{1}, AdjIndex{2}), sun3.T(AdjIndex{0}, FundIndex{10}, FundIndex{11}), sun3.T(AdjIndex{1}, FundIndex{11}, FundIndex{12}), sun3.T(AdjIndex{2}, FundIndex{12}, FundIndex{10})}), Cx{10.0 / 3.0, 0});
+    rep("SU(5) d T T T (=126/5)", sun_value({sun5.d(AdjIndex{0}, AdjIndex{1}, AdjIndex{2}), sun5.T(AdjIndex{0}, FundIndex{10}, FundIndex{11}), sun5.T(AdjIndex{1}, FundIndex{11}, FundIndex{12}), sun5.T(AdjIndex{2}, FundIndex{12}, FundIndex{10})}), Cx{126.0 / 5.0, 0});
+    // f^{aij} f^{bjk} d^{cki} = -(N/2) d^{abc} [Tr(F^a F^b D^c) = (N/2) d^{abc}, (F^a)_{bc} = -i f^{abc}];
+    // closed against d^{abc}: -(N^2-4)(N^2-1)/2, SU(3) -> -20.
+    rep("SU(3) f f d . d (=-20)", sun_value({sun3.f(AdjIndex{0}, AdjIndex{3}, AdjIndex{4}), sun3.f(AdjIndex{1}, AdjIndex{4}, AdjIndex{5}), sun3.d(AdjIndex{2}, AdjIndex{5}, AdjIndex{3}), sun3.d(AdjIndex{0}, AdjIndex{1}, AdjIndex{2})}), Cx{-20, 0});
+    // Component-sensitive: the Gell-Mann d^{118} = d^{338} = 1/√3, d^{888} = -1/√3. In NumTracer's
+    // generator order λ1 is component 0, λ3 component 6, λ8 component 7 (see (g2) below). Each index
+    // is pinned by a diag_adj keeping only that component, with the unit dressing id 0.
+    auto dAt = [&](int a, int b, int c) {
+      auto keep = [](int comp) { std::vector<int> v(8, -1); v[comp] = 0; return v; };
+      const SUNPoly p = sun_value_dressed({sun3.d(AdjIndex{0}, AdjIndex{1}, AdjIndex{2}), sun3.diag(AdjIndex{0}, AdjIndex{0}, keep(a)),
+                                           sun3.diag(AdjIndex{1}, AdjIndex{1}, keep(b)), sun3.diag(AdjIndex{2}, AdjIndex{2}, keep(c))});
+      return p.empty() ? Cx{0, 0} : p[0].coeff;
+    };
+    const double invSqrt3 = 0.5773502691896258;
+    rep("SU(3) d^{118} (=1/√3)", dAt(0, 0, 7), Cx{invSqrt3, 0});
+    rep("SU(3) d^{338} (=1/√3)", dAt(6, 6, 7), Cx{invSqrt3, 0});
+    rep("SU(3) d^{888} (=-1/√3)", dAt(7, 7, 7), Cx{-invSqrt3, 0});
+    rep("SU(3) d^{123} (=0)", dAt(0, 1, 6), Cx{0, 0});
+  }
+
   // ---- backward compat: cf/cdelta (g defaulted to 3) ------
   std::printf("[backward-compat — committed adjoint nets via sun3.f()/sun3.deltaAdj()]\n");
   {
@@ -109,7 +149,7 @@ int main() {
   // ---- group-diagonal dressings: the fold returns a SUNPoly Σ_a c_a D_a, not a single number ----
   std::printf("[group-diagonal dressings — sun_value_dressed -> SUNPoly]\n");
   {
-    // A diag factor carries comp2dr: component v -> a dressing-id (-1 = drop). Here every component
+    // A diag factor carries componentDressing: component v -> a dressing-id (-1 = drop). Here every component
     // gets its own id (0..dim-1), so a leaf id names its component; D maps an id -> real value.
     auto arr = [](int dim) { std::vector<int> v(dim); for (int i = 0; i < dim; ++i) v[i] = i; return v; };
     // evaluate a SUNPoly at a dressing-id assignment D(id) -> real value.
@@ -166,7 +206,15 @@ int main() {
       rep("  D_i=i+1: 24*(1+2)=72", evalPoly(p, [](int i) { return i + 1.0; }), Cx{72, 0});
     }
 
-    // (e2) DROP: a component with comp2dr = -1 contributes nothing. Fund SU(3) loop dressing only
+    // (c2) d^{acd} d^{bcd} = (N^2-4)/N δ^{ab}: every adjoint component carries the same 5/3 (SU(3)), so
+    //      the dressed fold is (5/3) Σ_a Z_a. Exercises the d table on the dressed path.
+    {
+      SUNPoly p = sun_value_dressed({sun3.d(AdjIndex{0}, AdjIndex{1}, AdjIndex{2}), sun3.d(AdjIndex{3}, AdjIndex{1}, AdjIndex{2}), sun3.diag(AdjIndex{0}, AdjIndex{3}, arr(8))});
+      rep("SU(3) Σ_a Z_a d d, all Z=1 (=40/3)", evalPoly(p, ones), Cx{40.0 / 3.0, 0});
+      rep("SU(3) Σ_a Z_a d d  (Z_a=a+1, =60)", evalPoly(p, [](int a) { return a + 1.0; }), Cx{60, 0});
+    }
+
+    // (e2) DROP: a component with componentDressing = -1 contributes nothing. Fund SU(3) loop dressing only
     //      components 0 and 2 (id -1 on component 1) folds to D_0 + D_2, not D_0+D_1+D_2.
     {
       SUNPoly p = sun_value_dressed({sun3.diag(FundIndex{10}, FundIndex{11}, {0, -1, 2}), sun3.delta(FundIndex{11}, FundIndex{10})});

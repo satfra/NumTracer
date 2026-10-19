@@ -87,6 +87,7 @@ The two front-ends describe the *same* engine, so every DSL head has a C++ build
 | SU($N$) index labels | any symbols | `auto [a] = su.adjoint<1>(); auto [i, j] = su.fundamental<2>();` |
 | generator $(T^a)_{ij}$ | `ntSUNT[N, a, i, j]` | `su.T(a, i, j)` |
 | structure constant $f^{abc}$ | `ntSUNf[N, a, b, c]` | `su.f(a, b, c)` |
+| symmetric tensor $d^{abc}$ | `ntSUNd[N, a, b, c]` | `su.d(a, b, c)` |
 | adjoint / fundamental $\delta$ | `ntSUNDeltaAdj` / `ntSUNDeltaFund` | `su.delta(a, b)` / `su.delta(i, j)` |
 | contract | `NumTrace` + `MakeNTKernel` | `F.trace(chain, net)`, `F.contract(net)`, `su.value(net)` |
 

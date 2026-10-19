@@ -46,8 +46,9 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
       {{"their kernel parameters", Map[#["Signature"]["KernelParams"]&, fronts]},
        {"their constant() parameters", Map[#["Signature"]["ConstParams"]&, fronts]},
        {"their frame (fill arguments)", fronts[[All, "FillArgs"]]},
-       {"being real or complex", fronts[[All, "ComplexQ"]]}}];
-    complexQ = fronts[[1, "ComplexQ"]];
+(* Real and complex members can share the one end-projected body; the probe-verdict bodies cannot. *)
+       {"being real or complex", If[o["ComplexEndProjection"], {}, fronts[[All, "ComplexQ"]]]}}];
+    complexQ = AnyTrue[fronts[[All, "ComplexQ"]], TrueQ];
     parts = fronts[[All, "Partition"]];
     If[AnyTrue[parts, #["Split"]&], Message[MakeNTKernelGroupDiFfRG::split, groupName]; Abort[]];
     If[!SameQ @@ Map[#["FiniteExtent"]&, parts],
@@ -94,34 +95,37 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
       "\n"];
 
     (* -- the kernel: one body per probe verdict, each member taking the same branch -- *)
-    body = Function[{proj},
+    body = Function[{proj, transform},
       FunKit`MakeCppFunction[Map[proj[#] /. lookups["Rules"]&, ints], "Name" -> "kernel", "Prefix" -> o["Decorator"],
         "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> sig["KernelParams"], "Body" -> preamble,
-        "MultiReturn" -> multiReturn]];
+        "MultiReturn" -> multiReturn, "ReturnTransform" -> transform]];
     kernelFn =
       Which[
-        !complexQ, body[Identity],
-        o["ComplexEndProjection"], body[Global`ntRe[#]&],
+        !complexQ, body[Identity, Identity],
+(* ntRe goes on the returned values, not around the integrands: COEN finds no common subexpressions
+   in a list of outputs that are each one opaque ntRe[...] call, and then emits them unshared, which
+   for the QuarkMeson meson group exhausted 20 GB. *)
+        o["ComplexEndProjection"], body[Identity, Global`ntRe[#]&],
         o["RealOutput"],
 (* RePart is exact for a Pure (verdict 2) member too, so any mix of verdicts takes it; only verdict 0
    (genuinely complex) loses its imaginary part *)
           StringRiffle[{
             "#if " <> ntGroupVerdict[macros, "2"],
-            body[ntPureIntegrand],
+            body[ntPureIntegrand, Identity],
             "#else",
             "#  if " <> StringRiffle[("(" <> # <> " == 0)")& /@ macros, " || "],
             "#    warning \"NumTracer: a member of kernel group '" <> groupName <> "' probed GENUINELY COMPLEX (verdict 0) but was generated with RealOutput -> True; its imaginary part is discarded.\"",
             "#  endif",
-            body[ntRePartIntegrand],
+            body[ntRePartIntegrand, Identity],
             "#endif"}, "\n"],
         True,
           StringRiffle[{
             "#if " <> ntGroupVerdict[macros, "2"] <> "   // Pure: the Complex -> Re projection is exact",
-            body[ntPureIntegrand],
+            body[ntPureIntegrand, Identity],
             "#elif " <> StringRiffle[("(" <> # <> " != 0)")& /@ macros, " && "] <> "   // RePart, exact for every real member",
-            body[ntRePartIntegrand],
+            body[ntRePartIntegrand, Identity],
             "#elif " <> ntGroupVerdict[macros, "0"] <> "   // genuinely complex",
-            body[Identity],
+            body[Identity, Identity],
             "#else",
             "#error \"NumTracer: kernel group '" <> groupName <> "' mixes genuinely complex (verdict 0) and real members; generate them as separate flows.\"",
             "#endif"}, "\n"]];

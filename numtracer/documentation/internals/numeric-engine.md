@@ -155,7 +155,7 @@ keeping the heaviest gluon traces small.
 (sun-fold)=
 ## Step 3 — the SU($N$) fold
 
-A diagram's SU($N$) network — structure constants `f^{abc}`, adjoint and fundamental deltas,
+A diagram's SU($N$) network — structure constants `f^{abc}`, symmetric tensors `d^{abc}`, adjoint and fundamental deltas,
 generators `T^a` — is just a number once fully contracted. `network/sun_net.hpp`
 (`sun_value`) contracts it numerically at build time over the typed-out
 SU(N) tables, so the kernel never carries an SU($N$) tensor. Folding it to a number also lets
@@ -165,7 +165,7 @@ monomials from different diagrams merge (cross-diagram collection).
 When a network carries a **group-diagonal dressing** (`ntSUNDiagFund` / `ntSUNDiagAdj`), the
 SU($N$) fold keeps it as a polynomial instead of a single number: `sun_value_dressed` folds it to
 $\sum_a c_a Z_a(\text{scale})$ over the named runtime scalar dressings the `spec` selects (the
-$\delta$'s `comp2dr` map assigns each surviving component a dressing, and drops the rest). The Dirac
+$\delta$'s `componentDressing` map assigns each surviving component a dressing, and drops the rest). The Dirac
 trace is still contracted once; only the SU($N$) weight is left component-resolved. (`sun_value`
 itself is unchanged, so flows without diagonal dressings are byte-identical.)
 

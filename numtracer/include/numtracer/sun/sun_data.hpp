@@ -35,15 +35,16 @@ namespace numtracer::sun {
 /// @brief Internal helpers shared by the SU(N) builder and its typed-out tables.
 namespace sun_detail {
 
-/// @brief One nonzero adjoint structure constant @f$f^{abc} = v@f$.
+/// @brief One nonzero entry @f$t^{abc} = v@f$ of an adjoint 3-tensor: a structure constant @f$f^{abc}@f$
+///        or a symmetric @f$d^{abc}@f$.
 ///
-/// Used by both the runtime builder (`network/sun_net.hpp`) and the typed-out `constexpr` tables
+/// Used by both the runtime builder (`network/sun_net.hpp`) and the typed-out `constexpr` @f$f@f$ tables
 /// below.
 struct FEntry {
   int a;    ///< First adjoint index.
   int b;    ///< Second adjoint index.
   int c;    ///< Third adjoint index.
-  double v; ///< The structure-constant value @f$f^{abc}@f$.
+  double v; ///< The value @f$t^{abc}@f$.
 };
 
 } // namespace sun_detail

@@ -80,6 +80,8 @@ ntMagneticProj::usage = "ntMagneticProj[q, mu, nu] — finite-T magnetic (spatia
 
 ntSUNf::usage = "ntSUNf[N, a, b, c] — SU(N) structure constant f^{abc} (adjoint indices). The leading argument N is the SU(N) rank of the group the indices belong to.";
 
+ntSUNd::usage = "ntSUNd[N, a, b, c] — SU(N) totally symmetric tensor d^{abc} = 2 tr({T^a, T^b} T^c) (adjoint indices, rank N), i.e. {T^a, T^b} = delta^{ab}/N + d^{abc} T^c. Vanishes identically for SU(2). FunKit has no d token, so this head is written directly in the DSL.";
+
 ntSUNDeltaAdj::usage = "ntSUNDeltaAdj[N, a, b] — SU(N) adjoint Kronecker delta^{ab} (rank N).";
 
 ntSUNT::usage = "ntSUNT[N, a, i, j] — SU(N) fundamental generator (T^a)_{ij} (adjoint a, fundamental i,j; rank N).";

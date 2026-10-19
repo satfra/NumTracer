@@ -27,6 +27,7 @@ The DSL heads mirror the FORM/FormTracer vocabulary:
 | `ntTransProj[q, mu, nu]` | transverse projector $P^T_{\mu\nu}(q) = \delta_{\mu\nu} - q_\mu q_\nu / q^2$ |
 | `ntLongProj[q, mu, nu]` | longitudinal projector $P^L_{\mu\nu}(q) = q_\mu q_\nu / q^2$ |
 | `ntSUNf[N, a, b, c]` | SU(N) structure constant $f^{abc}$ (rank $N$) |
+| `ntSUNd[N, a, b, c]` | SU(N) totally symmetric tensor $d^{abc}$ (rank $N$) |
 | `ntSUNT[N, a, i, j]` | SU(N) fundamental generator $(T^a)_{ij}$ |
 | `ntSUNDeltaAdj[N, a, b]` | SU(N) adjoint $\delta^{ab}$ |
 | `ntSUNDeltaFund[N, i, j]` | SU(N) fundamental $\delta_{ij}$ |

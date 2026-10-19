@@ -1,14 +1,15 @@
 /// @file trace_fold.hpp
 /// @brief The generator's two contraction phases: contract each DISTINCT Dirac trace once (phase A),
-///        then fold each net's traces with its own scalars (phase B).
+///        then multiply each net's traces with their corresponding scalar factors (phase B). This avoids tracing
+///        identical Dirac chains repeatedly across nets, and phase A is a flat list of work items.
 ///
 /// The same `(dnet, lnet, dch, dsl)` trace recurs across nets and colour branches (5-7.5x on dense
 /// flows), so CodegenGenerator.m emits a table of the DISTINCT traces and, per net, the indices into
 /// it; this header contracts and folds that table. Two wins:
 ///
 ///  - **the contraction shrinks by the redundancy factor** — each distinct trace is contracted once;
-///  - **the parallel phase becomes a FLAT list of uniform work items.** Sub-terms per net are wildly
-///    skewed, so scheduling per *net* lets the single biggest net pin utilisation.
+///  - **the parallel phase becomes a FLAT list of uniform work items.** - scheduling per net would lead to wildly
+///  different workloads per thread, as both their sizes and complexity typically vary a lot.
 ///
 /// Phase B reduces each net as a **balanced binary-counter tree** rather than a left fold against a
 /// growing accumulator (heavy nets fold >1000 terms). Reassociating perturbs the emitted kernel only
@@ -18,8 +19,8 @@
 /// builder units are compiled `-fno-exceptions -fno-rtti` and must not see it.
 #pragma once
 
-#include "numtracer/numeric/dpoly.hpp"
 #include "numtracer/core/envvar.hpp" // env_flag / env_int — the single truth test for NT_* switches
+#include "numtracer/numeric/dpoly.hpp"
 #include "numtracer/numeric/mpoly.hpp"
 
 #include <algorithm>
@@ -81,7 +82,8 @@ namespace numtracer::inline numeric
     std::atomic<long> next{0};
     auto work = [&] {
       long i;
-      while ((i = next.fetch_add(1)) < n) f(i);
+      while ((i = next.fetch_add(1)) < n)
+        f(i);
     };
     std::vector<std::thread> pool;
     pool.reserve(nw - 1);
@@ -108,48 +110,69 @@ namespace numtracer::inline numeric
     std::size_t mxk = 0;
     for (std::size_t k = 0; k < tsec.size(); ++k) {
       tot += tsec[k];
-      if (tsec[k] > mx) { mx = tsec[k]; mxk = k; }
+      if (tsec[k] > mx) {
+        mx = tsec[k];
+        mxk = k;
+      }
     }
     // log10 histogram of per-trace wall times, buckets 10^-6..10^2 s
     int hist[9] = {0};
     for (double t : tsec) {
       int b = 0;
-      for (double edge = 1e-6; b < 8 && t >= edge; ++b, edge *= 10.0) {}
+      for (double edge = 1e-6; b < 8 && t >= edge; ++b, edge *= 10.0) {
+      }
       ++hist[b];
     }
     // top-10 traces by wall time
     std::vector<std::size_t> idx(tsec.size());
-    for (std::size_t k = 0; k < idx.size(); ++k) idx[k] = k;
+    for (std::size_t k = 0; k < idx.size(); ++k)
+      idx[k] = k;
     const std::size_t K = std::min<std::size_t>(10, idx.size());
     std::partial_sort(idx.begin(), idx.begin() + K, idx.end(),
                       [&](std::size_t a, std::size_t b) { return tsec[a] > tsec[b]; });
     double topK = 0;
-    for (std::size_t i = 0; i < K; ++i) topK += tsec[idx[i]];
+    for (std::size_t i = 0; i < K; ++i)
+      topK += tsec[idx[i]];
 
     const double ts = 1e-9; // ns → s
     const double sect = ts * (m.t_dirac + m.t_elem + m.t_contract + m.t_reduce + m.t_divmono + m.t_divpoly);
     auto pct = [&](stats::nt_u64 ns_) { return sect > 0 ? 100.0 * ts * ns_ / sect : 0.0; };
-    std::fprintf(stderr, "[stats] traces %llu  cpu %.1f s  max %.3f s (trace %zu)  top%zu %.1f s (%.1f%%)  makespan_lb(W=%u) %.1f s\n",
-                 (unsigned long long)m.traces, tot, mx, mxk, K, topK, tot > 0 ? 100.0 * topK / tot : 0.0, W,
-                 std::max(mx, W ? tot / W : tot));
-    std::fprintf(stderr, "[stats] wall hist (log10 s): <1u %d  1-10u %d  10-100u %d  0.1-1m %d  1-10m %d  10-100m %d  0.1-1s %d  1-10s %d  >10s %d\n",
+    std::fprintf(
+        stderr,
+        "[stats] traces %llu  cpu %.1f s  max %.3f s (trace %zu)  top%zu %.1f s (%.1f%%)  makespan_lb(W=%u) %.1f s\n",
+        (unsigned long long)m.traces, tot, mx, mxk, K, topK, tot > 0 ? 100.0 * topK / tot : 0.0, W,
+        std::max(mx, W ? tot / W : tot));
+    std::fprintf(stderr,
+                 "[stats] wall hist (log10 s): <1u %d  1-10u %d  10-100u %d  0.1-1m %d  1-10m %d  10-100m %d  0.1-1s "
+                 "%d  1-10s %d  >10s %d\n",
                  hist[0], hist[1], hist[2], hist[3], hist[4], hist[5], hist[6], hist[7], hist[8]);
-    std::fprintf(stderr, "[stats] split: dirac %.1f s (%.1f%%)  elem %.1f s (%.1f%%)  contract %.1f s (%.1f%%)  reduce %.1f s (%.1f%%)  divmono %.1f s (%.1f%%)  divpoly %.1f s (%.1f%%)\n",
+    std::fprintf(stderr,
+                 "[stats] split: dirac %.1f s (%.1f%%)  elem %.1f s (%.1f%%)  contract %.1f s (%.1f%%)  reduce %.1f s "
+                 "(%.1f%%)  divmono %.1f s (%.1f%%)  divpoly %.1f s (%.1f%%)\n",
                  ts * m.t_dirac, pct(m.t_dirac), ts * m.t_elem, pct(m.t_elem), ts * m.t_contract, pct(m.t_contract),
-                 ts * m.t_reduce, pct(m.t_reduce), ts * m.t_divmono, pct(m.t_divmono), ts * m.t_divpoly, pct(m.t_divpoly));
-    std::fprintf(stderr, "[stats] contract detail: score %.1f s (%.1f%%)  in-step reduce %.1f s (%.1f%%)  elim arith %.1f s (%.1f%%)  steps %llu\n",
+                 ts * m.t_reduce, pct(m.t_reduce), ts * m.t_divmono, pct(m.t_divmono), ts * m.t_divpoly,
+                 pct(m.t_divpoly));
+    std::fprintf(stderr,
+                 "[stats] contract detail: score %.1f s (%.1f%%)  in-step reduce %.1f s (%.1f%%)  elim arith %.1f s "
+                 "(%.1f%%)  steps %llu\n",
                  ts * m.t_cf_score, pct(m.t_cf_score), ts * m.t_cf_reduce, pct(m.t_cf_reduce),
                  ts * (m.t_contract - std::min(m.t_contract, m.t_cf_score + m.t_cf_reduce)),
-                 pct(m.t_contract - std::min(m.t_contract, m.t_cf_score + m.t_cf_reduce)), (unsigned long long)m.cf_steps);
-    std::fprintf(stderr, "[stats] mpoly: mul %llu (empty %llu, const %llu, keyed %llu, blocked %llu, prod-terms %llu)  add %llu (empty-copied %llu, empty-moved %llu)  from_scratch %llu (terms-in %llu)\n",
-                 (unsigned long long)m.mul_calls, (unsigned long long)m.mul_empty, (unsigned long long)m.mul_const, (unsigned long long)m.mul_keyed,
-                 (unsigned long long)m.mul_blocked,
+                 pct(m.t_contract - std::min(m.t_contract, m.t_cf_score + m.t_cf_reduce)),
+                 (unsigned long long)m.cf_steps);
+    std::fprintf(stderr,
+                 "[stats] mpoly: mul %llu (empty %llu, const %llu, keyed %llu, blocked %llu, prod-terms %llu)  add "
+                 "%llu (empty-copied %llu, empty-moved %llu)  from_scratch %llu (terms-in %llu)\n",
+                 (unsigned long long)m.mul_calls, (unsigned long long)m.mul_empty, (unsigned long long)m.mul_const,
+                 (unsigned long long)m.mul_keyed, (unsigned long long)m.mul_blocked,
                  (unsigned long long)m.mul_prod_terms, (unsigned long long)m.add_calls, (unsigned long long)m.add_empty,
                  (unsigned long long)m.add_moved, (unsigned long long)m.fs_calls, (unsigned long long)m.fs_terms_in);
-    std::fprintf(stderr, "[stats] reduce_units %llu calls (noop %llu) / %llu work-items  divmono %llu (noop %llu)  divpoly %llu (noop %llu, prefiltered %llu, trials %llu, exact %llu)\n",
+    std::fprintf(stderr,
+                 "[stats] reduce_units %llu calls (noop %llu) / %llu work-items  divmono %llu (noop %llu)  divpoly "
+                 "%llu (noop %llu, prefiltered %llu, trials %llu, exact %llu)\n",
                  (unsigned long long)m.ru_calls, (unsigned long long)m.ru_noop, (unsigned long long)m.ru_work,
-                 (unsigned long long)m.dma_calls, (unsigned long long)m.dma_noop, (unsigned long long)m.dpa_calls, (unsigned long long)m.dpa_noop,
-                 (unsigned long long)m.dpa_pref, (unsigned long long)m.dpa_trials, (unsigned long long)m.dpa_exact);
+                 (unsigned long long)m.dma_calls, (unsigned long long)m.dma_noop, (unsigned long long)m.dpa_calls,
+                 (unsigned long long)m.dpa_noop, (unsigned long long)m.dpa_pref, (unsigned long long)m.dpa_trials,
+                 (unsigned long long)m.dpa_exact);
     std::fprintf(stderr, "[stats] dirac: loops %llu (odd-skip %llu)  tokens %llu  4^f assignments %llu  mul2 %llu\n",
                  (unsigned long long)m.nd_calls, (unsigned long long)m.nd_odd_skip, (unsigned long long)m.nd_tokens,
                  (unsigned long long)m.nd_assign, (unsigned long long)m.mul2_calls);
@@ -168,8 +191,7 @@ namespace numtracer::inline numeric
   ///
   /// @param trace `trace(k) -> P`, the contraction of distinct trace `k`. Must be pure and safe to
   ///        call concurrently (Frame's const trace members only read the frame).
-  template <class P, class TraceFn>
-  std::vector<P> contract_traces(int nsym, long nCache, unsigned W, TraceFn &&trace)
+  template <class P, class TraceFn> std::vector<P> contract_traces(int nsym, long nCache, unsigned W, TraceFn &&trace)
   {
     std::vector<P> T(static_cast<std::size_t>(std::max(0L, nCache)), zero_like<P>(nsym));
 #if NT_PHASEA_STATS
@@ -221,8 +243,7 @@ namespace numtracer::inline numeric
   /// @brief The trace `idx`: the resident table entry if `idx < nCache`, else recomputed into
   ///        @p recomputed. Binds, never copies: the cached polynomials are used 5-8x each.
   template <class P, class TraceFn>
-  const P &resident_or_recompute(int idx, const std::vector<P> &traceTable, long nCache, TraceFn &trace,
-                                 P &recomputed)
+  const P &resident_or_recompute(int idx, const std::vector<P> &traceTable, long nCache, TraceFn &trace, P &recomputed)
   {
     if (idx < static_cast<int>(nCache)) return traceTable[static_cast<std::size_t>(idx)];
     recomputed = trace(idx);
@@ -282,8 +303,8 @@ namespace numtracer::inline numeric
   /// merge in CodegenGenerator.m has already collapsed each net's repeated traces into one scalar apiece.
   template <class P, class TraceFn>
   std::vector<P> fold_nets(int nsym, const std::vector<std::vector<int>> &traceIdx,
-                           const std::vector<std::vector<Cx>> &subScale, const std::vector<P> &traceTable,
-                           long nCache, unsigned W, TraceFn &&trace)
+                           const std::vector<std::vector<Cx>> &subScale, const std::vector<P> &traceTable, long nCache,
+                           unsigned W, TraceFn &&trace)
   {
     std::vector<P> mp(traceIdx.size(), zero_like<P>(nsym));
     parallel_flat(static_cast<long>(traceIdx.size()), W, [&](long i) {
@@ -324,23 +345,27 @@ namespace numtracer::inline numeric
   ///        without running a generator; @ref check_group_partition is the reporting wrapper.
   ///
   /// @ref fold_groups_streaming folds each group's members on demand, so it is only equivalent to
-  /// `fold_nets` + an eager group loop if `groups` PARTITIONS the nets — which CodegenKernel.m (ntGroupTraces) guarantees by
-  /// construction (`Complement`/`GatherBy` over all net indices). A duplicate would mean silently
-  /// folding a net twice; a gap would mean silently dropping one from the kernel. Both are cheap to
-  /// detect here and expensive to debug downstream.
-  inline bool group_partition_stats(const std::vector<std::vector<int>> &groups, long nNet, long &dup,
-                                    long &gap, long &oob)
+  /// `fold_nets` + an eager group loop if `groups` PARTITIONS the nets — which CodegenKernel.m (ntGroupTraces)
+  /// guarantees by construction (`Complement`/`GatherBy` over all net indices). A duplicate would mean silently folding
+  /// a net twice; a gap would mean silently dropping one from the kernel. Both are cheap to detect here and expensive
+  /// to debug downstream.
+  inline bool group_partition_stats(const std::vector<std::vector<int>> &groups, long nNet, long &dup, long &gap,
+                                    long &oob)
   {
     std::vector<int> cov(static_cast<std::size_t>(std::max(0L, nNet)), 0);
     dup = gap = oob = 0;
     for (const auto &grp : groups)
       for (int d : grp) {
-        if (d < 0 || d >= nNet) ++oob;
-        else ++cov[static_cast<std::size_t>(d)];
+        if (d < 0 || d >= nNet)
+          ++oob;
+        else
+          ++cov[static_cast<std::size_t>(d)];
       }
     for (int c : cov) {
-      if (c > 1) ++dup;
-      else if (c == 0) ++gap;
+      if (c > 1)
+        ++dup;
+      else if (c == 0)
+        ++gap;
     }
     return dup == 0 && gap == 0 && oob == 0;
   }
@@ -374,8 +399,8 @@ namespace numtracer::inline numeric
   /// The plain and dressed drivers differ only in how one net's polynomial is produced, which each
   /// passes as `foldScaledNet(netId) -> P`.
   template <class P, class FoldScaledFn, class Sink>
-  void fold_groups_streaming_impl(int nsym, const std::vector<std::vector<int>> &groups, unsigned W,
-                                  long window, FoldScaledFn &&foldScaledNet, Sink &&sink)
+  void fold_groups_streaming_impl(int nsym, const std::vector<std::vector<int>> &groups, unsigned W, long window,
+                                  FoldScaledFn &&foldScaledNet, Sink &&sink)
   {
     const long nG = static_cast<long>(groups.size());
     if (nG <= 0) return;
@@ -467,8 +492,8 @@ namespace numtracer::inline numeric
         // pre -> after-fold -> after-sink. The pre->fold delta is what the wave's nets plus the
         // concurrent trace contractions cost; the fold->sink delta is what lowering retained; and the
         // drift of `pre` across waves is what never comes back.
-        std::fprintf(stderr, "[num]   wave %ld: groups %ld..%ld, %zu nets, RSS %.0f -> %.0f -> %.0f MB\n",
-                     waveNo, g0, g1 - 1, flat.size(), rssPre, rssFold, rssMB());
+        std::fprintf(stderr, "[num]   wave %ld: groups %ld..%ld, %zu nets, RSS %.0f -> %.0f -> %.0f MB\n", waveNo, g0,
+                     g1 - 1, flat.size(), rssPre, rssFold, rssMB());
         std::fflush(stderr);
       }
       ++waveNo;
@@ -506,17 +531,15 @@ namespace numtracer::inline numeric
   /// @param trace as in @ref fold_net: pure and safe to call concurrently.
   template <class P, class TraceFn, class ScaleFn, class Sink>
   void fold_groups_streaming(int nsym, const std::vector<std::vector<int>> &traceIdx,
-                             const std::vector<std::vector<Cx>> &subScale,
-                             const std::vector<std::vector<int>> &groups, const std::vector<P> &traceTable,
-                             long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
-                             Sink &&sink)
+                             const std::vector<std::vector<Cx>> &subScale, const std::vector<std::vector<int>> &groups,
+                             const std::vector<P> &traceTable, long nCache, unsigned W, long window, TraceFn &&trace,
+                             ScaleFn &&scale, Sink &&sink)
   {
     fold_groups_streaming_impl<P>(
         nsym, groups, W, window,
         [&](int netId) {
           const auto netIdx = static_cast<std::size_t>(netId);
-          return scale(netId,
-                       fold_net<P>(nsym, traceIdx[netIdx], subScale[netIdx], traceTable, nCache, trace));
+          return scale(netId, fold_net<P>(nsym, traceIdx[netIdx], subScale[netIdx], traceTable, nCache, trace));
         },
         std::forward<Sink>(sink));
   }
@@ -530,18 +553,18 @@ namespace numtracer::inline numeric
   void fold_groups_streaming_dressed(int nsym, const std::vector<std::vector<int>> &traceIdx,
                                      const std::vector<std::vector<Cx>> &subScale,
                                      const std::vector<std::vector<DMono>> &subDress,
-                                     const std::vector<std::vector<int>> &groups,
-                                     const std::vector<Poly> &traceTable, long nCache, unsigned W,
-                                     long window, TraceFn &&trace, ScaleFn &&scale, Sink &&sink)
+                                     const std::vector<std::vector<int>> &groups, const std::vector<Poly> &traceTable,
+                                     long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
+                                     Sink &&sink)
   {
     fold_groups_streaming_impl<DPoly>(
         nsym, groups, W, window,
         [&](int netId) {
           const auto netIdx = static_cast<std::size_t>(netId);
-          return scale(netId, fold_net_dressed(nsym, traceIdx[netIdx], subScale[netIdx], subDress[netIdx],
-                                               traceTable, nCache, trace));
+          return scale(netId, fold_net_dressed(nsym, traceIdx[netIdx], subScale[netIdx], subDress[netIdx], traceTable,
+                                               nCache, trace));
         },
         std::forward<Sink>(sink));
   }
 
-} // namespace numtracer::numeric
+} // namespace numtracer::inline numeric

@@ -230,13 +230,13 @@ ntFoldDiagColourNets[colnetStrs_, includeDir_] :=
     num[s_] := ToExpression[StringReplace[s, {"e+" -> "*^", "e-" -> "*^-", "e" -> "*^"}]];
     src =
       StringJoin[
-        "#include \"numtracer/network/sun_net.hpp\"\n#include <cstdio>\n#include <vector>\n",
-        "using namespace numtracer;\n",
+        "#include \"numtracer/network/sun_net.hpp\"\n#include <cstdio>\n#include <vector>\n\n",
+        "using namespace numtracer;\n\n",
         "int main(){\n",
         (* one SUN group per distinct rank in the diag colour nets (colourFacStr emits `sun<n>.diag…` factors). *)
         StringJoin["  SUN sun" <> # <> "(" <> # <> ");\n"& /@ DeleteDuplicates @ Flatten @ StringCases[colnetStrs, "sun" ~~ r : DigitCharacter.. ~~ "." :> r]],
         "  std::vector<SUNNet> nets = {" <> StringRiffle[colnetStrs, ", "] <> "};\n",
-        "  for(std::size_t n=0;n<nets.size();++n){\n",
+        "  for(std::size_t n = 0; n < nets.size(); ++n) {\n",
         "    SUNPoly p = sun_value_dressed(nets[n]);\n",
         "    std::printf(\"NET %zu %zu\\n\", n, p.size());\n",
         "    for(const auto& t : p){\n",

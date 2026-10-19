@@ -176,6 +176,8 @@ DEFAULT_FLOWS=(
   gen_selftrace_numeric
   # Trace fusion of diag-dressed diagrams (ctest diagfuse_num). Cheap, hand-built.
   gen_diagfuse_numeric
+  # The SU(N) symmetric tensor ntSUNd (ctest dsym_num). Cheap, hand-built.
+  gen_dsym_numeric
 )
 FLOWS=("$@")
 [[ ${#FLOWS[@]} -eq 0 ]] && FLOWS=("${DEFAULT_FLOWS[@]}")

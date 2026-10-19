@@ -4,19 +4,19 @@
 // Three kernels (gen/gen_gluon_condensate.wls) share the same physics (a scalar sigma two-point from
 // a loop carrying a Dirac index and an SU(3)-adjoint index):
 //   * _plain : colour-blind δ^{ab} × a single scalar dressing ZAflat (folds δ^{aa}=8).
-//   * _diag  : ntSUNDiagAdj[3,a,b,{3->ZA3, 8->ZA8, Default->ZAoff}, s] — 3 & 8 named, the other 6
+//   * _diag  : ntSUNDiagAdj[3,a,b,{7->ZA3, 8->ZA8, Default->ZAoff}, s] — λ3 & λ8 named, the other 6
 //              collapsed into a shared ZAoff (all 8 components covered).
-//   * _cartan: ntSUNDiagAdj[3,a,b,{3->ZA3, 8->ZA8}, s] — only 3 & 8 survive, the other 6 DROP.
+//   * _cartan: ntSUNDiagAdj[3,a,b,{7->ZA3, 8->ZA8}, s] — only λ3 & λ8 (components 7 & 8) survive, the other 6 DROP.
 // The adjoint sum folds (via sun_value_dressed) to a runtime token, with the Dirac trace computed
 // ONCE (not one diagram per component). Validation needs no dense oracle:
 //   (1) COLLAPSE : feeding _diag one function for ZA3=ZA8=ZAoff reproduces the blind _plain kernel
 //                  exactly (Σ over 8 = 8 Z^2) — the named+Default sum covers the full group.
-//   (2) DROP     : _cartan (only 3 & 8, engine drops the rest) equals _diag with ZAoff≡0 — the two
-//                  distinct engine paths (comp2dr = -1 drop vs a zeroed Default dressing) agree.
+//   (2) DROP     : _cartan (only λ3 & λ8, engine drops the rest) equals _diag with ZAoff≡0 — the two
+//                  distinct engine paths (componentDressing = -1 drop vs a zeroed Default dressing) agree.
 //   (3) BREAK    : with genuinely distinct ZA3/ZA8, _cartan differs from the blind kernel, i.e. the
 //                  Cartan colours are dressed independently (not folded to one blind constant).
-#include "Gluon_condensate_cartan_kernel.hh" // Cartan-only (3 & 8), rest dropped              (gen/)
-#include "Gluon_condensate_diag_kernel.hh"   // 3 & 8 named + Default ZAoff for the other 6    (gen/)
+#include "Gluon_condensate_cartan_kernel.hh" // Cartan-only (λ3 & λ8), rest dropped            (gen/)
+#include "Gluon_condensate_diag_kernel.hh"   // λ3 & λ8 named + Default ZAoff for the other 6 (gen/)
 #include "Gluon_condensate_plain_kernel.hh"  // colour-blind δ^{ab} × scalar dressing          (gen/)
 #include "shim.hpp"                           // DiFfRG::Fn, ShimRegulator
 
@@ -56,7 +56,7 @@ int main()
     const double diagFlat = static_cast<double>(
         Diag::kernel(l1, c1, p, ZAflat, ZAflat, ZAflat, ZAflatDot, ZAflatDot, ZAflatDot));
     const double plain = static_cast<double>(Plain::kernel(l1, c1, p, ZAflat, ZAflatDot));
-    // (2) drop: _cartan (only 3 & 8) == _diag with the Default ZAoff ≡ 0.
+    // (2) drop: _cartan (only λ3 & λ8) == _diag with the Default ZAoff ≡ 0.
     const double cartan = static_cast<double>(Cartan::kernel(l1, c1, p, ZA3, ZA8, ZA3dot, ZA8dot));
     const double diagOffZero = static_cast<double>(
         Diag::kernel(l1, c1, p, ZA3, ZA8, ZERO, ZA3dot, ZA8dot, ZERO));

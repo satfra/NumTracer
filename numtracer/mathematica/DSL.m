@@ -83,6 +83,7 @@ $ntHeads = {
   <|"Form" :> ntMagneticProj[q_, mu_, nu_], "Sector" -> "Lorentz", "Labels" :> {mu, nu}, "Momentum" -> 1,
     "InvS" -> True|>,
   <|"Form" :> ntSUNf[n_, a_, b_, c_], "Sector" -> "Adjoint", "Labels" :> {a, b, c}|>,
+  <|"Form" :> ntSUNd[n_, a_, b_, c_], "Sector" -> "Adjoint", "Labels" :> {a, b, c}|>,
   <|"Form" :> ntSUNDeltaAdj[n_, a_, b_], "Sector" -> "Adjoint", "Labels" :> {a, b}|>,
   <|"Form" :> ntGamma[mu_, din_, dout_], "Sector" -> "Dirac", "Labels" :> {mu, din, dout},
     "Spinor" :> {din, dout}|>,

@@ -54,10 +54,10 @@ A `SUNPoly` is a list of `SUNTerm{coeff, dress}`: a coefficient times the produc
 dressing-ids in that monomial. A net with **no** diagonal factor comes back as a single constant
 term equal to what `sun_value` would have given — the two agree by construction.
 
-### The `comp2dr` map
+### The `componentDressing` map
 
-A diagonal factor, `su.diag(i, j, comp2dr)` (fundamental) or `su.diag(a, b, comp2dr)` (adjoint), is
-a delta tagged with a component-to-dressing map. `comp2dr[v]` is the
+A diagonal factor, `su.diag(i, j, componentDressing)` (fundamental) or `su.diag(a, b, componentDressing)` (adjoint), is
+a delta tagged with a component-to-dressing map. `componentDressing[v]` is the
 dressing-id for component `v`, **or `-1` to drop that component entirely**. Dropping is not the same
 as dressing with zero at runtime: a dropped component contributes no term at all, so there is no
 dead arithmetic in the emitted kernel.
@@ -71,7 +71,7 @@ indices in their `spec` rules-list — do not carry one convention into the othe
 The adjoint components are in NumTracer's *generator* order, which is not the textbook Gell-Mann
 order: the generalized Gell-Mann construction lists the off-diagonal generators first and the $N-1$
 diagonal ones **last**. For SU(3) the Cartan directions $\lambda_3$ and $\lambda_8$ are therefore
-1-based components 7 and 8 (`comp2dr[6]` and `comp2dr[7]` in C++).
+1-based components 7 and 8 (`componentDressing[6]` and `componentDressing[7]` in C++).
 ```
 
 ## The commented program
@@ -163,11 +163,11 @@ Three details:
    the same network. The result should be $3 \times (D_u + D_d)$ — the colour half folds to a
    number and multiplies the flavour polynomial.
 
-2. **Two diagonal factors.** Give both the colour and the flavour delta a `comp2dr` map. The fold
+2. **Two diagonal factors.** Give both the colour and the flavour delta a `componentDressing` map. The fold
    should produce *products* of dressing ids — a `SUNTerm` whose `dress` list has two entries.
    Confirm the term count is $N_c \times N_f$ and that the collapse still gives $N_c N_f$.
 
-3. **Drop everything.** Pass `comp2dr` all `-1`. Predict the result before running it: an empty
+3. **Drop everything.** Pass `componentDressing` all `-1`. Predict the result before running it: an empty
    `SUNPoly`, not a polynomial that evaluates to zero. Check `poly.size()`.
 
 4. **The off-diagonal question.** A `diagFund` is diagonal by construction. Work out what you would

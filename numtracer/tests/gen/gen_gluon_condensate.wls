@@ -10,10 +10,12 @@
    (the adjoint slot stands in for the gluon colour). Three kernels are emitted, exercising the named
    / Default-collapse / drop paths of the new spec-based diagonal dressing:
      * _plain : the adjoint propagators carry the colour-blind ntSUNDeltaAdj[3, a, b] × ZAflat[scale].
-     * _diag  : ntSUNDiagAdj[3, a, b, {3 -> ZA3[scale], 8 -> ZA8[scale], Default -> ZAoff[scale]}] — 3 & 8 named
-                (distinct scalar dressings), the other 6 collapsed into a shared ZAoff.
-     * _cartan: ntSUNDiagAdj[3, a, b, {3 -> ZA3[scale], 8 -> ZA8[scale]}] — only 3 & 8 survive, the other 6
+     * _diag  : ntSUNDiagAdj[3, a, b, {7 -> ZA3[scale], 8 -> ZA8[scale], Default -> ZAoff[scale]}] — λ3 & λ8
+                named (distinct scalar dressings), the other 6 collapsed into a shared ZAoff.
+     * _cartan: ntSUNDiagAdj[3, a, b, {7 -> ZA3[scale], 8 -> ZA8[scale]}] — only λ3 & λ8 survive, the other 6
                 DROP (no dead terms). This is the headline use case.
+   A spec index is 1-based in NumTracer's generator order (off-diagonal first, Cartan last), so λ3 and
+   λ8 are components 7 and 8, not 3 and 8 (component 3 is λ4).
    compare_gluon_condensate.cpp validates: (1) COLLAPSE — feeding _diag one function for all of
    ZA3/ZA8/ZAoff reproduces _plain (Σ over 8 = 8 Z^2); (2) DROP — _cartan equals _diag with ZAoff≡0;
    (3) per-component independence.
@@ -65,10 +67,10 @@ mkNet[propAdj_, rdotAdj_] := Module[{d},
   d = UseLorentzLinearity[expr /. {vtx, prop[propAdj], rdot[rdotAdj]}] //. {lf1 -> l1};
   FromFunKit[d]];
 
-(* Cartan-dressed (3 & 8 named, other 6 via a shared Default ZAoff) — covers all 8 components. *)
-specDiag[nm3_, nm8_, off_]  := Function[s, {3 -> nm3[s], 8 -> nm8[s], Default -> off[s]}];
-(* Cartan-only: name 3 & 8, DROP the other 6 (no Default). *)
-specCartan[nm3_, nm8_]      := Function[s, {3 -> nm3[s], 8 -> nm8[s]}];
+(* Cartan-dressed (λ3 = 7 & λ8 = 8 named, other 6 via a shared Default ZAoff) — covers all 8 components. *)
+specDiag[nm3_, nm8_, off_]  := Function[s, {7 -> nm3[s], 8 -> nm8[s], Default -> off[s]}];
+(* Cartan-only: name λ3 & λ8, DROP the other 6 (no Default). *)
+specCartan[nm3_, nm8_]      := Function[s, {7 -> nm3[s], 8 -> nm8[s]}];
 netDiag = mkNet[
   diagAdj[#1, #2, specDiag[Global`ZA3, Global`ZA8, Global`ZAoff], #3] &,
   diagAdj[#1, #2, specDiag[Global`ZA3dot, Global`ZA8dot, Global`ZAoffdot], #3] &];

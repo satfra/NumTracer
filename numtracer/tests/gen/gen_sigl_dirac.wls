@@ -18,10 +18,7 @@
 
    Run from numtracer/:   wolfram -script tests/gen/gen_sigl_dirac.wls *)
 
-If[Quiet[Needs["FunKit`"]] === $Failed,
-  $Path = Prepend[$Path, FileNameJoin[{$HomeDirectory, "Documents", "Uni", "Code", "FunKit"}]]];
-Needs["FunKit`"];
-Get["DiFfRG`"];
+Get["FunKit`"];
 
 $repo = AbsoluteFileName @ FileNameJoin[{DirectoryName[$InputFileName], "..", "..", ".."}];
 $gen  = FileNameJoin[{$repo, "numtracer", "tests", "gen"}];

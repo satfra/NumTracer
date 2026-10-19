@@ -18,7 +18,7 @@
 //                             where `dress` lists the dressing-ids in that monomial. A net with no
 //                             diagonal factor comes back as a single constant term == sun_value.
 //
-// A diag factor is a delta tagged with a comp2dr map: comp2dr[v] is the dressing-id for component
+// A diag factor is a delta tagged with a componentDressing map: componentDressing[v] is the dressing-id for component
 // v, or -1 to DROP that component (it contributes nothing — no dead terms). Components are 0-based
 // here (1..N fundamental, 1..N^2-1 adjoint in the physics, minus one for the index).
 //
@@ -57,7 +57,7 @@ int main() {
   // ---- A. Fundamental: a u/d isospin doublet (SU(2) flavour) --------------------------------
   //
   // A closed flavour delta-loop over the doublet, its delta made flavour-DIAGONAL: component 0 (u)
-  // carries dressing-id 0, component 1 (d) carries id 1. su2.diag(i, j, comp2dr) is that delta;
+  // carries dressing-id 0, component 1 (d) carries id 1. su2.diag(i, j, componentDressing) is that delta;
   // su2.delta(j, i) closes the loop. The fold gives the SUNPoly  D_u + D_d.
   // @snip begin: fund
   const nt::SUNPoly ud = nt::sun_value_dressed(su2.diag(i, j, {0, 1}) * su2.delta(j, i));
@@ -81,7 +81,7 @@ int main() {
 
   // ---- B. Adjoint: a gluon condensate on the Cartan directions (SU(3) colour) ---------------
   //
-  // The adjoint has N^2-1 = 8 components. su3.diag(a, b, comp2dr) dresses them individually. A
+  // The adjoint has N^2-1 = 8 components. su3.diag(a, b, componentDressing) dresses them individually. A
   // condensate lives in the CARTAN (diagonal) directions -- lambda_3 and lambda_8 for SU(3). NumTracer
   // orders the generators generalized-Gell-Mann style, off-diagonal ones first and the N-1 diagonal
   // ones LAST, so these are 0-based components 6 and 7. We dress those two and DROP the other six.

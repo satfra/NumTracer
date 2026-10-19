@@ -58,6 +58,7 @@ Open-index tensor heads, native to NumTracer but mirroring the FunKit/FormTracer
 | `ntLongProj[q, mu, nu]` | longitudinal projector |
 | `ntGamma[mu, …]`, slashed momenta | Dirac gamma matrices and $\slashed q = q^\mu\gamma_\mu$ |
 | `ntSUNf[N, a, b, c]` | SU(N) structure constant $f^{abc}$ (rank $N$) |
+| `ntSUNd[N, a, b, c]` | SU(N) totally symmetric tensor $d^{abc}$ (rank $N$) |
 | `ntSUNT[N, a, i, j]` | SU(N) fundamental generator $(T^a)_{ij}$ |
 | `ntSUNDeltaAdj[N, a, b]` / `ntSUNDeltaFund[N, i, j]` | SU(N) adjoint / fundamental $\delta$ |
 | `ntSUNDiagFund[N, i, j, spec]` / `ntSUNDiagAdj[N, a, b, spec]` | group-diagonal $\delta$ dressing selected components via a rules-list `spec` |

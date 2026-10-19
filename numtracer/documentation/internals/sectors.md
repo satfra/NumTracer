@@ -41,14 +41,16 @@ $\mathrm{tr}(\text{odd}) = 0$ structurally. This is the same idea the
 
 The colour sector implements SU(N) (N = 3 for QCD). Its objects are the generators $T^a$ — the
 $N\times N$ Hermitian traceless matrices of the fundamental representation, $a = 1..N^2-1$ — and
-the structure constants $f^{abc}$ defined by $[T^a, T^b] = i f^{abc} T^c$. Colour factors are
-contractions of these, e.g. $f^{acd} f^{bcd} = N\,\delta^{ab}$ and
-$\mathrm{tr}(T^a T^b) = \tfrac12 \delta^{ab}$.
+the structure constants $f^{abc}$ defined by $[T^a, T^b] = i f^{abc} T^c$, and the totally symmetric
+tensor $d^{abc}$ defined by $\{T^a, T^b\} = \tfrac1N \delta^{ab} + d^{abc} T^c$ (it vanishes for SU(2)).
+Colour factors are contractions of these, e.g. $f^{acd} f^{bcd} = N\,\delta^{ab}$,
+$d^{acd} d^{bcd} = \tfrac{N^2-4}{N}\,\delta^{ab}$ and $\mathrm{tr}(T^a T^b) = \tfrac12 \delta^{ab}$.
 
 `sun/sun_data.hpp` types out the SU(2)/SU(3) tables. Any other `N` is built at run time by
 `build_oracle` in `network/sun_net.hpp` (generalized Gell-Mann construction, structure constants
 $f^{abc} = -2i\,\mathrm{tr}([T^a,T^b]T^c)$), which is also what `tests/test_sun_tables.cpp` checks
-the typed-out tables against. A colour network with no free indices
+the typed-out tables against. $d^{abc} = 2\,\mathrm{tr}(\{T^a,T^b\}T^c)$ has no typed-out table: it
+is computed from the generators for every $N$. A colour network with no free indices
 folds to a single number — the [numeric engine](numeric-engine.md) does this at build time over
 these tables (`network/sun_net.hpp`), so the kernel never carries a colour tensor. A network that
 dresses each colour/flavour component differently (a group-diagonal $\delta$) folds instead with

@@ -208,7 +208,7 @@ $drIntern = ntNoIntern["dressing atom"];
    1-based physics index = v+1). Named components get their interned id; a Default -> expr rule
    fills the rest; unmatched components are -1 (dropped). *)
 
-diagComp2Dr[spec_, dim_] := Module[{rules = Flatten[{spec}], named, def},
+diagComponentDressing[spec_, dim_] := Module[{rules = Flatten[{spec}], named, def},
     named = Association[Cases[rules, (c_Integer -> nm_) :> (c -> $diagDrIntern[nm])]];
     def = Cases[rules, (Default -> nm_) :> $diagDrIntern[nm]];
     def =
@@ -367,7 +367,7 @@ ntSigmaTermInfo[term_] := Module[{tf, gs, g1, g2, first, second, din, dout},
       Return[$Failed]];
     (* the two γ's (and their ntVecs) must be the term's ONLY tensor structure — no colour, projector,
        metric, other Dirac heads: anything else means the Plus is not a clean bare commutator. *)
-    If[!FreeQ[tf, _ntGamma5 | _ntC | _ntDeltaDirac | _ntSigma | _ntSUNT | _ntSUNDeltaFund | _ntSUNf | _ntSUNDeltaAdj | _ntTransProj | _ntLongProj | _ntMetric | _ntEpsilon],
+    If[!FreeQ[tf, _ntGamma5 | _ntC | _ntDeltaDirac | _ntSigma | _ntSUNT | _ntSUNDeltaFund | _ntSUNf | _ntSUNd | _ntSUNDeltaAdj | _ntTransProj | _ntLongProj | _ntMetric | _ntEpsilon],
       Return[$Failed]];
     {g1, g2} = gs;
     Which[
@@ -519,6 +519,9 @@ splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
 colourFacStr[ntSUNf[n_, a_, b_, c_], ids_] :=
   "sun" <> ToString[n] <> ".f(" <> ntSunArgs[ntAdj[ids[a]], ntAdj[ids[b]], ntAdj[ids[c]]] <> ")";
 
+colourFacStr[ntSUNd[n_, a_, b_, c_], ids_] :=
+  "sun" <> ToString[n] <> ".d(" <> ntSunArgs[ntAdj[ids[a]], ntAdj[ids[b]], ntAdj[ids[c]]] <> ")";
+
 colourFacStr[ntSUNDeltaAdj[n_, a_, b_], ids_] :=
   "sun" <> ToString[n] <> ".delta(" <> ntSunArgs[ntAdj[ids[a]], ntAdj[ids[b]]] <> ")";
 
@@ -532,14 +535,14 @@ colourFacStr[ntSUNDeltaFund[n_, i_, j_], ids_] :=
    (component → dr, -1 = drop; 1-based physics indices) and emit a diag factor carrying it. *)
 
 colourFacStr[ntSUNDiagFund[n_, i_, j_, spec_], ids_] :=
-  "sun" <> ToString[n] <> ".diag(" <> ntSunArgs[ntFund[ids[i]], ntFund[ids[j]], diagVecStr[diagComp2Dr[spec, n]]] <> ")";
+  "sun" <> ToString[n] <> ".diag(" <> ntSunArgs[ntFund[ids[i]], ntFund[ids[j]], diagVecStr[diagComponentDressing[spec, n]]] <> ")";
 
 colourFacStr[ntSUNDiagAdj[n_, a_, b_, spec_], ids_] :=
-  "sun" <> ToString[n] <> ".diag(" <> ntSunArgs[ntAdj[ids[a]], ntAdj[ids[b]], diagVecStr[diagComp2Dr[spec, n^2 - 1]]] <> ")";
+  "sun" <> ToString[n] <> ".diag(" <> ntSunArgs[ntAdj[ids[a]], ntAdj[ids[b]], diagVecStr[diagComponentDressing[spec, n^2 - 1]]] <> ")";
 
-MakeNTKernel::colleak = "compileColour: a factor of a constant SU(N) component is not one of the six group heads (ntSUNf/ntSUNDeltaAdj/ntSUNT/ntSUNDeltaFund/ntSUNDiag{Fund,Adj}) and would be emitted as raw Mathematica. A Plus means a colour/flavour sum missed compileColourSum; any other head means it is missing from the head registry ($ntHeads in DSL.m). Offending factor:\n`1`";
+MakeNTKernel::colleak = "compileColour: a factor of a constant SU(N) component is not one of the seven group heads (ntSUNf/ntSUNd/ntSUNDeltaAdj/ntSUNT/ntSUNDeltaFund/ntSUNDiag{Fund,Adj}) and would be emitted as raw Mathematica. A Plus means a colour/flavour sum missed compileColourSum; any other head means it is missing from the head registry ($ntHeads in DSL.m). Offending factor:\n`1`";
 
-(* CATCH-ALL, and it must stay LAST: the six rules above are the only lowerable colour factors.
+(* CATCH-ALL, and it must stay LAST: the seven rules above are the only lowerable colour factors.
    Without it a non-matching factor returns unevaluated and StringRiffle would ToString it into the
    generator .cpp, surfacing as a C++ syntax error far from its cause. Same role as
    MakeNTKernel::tleak in compileLorentz. *)
