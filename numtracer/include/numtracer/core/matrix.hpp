@@ -1,4 +1,4 @@
-/// @file cmat.hpp
+/// @file matrix.hpp
 /// @brief A small compile-time-sized dense matrix, generic in its entry type.
 ///
 /// This header is a foundational leaf — it has no dependency on the Lorentz/Dirac/SU(N) sector

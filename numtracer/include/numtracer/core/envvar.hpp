@@ -1,14 +1,14 @@
 /// @file core/envvar.hpp
-/// @brief The ONE truth test for every `NT_*` environment variable the build-time engine reads.
+/// @brief Reading `NT_GEN_*` environment variables at generation time.
 ///
-/// Everything here is generator-side configuration: the emitted kernel never reads an environment
-/// variable, so nothing in this header is on a runtime hot path. Each reader caches its own value
-/// in a function-local `static` at the call site — emission and contraction must be uniform across
-/// a run, so a variable changed mid-process deliberately has no effect.
+/// Certain environment variables  do change what is emitted (e.g. `NT_GEN_DEVICE`, `NT_GEN_NOINLINE_*`),
+/// so the same flow can generate different kernel text under different settings.
+///
+/// Each reader caches its own value in a function-local `static` at the call site — emission and
+/// contraction must be uniform across a run, so a variable changed mid-process deliberately has no
+/// effect.
 ///
 /// The rule: a flag is ON when the variable is set, non-empty, and not the single character "0".
-/// Every reader must use it — a presence-only test reads `FOO=` and `FOO=0` as ON, a leading-char
-/// test ignores `FOO=true` — and it must match `ntEnvFlag` in mathematica/DSL.m.
 #pragma once
 
 #include <cstdlib>

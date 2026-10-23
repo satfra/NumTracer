@@ -55,9 +55,9 @@ namespace ntest
   {
     return ndetail::contract(F.nsym(), chain, lor, comp, atomDen, F.units());
   }
-  inline DPoly contract_dressed(const Frame &F, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
-                                const LorentzNet &lor, const std::vector<std::array<Poly, 4>> &comp,
-                                const std::vector<Poly> &atomDen)
+  inline DressedPoly contract_dressed(const Frame &F, const std::vector<DChainTok> &chain,
+                                      const std::vector<DSlot> &slots, const LorentzNet &lor,
+                                      const std::vector<std::array<Poly, 4>> &comp, const std::vector<Poly> &atomDen)
   {
     return ndetail::contract_dressed(F.nsym(), chain, slots, lor, comp, atomDen, F.units());
   }

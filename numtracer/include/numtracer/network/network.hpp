@@ -9,11 +9,10 @@
 /// A @ref Frame contracts a finished network (together with a Dirac chain) to a scalar polynomial.
 #pragma once
 
-#include "numtracer/core/cx.hpp"
 #include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
+#include "numtracer/core/cx.hpp"
 
 #include <algorithm>
-#include <cstdint>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -71,7 +70,8 @@ namespace numtracer::inline network
   }
   inline Momentum operator*(double c, Momentum a)
   {
-    for (auto &t : a.lc) t.first *= c;
+    for (auto &t : a.lc)
+      t.first *= c;
     return mdetail::canonical(std::move(a.lc));
   }
   inline Momentum operator*(Momentum a, double c) { return c * std::move(a); }
@@ -120,8 +120,8 @@ namespace numtracer::inline network
   /// @brief A Lorentz network: a sum of product terms.
   ///
   /// Mind the empty network: a contraction (`Frame::trace(chain, {})`) reads it as "no Lorentz
-  /// structure", i.e. the scalar 1, while as a SUM of terms it is 0 — `mul(x, {})` is empty, and
-  /// @ref dirac_value returns `{}` for a vanishing trace. Write a structural zero as `0.0 * net`.
+  /// structure", i.e. the scalar 1, while as a SUM of terms it is 0 — `mul(x, {})` is empty. Write a
+  /// structural zero as `0.0 * net`.
   using LorentzNet = std::vector<LorentzTerm>;
 
   namespace mdetail
@@ -165,8 +165,7 @@ namespace numtracer::inline network
     /// Its atom ids are left unassigned (-1): the @ref Frame assigns them.
     inline LorentzFactor projector(LorentzFactor::Kind kind, LorentzIndex mu, LorentzIndex nu, const Momentum &k)
     {
-      if (k.lc.empty())
-        NT_THROW(std::invalid_argument, "projector on a zero momentum: its 1/k^2 is undefined");
+      if (k.lc.empty()) NT_THROW(std::invalid_argument, "projector on a zero momentum: its 1/k^2 is undefined");
       LorentzFactor f{.kind = kind, .a = mu.id, .b = nu.id};
       if (k.lc.size() == 1 && k.lc[0].first == 1.0)
         f.vid = k.lc[0].second;
@@ -181,33 +180,39 @@ namespace numtracer::inline network
   {
     return leaf({.kind = LorentzFactor::Metric, .a = mu.id, .b = nu.id});
   }
+
   /// @brief The vector `k_μ`.
   inline LorentzNet vec(LorentzIndex mu, const Momentum &k)
   {
     return leaf({.kind = LorentzFactor::Vector, .a = mu.id, .b = -1, .vlc = k.lc});
   }
+
   /// @brief The transverse projector `P_T(k)_{μν} = δ_{μν} − k_μ k_ν/k²`. Its `1/k²` is tracked by
   ///        the @ref Frame that contracts it.
   inline LorentzNet projT(LorentzIndex mu, LorentzIndex nu, const Momentum &k)
   {
     return leaf(mdetail::projector(LorentzFactor::ProjT, mu, nu, k));
   }
+
   /// @brief The longitudinal projector `P_L(k)_{μν} = k_μ k_ν/k²`.
   inline LorentzNet projL(LorentzIndex mu, LorentzIndex nu, const Momentum &k)
   {
     return leaf(mdetail::projector(LorentzFactor::ProjL, mu, nu, k));
   }
+
   /// @brief The finite-T **electric** projector `P_E = P_T − P_M` (heat-bath direction = component 0).
   inline LorentzNet projE(LorentzIndex mu, LorentzIndex nu, const Momentum &k)
   {
     return leaf(mdetail::projector(LorentzFactor::ProjE, mu, nu, k));
   }
+
   /// @brief The finite-T **magnetic** projector `P_M_{ij} = δ_{ij} − k_i k_j/|k⃗|²` on the spatial
   ///        components (row and column 0 vanish).
   inline LorentzNet projM(LorentzIndex mu, LorentzIndex nu, const Momentum &k)
   {
     return leaf(mdetail::projector(LorentzFactor::ProjM, mu, nu, k));
   }
+
   /// @brief The Levi-Civita tensor `ε_{μνρσ}`, `ε_{0123} = +1`.
   inline LorentzNet epsilon(LorentzIndex mu, LorentzIndex nu, LorentzIndex rho, LorentzIndex sigma)
   {
@@ -223,21 +228,24 @@ namespace numtracer::inline network
   }
   inline LorentzNet scale(double c, LorentzNet x) { return scale(Cx{c, 0}, std::move(x)); }
 
-  /// @brief Whether `nv` is a pure sum of vectors all on the same Lorentz index — i.e. a momentum
-  ///        linear combination that can collapse to one compound-vector leaf (eager summation).
-  inline bool is_vecsum(const LorentzNet &nv, int &idx)
+  namespace mdetail
   {
-    bool first = true;
-    for (const LorentzTerm &t : nv) {
-      if (t.e.size() != 1 || t.e[0].kind != LorentzFactor::Vector) return false;
-      if (first) {
-        idx = t.e[0].a;
-        first = false;
-      } else if (t.e[0].a != idx)
-        return false;
+    /// @brief Whether `nv` is a pure sum of vectors all on the same Lorentz index — i.e. a momentum
+    ///        linear combination that can collapse to one compound-vector leaf (eager summation).
+    inline bool is_vecsum(const LorentzNet &nv, int &idx)
+    {
+      bool first = true;
+      for (const LorentzTerm &t : nv) {
+        if (t.e.size() != 1 || t.e[0].kind != LorentzFactor::Vector) return false;
+        if (first) {
+          idx = t.e[0].a;
+          first = false;
+        } else if (t.e[0].a != idx)
+          return false;
+      }
+      return !nv.empty();
     }
-    return !nv.empty();
-  }
+  } // namespace mdetail
 
   /// @brief Sum of networks (concatenate their terms). **Eager summation:** when both summands are
   ///        vector sums on the same index (a vertex's momentum sub-combination), they collapse into a
@@ -247,7 +255,7 @@ namespace numtracer::inline network
   inline LorentzNet add(LorentzNet a, const LorentzNet &b)
   {
     int ia = 0, ib = 0;
-    if (is_vecsum(a, ia) && is_vecsum(b, ib) && ia == ib) {
+    if (mdetail::is_vecsum(a, ia) && mdetail::is_vecsum(b, ib) && ia == ib) {
       LorentzFactor c;
       c.kind = LorentzFactor::Vector;
       c.a = ia;
@@ -329,4 +337,4 @@ namespace numtracer::inline network
   inline LorentzNet operator*(Cx c, LorentzNet x) { return scale(c, std::move(x)); }
   inline LorentzNet operator*(double c, LorentzNet x) { return scale(c, std::move(x)); }
 
-} // namespace numtracer::network
+} // namespace numtracer::inline network

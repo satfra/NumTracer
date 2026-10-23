@@ -133,7 +133,7 @@ digraph tutorials {
 | 15 | [Wiring a flow into DiFfRG](step-15.md) | `MakeNTKernelDiFfRG`, the `flows/` tree, the parameter-order contract, `model.hh`. | `diffrg` `build` |
 | 16 | [Finite temperature](step-16.md) | The heat-bath split: electric/magnetic projectors, spatial products, Matsubara. | `finite-T` `projector` |
 | 17 | [Per-flavour and per-component dressings](step-17.md) | Dressing u and d differently *inside* one SU($N$) trace. | `sun` `dressing` |
-| 18 | [Dressed numerators and vertex collection](step-18.md) | One collected trace instead of $2^D$ diagrams. | `dressing` `dpoly` |
+| 18 | [Dressed numerators and vertex collection](step-18.md) | One collected trace instead of $2^D$ diagrams. | `dressing` `dressed-poly` |
 | 19 | [Four-fermi, Fierz bases, fixed-component γ](step-19.md) | Two independent spinor lines, contact structures, γ⁰ as a unit-vector slash. | `four-fermi` `fierz` |
 | 20 | [Making a hard flow generate](step-20.md) | Phase A/B, thread caps, RAM, chunking, dedup, offline generation. | `performance` `build` |
 | 21 | [GPU kernels and complex traces](step-21.md) | Device decorators, the two-phase integrator, the real-probe verdict. | `gpu` `cuda` `complex` |

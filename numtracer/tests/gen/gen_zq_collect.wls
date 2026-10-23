@@ -1,7 +1,7 @@
 #!/usr/bin/env wolframscript
 (* Zq via the NUMERIC backend with SYMBOLIC DRESSING COLLECTION (DressingCollection -> True): the
    quark propagator numerator Mq·δ + Zq·γ·l is kept EAGER (one ntDressedNum slot) and folds to ONE
-   DPoly trace instead of distributing into separate diagrams. Validation harness for the dressed
+   DressedPoly trace instead of distributing into separate diagrams. Validation harness for the dressed
    path — the emitted kernel must match the FORM reference exactly like the distributed Zq does. *)
 If[Quiet[Needs["FunKit`"]] === $Failed,
   $Path = Prepend[$Path, FileNameJoin[{$HomeDirectory, "Documents", "Uni", "Code", "FunKit"}]]];

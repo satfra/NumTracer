@@ -195,7 +195,7 @@ nt_tutorial(finite_temperature step-16-finite-temperature/finite_temperature.cpp
 # step-17 — per-flavour and per-component dressings: the group-diagonal SU(N) fold
 nt_tutorial(dressed_flavour step-17-dressed-flavour/dressed_flavour.cpp)
 
-# step-18 — dressed propagator numerators: one trace collected into a DPoly, not 2^D diagrams
+# step-18 — dressed propagator numerators: one trace collected into a DressedPoly, not 2^D diagrams
 nt_tutorial(dressed_numerators step-18-dressed-numerators/dressed_numerators.cpp)
 
 # ===========================================================================

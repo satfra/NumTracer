@@ -62,7 +62,7 @@ namespace numtracer::inline engine
   template <class TraceFn, class ScaleFn, class Sink>
   void fold_groups_streaming_dressed(int nsym, const std::vector<std::vector<int>> &traceIdx,
                                      const std::vector<std::vector<Cx>> &subScale,
-                                     const std::vector<std::vector<DMono>> &subDress,
+                                     const std::vector<std::vector<DressingMono>> &subDress,
                                      const std::vector<std::vector<int>> &groups, const std::vector<Poly> &traceTable,
                                      long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
                                      Sink &&sink);
@@ -196,9 +196,9 @@ namespace numtracer::inline engine
     /// @warning Freezes the symbol list
     Poly inv_denominator(int aid) const { return Poly::atom(frozen_nsym(), aid); }
 
-    /// The zero dressing polynomial (no terms) over this frame's symbols; fill it with DPoly::add.
+    /// The zero dressing polynomial (no terms) over this frame's symbols; fill it with DressedPoly::add.
     /// @warning Freezes the symbol list
-    DPoly dzero() const { return DPoly(frozen_nsym()); }
+    DressedPoly dzero() const { return DressedPoly(frozen_nsym()); }
 
     /// The slashed 4×4 matrix of a momentum given by its components.
     /// @warning Freezes the symbol list
@@ -240,8 +240,6 @@ namespace numtracer::inline engine
       comp_[static_cast<std::size_t>(vid)][static_cast<std::size_t>(mu)] = std::move(p);
     }
 
-    /// The component table: `components()[vid][mu]`.
-    const std::vector<std::array<Poly, 4>> &components() const { return comp_; }
 
     /// Generate @p N fresh Lorentz index labels: `auto [mu, nu] = F.indices<2>();`.
     /// They are distinct from each other and from all the previous ones.
@@ -312,7 +310,7 @@ namespace numtracer::inline engine
 
     /// A chain with dressed-numerator SLOTS, collected per dressing monomial (see @ref DSlotOpt).
     /// Like the plain @ref trace, this overload assigns atoms to projectors built without one.
-    DPoly trace(const std::vector<DChainTok> &chain, std::vector<DSlot> slots, LorentzNet lor)
+    DressedPoly trace(const std::vector<DChainTok> &chain, std::vector<DSlot> slots, LorentzNet lor)
     {
       lor = assign_atoms(std::move(lor));
       for (DSlot &slot : slots)
@@ -322,7 +320,7 @@ namespace numtracer::inline engine
       return std::as_const(*this).trace(chain, slots, lor);
     }
 
-    DPoly trace(const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots, const LorentzNet &lor) const
+    DressedPoly trace(const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots, const LorentzNet &lor) const
     {
       return ndetail::contract_dressed(frozen_nsym(), chain, slots, lor, comp_, atomDen_, units_);
     }
@@ -390,7 +388,7 @@ namespace numtracer::inline engine
     Cx eval(const Poly &p, const Point &pt) const { return pdetail::eval(p, checked(pt).x, atom_values(pt, {&p})); }
 
     /// A dressed polynomial's value; `dressings[id]` is the value of dressing `id`.
-    Cx eval(const DPoly &p, const Point &pt, const std::vector<double> &dressings) const
+    Cx eval(const DressedPoly &p, const Point &pt, const std::vector<double> &dressings) const
     {
       std::vector<const Poly *> parts;
       for (const auto &[d, mp] : p.terms)
@@ -480,11 +478,11 @@ namespace numtracer::inline engine
     }
 
     /// Streaming phase B, dressed variant: a plain-Poly `traceTable` + the per-sub-term dressing
-    /// monomials `subDress` fold into a DPoly per net. See `generator_phases.hpp`.
+    /// monomials `subDress` fold into a DressedPoly per net. See `generator_phases.hpp`.
     template <class TraceFn, class ScaleFn, class Sink>
     void fold_groups_streaming_dressed(const std::vector<std::vector<int>> &traceIdx,
                                        const std::vector<std::vector<Cx>> &subScale,
-                                       const std::vector<std::vector<DMono>> &subDress,
+                                       const std::vector<std::vector<DressingMono>> &subDress,
                                        const std::vector<std::vector<int>> &groups, const std::vector<Poly> &traceTable,
                                        long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
                                        Sink &&sink) const
@@ -676,9 +674,5 @@ namespace numtracer::inline engine
   };
 
   inline Symbol::operator Poly() const { return frame->var(id); }
-
-  // A Symbol converts to its Poly, so `L * C` uses Poly ⊗ Poly (mpoly.hpp); with a number:
-  inline Poly operator*(double c, Symbol s) { return c * Poly(s); }
-  inline Poly operator*(Symbol s, double c) { return c * Poly(s); }
 
 } // namespace numtracer::inline engine

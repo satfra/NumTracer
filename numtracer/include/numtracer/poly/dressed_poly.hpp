@@ -1,13 +1,13 @@
-/// @file dpoly.hpp
+/// @file dressed_poly.hpp
 /// @brief A **dressing polynomial**: a sum `Σ_m (dressing-monomial_m) · (kinematic Poly_m)` carrying
 ///        runtime dressing/regulator calls as *symbolic atoms*, so a Feynman diagram whose propagator
 ///        numerators are dressed structure sums (e.g. `Mq·δ + Z(p)·γ·p`) collapses to **one** trace
 ///        instead of distributing into `2^D` separate diagrams (one per dressing combination).
 ///
 /// This is the exact analogue of how @ref Poly already carries `1/k²` inverse atoms in its monomial
-/// key: a dressing monomial (@ref DMono) is a sorted multiset of *dressing-atom ids*, and a `DPoly`
+/// key: a dressing monomial (@ref DressingMono) is a sorted multiset of *dressing-atom ids*, and a `DressedPoly`
 /// maps each distinct dressing monomial to the (collected) kinematic @ref Poly it multiplies. The
-/// `Poly` type itself is **unchanged** — `DPoly` is a thin wrapper whose arithmetic reuses
+/// `Poly` type itself is **unchanged** — `DressedPoly` is a thin wrapper whose arithmetic reuses
 /// `Poly::operator*`/`operator+` verbatim, so the numeric backend's hot path is untouched and only
 /// diagrams that genuinely carry a dressed structure sum pay for the dressing layer.
 ///
@@ -17,7 +17,7 @@
 /// across monomials (FormTracer parity).
 #pragma once
 
-#include "numtracer/poly/mpoly.hpp"
+#include "numtracer/poly/poly.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -28,20 +28,20 @@ namespace numtracer::inline poly
 
   /// @brief A dressing monomial: a sorted multiset of dressing-atom ids (the product of runtime
   ///        dressing/regulator calls multiplying one kinematic term). Empty == the un-dressed term.
-  using DMono = std::vector<int>;
+  using DressingMono = std::vector<int>;
 
   /// @brief Canonicalise a dressing monomial (sort so equal products compare equal / collect).
-  inline DMono dmono_sorted(DMono d)
+  inline DressingMono dressing_mono_sorted(DressingMono d)
   {
     std::sort(d.begin(), d.end());
     return d;
   }
 
   /// @brief Merge two sorted dressing monomials (multiset union) — the dressing analogue of the
-  ///        atom-multiset merge in `Poly::operator*` (`mpoly.hpp`).
-  inline DMono dmono_merge(const DMono &a, const DMono &b)
+  ///        atom-multiset merge in `Poly::operator*` (`poly.hpp`).
+  inline DressingMono dressing_mono_merge(const DressingMono &a, const DressingMono &b)
   {
-    DMono r;
+    DressingMono r;
     r.reserve(a.size() + b.size());
     std::size_t i = 0, j = 0;
     while (i < a.size() && j < b.size())
@@ -54,37 +54,37 @@ namespace numtracer::inline poly
   }
 
   // The `nsym`-carrying construction API is closed behind these friends, exactly as for @ref Poly:
-  // @ref Frame is the sole user-facing path and @ref DPolyFactory the internal attorney for the
-  // trusted contraction/generator-phase code. (`mpoly.hpp`, included above, already forward-declares
-  // @ref Frame; declare the DPoly attorney here.)
-  struct DPolyFactory;
+  // @ref Frame is the sole user-facing path and @ref DressedPolyFactory the internal attorney for the
+  // trusted contraction/generator-phase code. (`poly.hpp`, included above, already forward-declares
+  // @ref Frame; declare the DressedPoly attorney here.)
+  struct DressedPolyFactory;
 
-  /// @brief A dressing polynomial: sorted-by-@ref DMono, like terms combined, no empty `Poly` coeffs.
-  struct DPoly {
+  /// @brief A dressing polynomial: sorted-by-@ref DressingMono, like terms combined, no empty `Poly` coeffs.
+  struct DressedPoly {
     int nsym = 0;
-    std::vector<std::pair<DMono, Poly>> terms; ///< sorted by DMono; each Poly is non-empty
+    std::vector<std::pair<DressingMono, Poly>> terms; ///< sorted by DressingMono; each Poly is non-empty
 
-    // Sanctioned construction paths (see @ref Poly). The in-header DPoly arithmetic constructs its
+    // Sanctioned construction paths (see @ref Poly). The in-header DressedPoly arithmetic constructs its
     // results directly.
     friend class engine::Frame;
-    friend struct DPolyFactory;
-    friend DPoly operator+(const DPoly &a, const DPoly &b);
-    friend DPoly operator*(const DPoly &a, const DPoly &b);
-    friend DPoly scaleCx(const DPoly &a, Cx c);
+    friend struct DressedPolyFactory;
+    friend DressedPoly operator+(const DressedPoly &a, const DressedPoly &b);
+    friend DressedPoly operator*(const DressedPoly &a, const DressedPoly &b);
+    friend DressedPoly scaleCx(const DressedPoly &a, Cx c);
 
-    DPoly() = default;
+    DressedPoly() = default;
 
   private:
-    // Bare-`nsym` construction — reachable only through @ref Frame / @ref DPolyFactory (friends);
+    // Bare-`nsym` construction — reachable only through @ref Frame / @ref DressedPolyFactory (friends);
     // see @ref Poly. The empty default ctor above stays public.
-    explicit DPoly(int ns) : nsym(ns) {}
+    explicit DressedPoly(int ns) : nsym(ns) {}
 
-    /// A `DPoly` that is just a single un-dressed kinematic polynomial (empty dressing monomial).
+    /// A `DressedPoly` that is just a single un-dressed kinematic polynomial (empty dressing monomial).
     /// The no-dressing case: lowering this is byte-for-byte the plain-`Poly` path.
-    static DPoly fromPoly(const Poly &p)
+    static DressedPoly fromPoly(const Poly &p)
     {
-      DPoly d(p.nsym);
-      if (!p.empty()) d.terms.push_back({DMono{}, p});
+      DressedPoly d(p.nsym);
+      if (!p.empty()) d.terms.push_back({DressingMono{}, p});
       return d;
     }
 
@@ -94,11 +94,12 @@ namespace numtracer::inline poly
 
     /// Accumulate `p` into the coefficient of dressing monomial `d` (kept sorted; `d` already sorted).
     /// Drops the term if the resulting `Poly` is empty (full cancellation).
-    void add(const DMono &d, const Poly &p)
+    void add(const DressingMono &d, const Poly &p)
     {
       if (p.empty()) return;
-      auto it = std::lower_bound(terms.begin(), terms.end(), d,
-                                 [](const std::pair<DMono, Poly> &a, const DMono &k) { return a.first < k; });
+      auto it =
+          std::lower_bound(terms.begin(), terms.end(), d,
+                           [](const std::pair<DressingMono, Poly> &a, const DressingMono &k) { return a.first < k; });
       if (it != terms.end() && it->first == d) {
         it->second = it->second + p;
         if (it->second.empty()) terms.erase(it);
@@ -108,18 +109,18 @@ namespace numtracer::inline poly
     }
   };
 
-  /// @brief Internal attorney re-exposing the private @ref DPoly factories to the trusted engine code
+  /// @brief Internal attorney re-exposing the private @ref DressedPoly factories to the trusted engine code
   ///        (the dressed contraction / generator phases), mirroring @ref PolyFactory. Not public API.
-  struct DPolyFactory {
-    static DPoly zero(int ns) { return DPoly(ns); }
-    static DPoly fromPoly(const Poly &p) { return DPoly::fromPoly(p); }
+  struct DressedPolyFactory {
+    static DressedPoly zero(int ns) { return DressedPoly(ns); }
+    static DressedPoly fromPoly(const Poly &p) { return DressedPoly::fromPoly(p); }
   };
 
-  inline DPoly operator+(const DPoly &a, const DPoly &b)
+  inline DressedPoly operator+(const DressedPoly &a, const DressedPoly &b)
   {
     if (a.terms.empty()) return b;
     if (b.terms.empty()) return a;
-    DPoly r(a.nsym ? a.nsym : b.nsym);
+    DressedPoly r(a.nsym ? a.nsym : b.nsym);
     r.terms.reserve(a.terms.size() + b.terms.size());
     std::size_t i = 0, j = 0;
     while (i < a.terms.size() && j < b.terms.size()) {
@@ -143,23 +144,23 @@ namespace numtracer::inline poly
 
   /// Product: merge dressing monomials, multiply the kinematic `Poly` coefficients (reusing
   /// `Poly::operator*` verbatim), and collect. Provided for composability/testing; the contraction
-  /// path builds a `DPoly` by accumulation (@ref DPoly::add) rather than multiplying two `DPoly`s.
-  inline DPoly operator*(const DPoly &a, const DPoly &b)
+  /// path builds a `DressedPoly` by accumulation (@ref DressedPoly::add) rather than multiplying two `DressedPoly`s.
+  inline DressedPoly operator*(const DressedPoly &a, const DressedPoly &b)
   {
     const int ns = a.nsym ? a.nsym : b.nsym;
-    DPoly r(ns);
+    DressedPoly r(ns);
     if (a.terms.empty() || b.terms.empty()) return r;
     for (const auto &[da, pa] : a.terms)
       for (const auto &[db, pb] : b.terms)
-        r.add(dmono_merge(da, db), pa * pb);
+        r.add(dressing_mono_merge(da, db), pa * pb);
     return r;
   }
 
   /// @brief Scale every kinematic coefficient by a complex constant (the group colour fold / sub-term
   ///        scalar). Empty terms drop out.
-  inline DPoly scaleCx(const DPoly &a, Cx c)
+  inline DressedPoly scaleCx(const DressedPoly &a, Cx c)
   {
-    DPoly r(a.nsym);
+    DressedPoly r(a.nsym);
     if (c.re == 0 && c.im == 0) return r;
     r.terms.reserve(a.terms.size());
     for (const auto &[d, mp] : a.terms) {
@@ -176,7 +177,7 @@ namespace numtracer::inline poly
     /// @brief Raw numeric evaluation of a dressed polynomial: `x[i]` = user symbol i; `atomVal[aid]` =
     ///        value of `1/D_aid`; `drVal[id]` = value of dressing atom `id`. Equals the distributed sum
     ///        `Σ_combos (∏ dressings) · (kinematic value)`. Prefer @ref Frame::eval.
-    inline Cx eval(const DPoly &p, const std::vector<double> &x, const std::vector<double> &atomVal,
+    inline Cx eval(const DressedPoly &p, const std::vector<double> &x, const std::vector<double> &atomVal,
                    const std::vector<double> &drVal)
     {
       Cx s{0, 0};

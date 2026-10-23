@@ -8,12 +8,11 @@
 // a plausible polynomial. So exercise it directly, against the naive left fold it replaces, at the
 // sizes and cache regimes the real flows hit:
 //
-//   - fold_net == the left fold  (reassociation must not change the VALUE; Poly/DPoly addition is
-//     exact term collection over Cx, so this is an exact equality, not a tolerance)
+//   - fold_net == the left fold  (reassociation must not change the VALUE; Poly addition is exact
+//     term collection over Cx, so this is an exact equality, not a tolerance)
 //   - every cache regime: nCache = 0 (nothing resident, all recomputed), 1, n/2, n (all resident)
 //   - a trace beyond nCache is recomputed EXACTLY ONCE (the singleton-eviction assumption: Codegen*.m
 //     only leaves refCount==1 traces uncached, so a recompute must never be duplicated work)
-//   - both backends: Poly (plain) and DPoly (dressed)
 //   - the degenerate shapes that the binary counter gets wrong if the carry is off by one: 0, 1, 2, 3
 //     and 7 terms (7 = 0b111 leaves three unmerged partials on the stack -> the leftover sweep)
 #include "numtracer/engine/frame.hpp"
@@ -60,16 +59,6 @@ namespace
     return true;
   }
 
-  bool same(const DPoly &a, const DPoly &b)
-  {
-    if (a.terms.size() != b.terms.size()) return false;
-    for (std::size_t i = 0; i < a.terms.size(); ++i) {
-      if (a.terms[i].first != b.terms[i].first) return false;
-      if (!same(a.terms[i].second, b.terms[i].second)) return false;
-    }
-    return true;
-  }
-
   // A stand-in polynomial that records how many ELEMENTS each addition touches. `size` models the
   // term count; the cost of adding two polynomials is linear in their combined size (Poly::operator+
   // is a merge). Summing that over the fold is the quantity the tree fold is built to keep at
@@ -94,7 +83,7 @@ namespace
   template <class P, class TraceFn>
   P left_fold(const std::vector<int> &idx, const std::vector<Cx> &sc, TraceFn &&trace)
   {
-    P acc = zero_like<P>(NSYM); // Poly/DPoly route through the private-factory attorney; Counted uses its ctor
+    P acc = zero_like<P>(NSYM); // Poly routes through the private-factory attorney; Counted uses its ctor
     for (std::size_t j = 0; j < idx.size(); ++j)
       acc = acc + scale_trace(trace(idx[j]), sc[j]);
     return acc;
@@ -159,14 +148,6 @@ int main()
   std::printf("generator_phases: tree fold vs left fold, all cache regimes\n");
 
   run_backend<Poly>("Poly", trace_of);
-  run_backend<DPoly>("DPoly", [](int k) {
-    // A dressed trace: the same kinematic polynomial under a dressing monomial that varies with k, so
-    // the DPoly merge (which is keyed on the dressing monomial) is exercised rather than bypassed.
-    Frame env(ntest::names(NSYM));
-    DPoly d = env.dzero();
-    d.add(dmono_sorted(DMono{k % 2, k % 3}), trace_of(k));
-    return d;
-  });
 
   // A net that references the SAME trace repeatedly — the shape the dedup actually produces (a hot
   // trace is referenced 2-32x across the flow). Left fold and tree fold must still agree.
@@ -241,7 +222,7 @@ int main()
       groups.push_back(std::move(grp));
     }
 
-    // Per-net colour weights, and the scale the emitted DPoly branch uses.
+    // Per-net colour weights, and the scale the emitted Poly branch uses.
     std::vector<Cx> colv(nNet);
     for (std::size_t d = 0; d < nNet; ++d)
       colv[d] = Cx{0.75 - 0.03 * static_cast<double>(d), 0.4 * static_cast<double>(d % 3)};

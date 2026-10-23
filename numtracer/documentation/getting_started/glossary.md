@@ -46,7 +46,7 @@ Diagram
 
 Poly
 : The engine's multivariate polynomial in the frame's scalar symbols, carrying inverse atoms. Every
-  contraction returns one. (`DPoly` is the same with runtime dressings as extra variables.)
+  contraction returns one. (`DressedPoly` is the same with runtime dressings as extra variables.)
 
 SUN
 : An SU($N$) group object, `nt::SUN su(N)`: it hands out the group's typed labels, builds its

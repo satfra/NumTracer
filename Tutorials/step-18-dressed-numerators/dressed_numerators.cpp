@@ -8,18 +8,18 @@
 // A diagram with D such dressed numerators is, if you distribute the sum, 2^D separate traces —
 // one per choice of structure in each numerator. NumTracer does NOT distribute. It keeps each
 // numerator EAGER (a "slot" = the list of its structure options) and contracts the chain ONCE,
-// collecting the result into a DPoly: a polynomial whose *variables* are the dressing calls and
+// collecting the result into a DressedPoly: a polynomial whose *variables* are the dressing calls and
 // whose *coefficients* are the kinematic polynomials (nt::Poly) the engine already computes. The
 // dressings ride along as opaque atom-ids and never enter the trace arithmetic — so the Dirac /
 // Lorentz work is done a single time no matter how many structures each numerator carries.
 //
 // This is the Dirac-side analogue of step-17's SU(N) fold (there a group-diagonal δ folds to a
-// SUNPoly; here a dressed numerator folds to a DPoly). See dpoly.hpp for the type and
-// internals/numeric-engine.md for how DPoly wraps Poly.
+// SUNPoly; here a dressed numerator folds to a DressedPoly). See dressed_poly.hpp for the type and
+// internals/numeric-engine.md for how DressedPoly wraps Poly.
 //
 // The example: a quark bubble  tr( γ^μ · S(p) · γ^ν · S(q) )  closed by the gluon metric δ_{μν},
 // with two dressed numerators S(p), S(q). Distributed, that is 2×2 = 4 traces; collected, it is
-// ONE DPoly of (at most) 4 dressing monomials. We validate that the collected DPoly, evaluated at
+// ONE DressedPoly of (at most) 4 dressing monomials. We validate that the collected DressedPoly, evaluated at
 // random kinematics and random dressing values, equals the explicit distributed sum to 1e-10.
 #include <numtracer.hpp> // the whole NumTracer API
 
@@ -65,8 +65,8 @@ int main() {
   std::vector<nt::DChainTok> dchain = {nt::dtfix(nt::gamma(mu)), nt::dtslot(0), nt::dtfix(nt::gamma(nu)),
                                        nt::dtslot(1)};
 
-  // Collect: ONE contraction, no 2^D blowup. dp is the DPoly.
-  nt::DPoly dp = F.trace(dchain, {sP, sQ}, lor);
+  // Collect: ONE contraction, no 2^D blowup. dp is the DressedPoly.
+  nt::DressedPoly dp = F.trace(dchain, {sP, sQ}, lor);
   // @snip end: collect
 
   // Distributed reference: enumerate the 2×2 structure choices, trace each concrete (undressed)
@@ -80,7 +80,7 @@ int main() {
   };
 
   std::printf("Dressed quark bubble  tr( γ^μ S(p) γ^ν S(q) ) δ_{μν},  S = Mq·𝟙 + Z·slash\n");
-  std::printf("  DPoly dressing monomials (one trace collected) : %d   (distributed would be 4 traces)\n",
+  std::printf("  DressedPoly dressing monomials (one trace collected) : %d   (distributed would be 4 traces)\n",
               dp.size());
 
   std::mt19937 rng(7);
@@ -95,7 +95,7 @@ int main() {
     // drVal[0]=Mq (shared by both mass terms), drVal[1]=Z(p), drVal[2]=Z(q).
     std::vector<double> drVal = {U(rng), U(rng), U(rng)};
 
-    // collected: evaluate the single DPoly at the kinematic point with these dressing values
+    // collected: evaluate the single DressedPoly at the kinematic point with these dressing values
     Cx collected = F.eval(dp, pt, drVal);
 
     // distributed: Σ over the 4 structure choices of (dressing product) · trace(choice)

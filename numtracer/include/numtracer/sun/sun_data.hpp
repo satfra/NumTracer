@@ -19,9 +19,9 @@
 /// entries of @f$f@f$ equal to `0.8660254037844386`.
 #pragma once
 
-#include "numtracer/core/cmat.hpp" // Matrix<N> (the generator storage)
-#include "numtracer/core/cx.hpp"   // Cx (constexpr complex), approx
 #include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
+#include "numtracer/core/cx.hpp"     // Cx (constexpr complex), approx
+#include "numtracer/core/matrix.hpp" // Matrix<N> (the generator storage)
 
 #include <array>
 #include <cmath>

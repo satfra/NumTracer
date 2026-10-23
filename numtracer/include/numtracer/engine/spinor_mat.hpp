@@ -1,6 +1,6 @@
 /// @file spinor_mat.hpp
-/// @brief A 4×4 spinor matrix whose entries are @ref numtracer::poly::Poly, plus the γ/slash
-///        builders the numeric Dirac trace multiplies.
+/// @brief The γ/C/slash builders of the 4×4 spinor matrix `Matrix<4, Poly>` that the numeric
+///        Dirac trace multiplies.
 ///
 /// The numeric contraction backend contracts a Dirac chain as a product of 4×4 matrices whose
 /// entries are polynomials in the frame's scalar symbols (@ref numtracer::poly::Poly): the γ
@@ -8,30 +8,18 @@
 /// polynomial coefficients. This header holds the leaf builders of that `Matrix<4, Poly>`:
 /// `gammaC` (a numeric γ^μ), `cmatC` (the charge-conjugation matrix C) and `slashC` (a slashed
 /// momentum from explicit per-component polynomials). Product and trace are the generic
-/// `matmul`/`mtrace` of `core/cmat.hpp`.
+/// `matmul`/`mtrace` of `core/matrix.hpp`.
 #pragma once
 
-#include "numtracer/core/cmat.hpp"        // Matrix
+#include "numtracer/core/matrix.hpp"      // Matrix
 #include "numtracer/dirac/dirac_data.hpp" // kGamma, kC (Euclidean Weyl)
-#include "numtracer/poly/mpoly.hpp"       // Poly
+#include "numtracer/poly/poly.hpp"        // Poly
 
 #include <array>
 #include <utility> // std::move
 
 namespace numtracer::inline engine
 {
-
-  /// @brief An N×N matrix of zero polynomials over `nsym` symbols.
-  ///
-  /// `Matrix<N, Poly>{}` holds *default* polynomials (`nsym == 0`); this gives every entry the
-  /// frame's symbol count instead, which the γ/C/slash builders below start from.
-  template <int N> Matrix<N, Poly> zeroPolyMatrix(int nsym)
-  {
-    Matrix<N, Poly> m;
-    for (auto &e : m.data)
-      e = PolyFactory::zero(nsym);
-    return m;
-  }
 
   /// @brief The numeric γ matrix for a concrete Lorentz index `mu` (a constant 4×4 of `Poly`).
   inline Matrix<4, Poly> gammaC(int nsym, int mu)

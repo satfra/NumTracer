@@ -15,9 +15,9 @@
 /// straight-line result. It is not part of the consumer-side kernel.
 #pragma once
 
-#include <bit>
 #include "numtracer/core/hash.hpp" // splitmix64_finalise / hash_combine
 #include "numtracer/core/intern_table.hpp"
+#include <bit>
 #include <cstdint>
 #include <vector>
 
@@ -32,11 +32,12 @@ namespace numtracer::inline network
     RMUL,   ///< `a * b`.
     RNEG    ///< `-a`.
   };
+
   /// @brief One instruction of the lowered real SSA.
   struct RInstr {
-    int op = RCONST; ///< Opcode (one of @ref ROp).
-    int a = -1;      ///< First operand slot; for `RVAR` this is the environment id.
-    int b = -1;      ///< Second operand slot (binary ops only).
+    int op = RCONST;  ///< Opcode (one of @ref ROp).
+    int a = -1;       ///< First operand slot; for `RVAR` this is the environment id.
+    int b = -1;       ///< Second operand slot (binary ops only).
     double value = 0; ///< Constant value, for `RCONST`.
   };
 
@@ -52,16 +53,20 @@ namespace numtracer::inline network
         const std::uint64_t h = hash_combine(hash_combine(e.op, e.a), e.b);
         return hash_combine(h, std::bit_cast<std::uint64_t>(e.value));
       }
+
       static constexpr bool ieq(const RInstr &a, const RInstr &b)
       {
         return a.op == b.op && a.a == b.a && a.b == b.b && a.value == b.value;
       }
+
       struct IHash {
         constexpr std::uint64_t operator()(const RInstr &e) const { return ihash(e); }
       };
+
       struct IEq {
         constexpr bool operator()(const RInstr &a, const RInstr &b) const { return ieq(a, b); }
       };
+
       InternTable<RInstr, IHash, IEq> index; ///< hash lookup into @ref ins
 
       /// @brief Append an instruction, or reuse an identical existing one (value numbering).
@@ -69,9 +74,14 @@ namespace numtracer::inline network
     };
 
     /// @brief Emit a real constant, mapping `0` to the structural-zero sentinel (`-1`).
-    constexpr int rconst(RBuilder &builder, double k) { return k == 0.0 ? -1 : builder.find_or_add({RCONST, -1, -1, k}); }
+    constexpr int rconst(RBuilder &builder, double k)
+    {
+      return k == 0.0 ? -1 : builder.find_or_add({RCONST, -1, -1, k});
+    }
+
     /// @brief Emit a real variable (environment lookup).
     constexpr int rvar(RBuilder &builder, int id) { return builder.find_or_add({RVAR, id, -1, 0}); }
+
     /// @brief Emit a negation, folding `-(const)` and cancelling `-(-x)`.
     constexpr int rneg(RBuilder &builder, int y)
     {
@@ -80,6 +90,7 @@ namespace numtracer::inline network
       if (builder.ins[y].op == RNEG) return builder.ins[y].a;
       return builder.find_or_add({RNEG, y, -1, 0});
     }
+
     /// @brief Emit a multiply, folding `×0`, `×1`, `×(-1)` and canonicalising operand order.
     constexpr int rmul(RBuilder &builder, int x, int y)
     {
@@ -94,6 +105,7 @@ namespace numtracer::inline network
       }
       return builder.find_or_add({RMUL, x < y ? x : y, x < y ? y : x, 0});
     }
+
     /// @brief Emit an addition, dropping structural-zero operands and canonicalising order.
     constexpr int radd(RBuilder &builder, int x, int y)
     {
@@ -103,4 +115,4 @@ namespace numtracer::inline network
     }
   } // namespace rdetail
 
-} // namespace numtracer::network
+} // namespace numtracer::inline network

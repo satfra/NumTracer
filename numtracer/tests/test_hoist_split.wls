@@ -17,7 +17,8 @@
      5. every definition of a complex flow's #if ladder is transformed;
      6. a kernel without the frequency parameter is refused (None), not half-transformed;
      7. the real emission shapes: shared lookups carry [[maybe_unused]], and k, which reaches
-        ntHoistedKernelFn outside ScalarParams, is a runtime parameter, not an external coordinate.
+        ntHoistedKernelFn outside ScalarParams, is a runtime parameter, not an external coordinate;
+     8. a vacuum flow (no frequency) hoists over the radial variable alone.
 
    Run standalone:  wolfram -script numtracer/tests/test_hoist_split.wls  *)
 
@@ -26,7 +27,7 @@ Get[FileNameJoin[{$repo, "numtracer", "mathematica", "NumTracer.m"}]];
 
 Begin["NumTracer`Private`"];
 
-$nExpected = 24;
+$nExpected = 36;
 $fail = 0; nRan = 0;
 check[label_, cond_] := (
   nRan++;
@@ -121,6 +122,54 @@ pre3 = First @ StringCases[res3, Shortest["auto pre(" ~~ __ ~~ "\n}"]];
 check["[[maybe_unused]] lookups go to pre()", StringContainsQ[pre3, "ntgix0 = ZQ.index"] && StringContainsQ[pre3, "ntglk0 = ZQ.at"]];
 check["a line reading k goes to pre()", StringContainsQ[pre3, "const auto _r = RB"]];
 check["pre_reads flags k", StringContainsQ[res3, "pre_reads{true, false, true, false, true, false, false, true}"]];
+
+Print["=== 8. vacuum flows ==="];
+check["vacuum map kernel: angles and external coordinate",
+  ntHoistExcluded[{"l1", "cos1", "cos2", "p", "k", "T", "d1V", "ZQ"}, None, runtime, {}] === {"cos1", "cos2", "p"}];
+check["vacuum potential kernel: only the point arguments",
+  ntHoistExcluded[{"l1", "k", "T", "d1V", "ZQ"}, None, runtime, {"d1V"}] === {"d1V"}];
+check["vacuum: no radial parameter: None", ntHoistExcluded[{"k", "T", "d1V"}, None, runtime, {}] === None];
+vac = "static KOKKOS_INLINE_FUNCTION auto kernel(const double& l1, const double& cos1, const double& p, const double& k, const double& T, const auto& d1V, const auto& ZQ)
+    {
+      using namespace DiFfRG;
+      const double dr_0 = ZQ(l1);
+      const double dr_1 = ZQ(sqrt(l1 * l1 + p * p + 2. * l1 * p * cos1));
+      const auto _a = powr<-1>(dr_0 + k);
+      const auto _b = dr_1 * _a + d1V;
+      return _b;
+    }";
+{resV, traitV} = ntHoistedKernelFn[vac, <|"Hoist" -> True, "ScalarParams" -> {"T", "d1V"}, "Dressings" -> {"ZQ"}, "PointArguments" -> {"d1V"}|>, False, None];
+preV = First @ StringCases[resV, Shortest["auto pre(" ~~ __ ~~ "\n}"]];
+postV = First @ StringCases[resV, Shortest["auto post(" ~~ __ ~~ "\n}"]];
+check["vacuum: radial-only lines go to pre()", StringContainsQ[preV, "const double dr_0"] && StringContainsQ[preV, "const auto _a"]];
+check["vacuum: a line reading an angle or p stays in post()", !StringContainsQ[preV, "dr_1"] && StringContainsQ[postV, "const double dr_1"]];
+check["vacuum: a line reading a point argument stays in post()", StringContainsQ[postV, "const auto _b"]];
+(* l1 k ZQ read; cos1 p T d1V not *)
+check["vacuum: pre_reads in kernel() order", StringContainsQ[resV, "pre_reads{true, false, false, true, false, false, true}"]];
+check["vacuum: the has_pre trait", traitV === {"static constexpr bool has_pre = true;"}];
+
+Print["=== explicit template parameters ==="];
+(* the form ntExplicitTemplates gives the kernel: a `template<...>` line above the definition, here
+   inside an #if branch. pre() must keep the header, post() must add P_'s type to it, and no
+   abbreviated `auto` parameter may appear (nvcc 12.x cudafe++ crashes on many of them). *)
+tmpl = "#if 1
+    template<typename T7, typename T8>
+    static KOKKOS_INLINE_FUNCTION auto kernel(const double& l1, const double& cos1, const double& p, const double& k, const double& T, const double& d1V, const T7& ZQ, const T8& ZPi)
+    {
+      const double dr_0 = ZQ(l1);
+      const auto _a = powr<-1>(dr_0 + k);
+      const auto _b = cos1 * _a;
+      return _b;
+    }
+#endif";
+{resT, traitT} = ntHoistedKernelFn[tmpl, <|"Hoist" -> True, "ScalarParams" -> {"T", "d1V"}, "Dressings" -> {"ZQ", "ZPi"}, "PointArguments" -> {}|>, False, None];
+check["template: pre() keeps the header",
+  StringContainsQ[resT, "template<typename T7, typename T8>\n    static KOKKOS_INLINE_FUNCTION auto pre("]];
+check["template: post() adds P_'s type to the header",
+  StringContainsQ[resT, "template<typename TP_, typename T7, typename T8>\n    static KOKKOS_INLINE_FUNCTION auto post(const TP_ &P_, "]];
+check["template: no abbreviated auto parameter", StringFreeQ[resT, "(const auto" | ", const auto"]];
+check["no template header: post() gets its own",
+  StringContainsQ[resV, "template<typename TP_>\n"] && StringContainsQ[resV, "auto post(const TP_ &P_, "]];
 
 If[nRan =!= $nExpected,
   Print["  FAIL  check count is ", nRan, ", expected ", $nExpected,

@@ -1,8 +1,8 @@
 /// @file lower_poly.hpp
-/// @brief Lower a contracted @ref Poly / @ref DPoly to the straight-line instruction stream of the
+/// @brief Lower a contracted @ref Poly / @ref DressedPoly to the straight-line instruction stream of the
 ///        emitted kernel.
 ///
-/// Lowering: @ref to_genprog / `lower_into` turn a finished @ref Poly or @ref DPoly into straight-line
+/// Lowering: @ref to_genprog / `lower_into` turn a finished @ref Poly or @ref DressedPoly into straight-line
 /// instructions (Horner ordering + common-subexpression elimination, `gdetail::best_into`). Leaves —
 /// scalar products, 1/k², dressings — are interned in a @ref network::GlobalEnv shared by all
 /// diagrams of a kernel, so each is computed once per kernel call.
@@ -17,13 +17,13 @@
 /// TU or a header-only build (see core/export.hpp).
 #pragma once
 
-#include "numtracer/codegen/gen.hpp"     // network::GlobalEnv / GenProg / LMono / gdetail::best_into
-#include "numtracer/core/config.hpp"     // NT_THROW
-#include "numtracer/core/envvar.hpp"     // env_int
-#include "numtracer/core/export.hpp"     // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES
-#include "numtracer/poly/dpoly.hpp"      // DPoly / DMono
-#include "numtracer/poly/mpoly.hpp"      // Poly
-#include "numtracer/poly/tolerances.hpp" // kNoisePruneRelTol
+#include "numtracer/codegen/gen.hpp"       // network::GlobalEnv / GenProg / LMono / gdetail::best_into
+#include "numtracer/core/config.hpp"       // NT_THROW
+#include "numtracer/core/envvar.hpp"       // env_int
+#include "numtracer/core/export.hpp"       // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES
+#include "numtracer/poly/dressed_poly.hpp" // DressedPoly / DressingMono
+#include "numtracer/poly/poly.hpp"         // Poly
+#include "numtracer/poly/tolerances.hpp"   // kNoisePruneRelTol
 
 #include <algorithm>
 #include <cmath>
@@ -49,18 +49,18 @@ namespace numtracer::inline network
   ///        real). `Re(Σ c·mono) = Σ Re(c)·mono` for real monomials, so the imaginary half is dead;
   ///        skipping it avoids computing+returning a `std::complex` whose `.imag()` nobody reads.
   NUMTRACER_FUNC network::GenProg to_genprog(const Poly &p, network::GlobalEnv &g, bool realOnly = false);
-  NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly = false);
+  NUMTRACER_FUNC network::GenProg to_genprog(const DressedPoly &p, network::GlobalEnv &g, bool realOnly = false);
 
   /// @brief Lower ONE polynomial into @p builder; returns `{reRoot, imRoot}` with
   ///        `imRoot == network::kRealProgram` when the polynomial is real. @ref to_genprog is this plus
   ///        a fresh builder.
   NUMTRACER_FUNC std::pair<int, int> lower_into(const Poly &p, network::GlobalEnv &g,
                                                 network::rdetail::RBuilder &builder, bool realOnly);
-  /// @brief @ref DPoly counterpart of the @ref Poly `lower_into`. Each kinematic monomial is emitted
+  /// @brief @ref DressedPoly counterpart of the @ref Poly `lower_into`. Each kinematic monomial is emitted
   ///        exactly as in the @ref Poly overload and additionally carries its dressing monomial's
-  ///        atoms as `SymKind::dress` leaves (@ref network::GlobalEnv::dr_id). A `DPoly` with a single
+  ///        atoms as `SymKind::dress` leaves (@ref network::GlobalEnv::dr_id). A `DressedPoly` with a single
   ///        empty dressing monomial reduces to exactly the @ref Poly path.
-  NUMTRACER_FUNC std::pair<int, int> lower_into(const DPoly &p, network::GlobalEnv &g,
+  NUMTRACER_FUNC std::pair<int, int> lower_into(const DressedPoly &p, network::GlobalEnv &g,
                                                 network::rdetail::RBuilder &builder, bool realOnly);
 
   // ================================================================================================
@@ -130,7 +130,7 @@ namespace numtracer::inline network
     /// @brief One dressing channel of a lowering: the dressing atoms @ref dress shared by every
     ///        monomial of @ref poly. A plain @ref Poly is a single channel with no dressing atoms.
     struct LowerChannel {
-      const DMono *dress;
+      const DressingMono *dress;
       const Poly *poly;
     };
 
@@ -370,7 +370,7 @@ namespace numtracer::inline network
   NUMTRACER_FUNC std::pair<int, int> lower_into(const Poly &p, network::GlobalEnv &g,
                                                 network::rdetail::RBuilder &builder, bool realOnly)
   {
-    static const DMono noDress;
+    static const DressingMono noDress;
     return ldetail::lower_channels({{&noDress, &p}}, g, builder, realOnly);
   }
 
@@ -383,8 +383,7 @@ namespace numtracer::inline network
     return gp;
   }
 
-
-  NUMTRACER_FUNC std::pair<int, int> lower_into(const DPoly &p, network::GlobalEnv &g,
+  NUMTRACER_FUNC std::pair<int, int> lower_into(const DressedPoly &p, network::GlobalEnv &g,
                                                 network::rdetail::RBuilder &builder, bool realOnly)
   {
     std::vector<ldetail::LowerChannel> chans;
@@ -394,7 +393,7 @@ namespace numtracer::inline network
     return ldetail::lower_channels(chans, g, builder, realOnly);
   }
 
-  NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly)
+  NUMTRACER_FUNC network::GenProg to_genprog(const DressedPoly &p, network::GlobalEnv &g, bool realOnly)
   {
     network::rdetail::RBuilder builder;
     const auto [reRoot, imRoot] = lower_into(p, g, builder, realOnly);

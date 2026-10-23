@@ -26,7 +26,7 @@
 /// because it does genuinely less work in a still-vectorisable shape.)
 #pragma once
 
-#include "numtracer/core/cmat.hpp"        // Matrix
+#include "numtracer/core/matrix.hpp"      // Matrix
 #include "numtracer/dirac/dirac_data.hpp" // kGamma
 
 #include <complex>

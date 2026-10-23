@@ -1,4 +1,4 @@
-/// @file mpoly.hpp
+/// @file poly.hpp
 /// @brief Multivariate polynomial over an arbitrary user-symbol set, carrying surviving inverse
 ///        (`1/k²`) atoms in the monomial key. The arithmetic core of the **numeric contraction
 ///        backend**: contract a diagram as 4×4 spinor matrix products whose entries are
@@ -22,12 +22,13 @@
 /// Stored as a sorted vector (see @ref Poly); the symbol *meaning* lives only in the kernel's `fill`,
 /// so the engine is frame-agnostic.
 ///
-/// This header is the polynomial type alone; the 4×4 spinor matrix of `Poly` (`Matrix<4, Poly>`) and the
-/// γ/slash builders that consume it live in `engine/spinor_mat.hpp`.
+/// This header holds the polynomial type and `zeroPolyMatrix` (a `Matrix<N, Poly>` of zeros); the
+/// γ/slash builders of the 4×4 spinor matrix `Matrix<4, Poly>` live in `engine/spinor_mat.hpp`.
 #pragma once
 
 #include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
 #include "numtracer/core/cx.hpp"
+#include "numtracer/core/matrix.hpp" // Matrix (zeroPolyMatrix)
 #include "numtracer/core/stats.hpp"
 #include "numtracer/poly/tolerances.hpp" // kPolyDivRelTol
 #include "numtracer/third_party/gch/small_vector.hpp"
@@ -50,7 +51,7 @@
 
 namespace numtracer::inline engine
 {
-  class Frame; // befriended by Poly / DPoly below; defined in engine/frame.hpp
+  class Frame; // befriended by Poly / DressedPoly below; defined in engine/frame.hpp
 }
 
 namespace numtracer::inline poly
@@ -726,6 +727,18 @@ namespace numtracer::inline poly
       return Poly::mulAdd(x0, y0, x1, y1);
     }
   };
+
+  /// @brief An N×N matrix of zero polynomials over `nsym` symbols.
+  ///
+  /// `Matrix<N, Poly>{}` holds *default* polynomials (`nsym == 0`); this gives every entry the
+  /// frame's symbol count instead (e.g. the γ/C/slash builders of engine/spinor_mat.hpp start from it).
+  template <int N> Matrix<N, Poly> zeroPolyMatrix(int nsym)
+  {
+    Matrix<N, Poly> m;
+    for (auto &e : m.data)
+      e = PolyFactory::zero(nsym);
+    return m;
+  }
 
   inline Poly operator+(const Poly &a, const Poly &b)
   {

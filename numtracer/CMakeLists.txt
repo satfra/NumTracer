@@ -268,10 +268,10 @@ if(NUMTRACER_BUILD_TESTS)
   # structural folds (all symmetric slot variants, chains, traces, no-op negatives) + value-preserving.
   nt_add_test(test_projector_fusion tests/test_projector_fusion.cpp NAME projector_fusion)
 
-  # Dressing-collection layer (poly/dpoly.hpp + the dressed contraction): DPoly arithmetic, the
-  # dressing-free reduction (DPoly == Poly path, same emitted program), and a dressed quark line
+  # Dressing-collection layer (poly/dressed_poly.hpp + the dressed contraction): DressedPoly arithmetic, the
+  # dressing-free reduction (DressedPoly == Poly path, same emitted program), and a dressed quark line
   # collected-vs-distributed. The symbolic-dressing-collection correctness gate.
-  nt_add_test(test_dpoly tests/test_dpoly.cpp NAME dpoly)
+  nt_add_test(test_dressed_poly tests/test_dressed_poly.cpp NAME dressed_poly)
 
   # The build-time numeric colour/flavour net (network/sun_net.hpp): fundamental T^a, two groups,
   # vs analytic group factors.
@@ -630,6 +630,14 @@ if(NUMTRACER_BUILD_TESTS)
              COMMAND "${NT_WOLFRAM_EXE}" -noprompt
                      -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_flavour_contract.wls")
     set_tests_properties(wolfram_flavour_contract PROPERTIES LABELS wolfram TIMEOUT 300)
+
+    # Colour zero-pruning: ntSingleGeneratorLoopQ (tr T^a = 0 on a closed fundamental loop with one
+    # generator) and its use in compileColourSum. The negatives pin that it never fires on a nonzero
+    # colour factor, in particular not on a loop through a dressed diagonal delta.
+    add_test(NAME wolfram_colour_zero_prune
+             COMMAND "${NT_WOLFRAM_EXE}" -noprompt
+                     -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_colour_zero_prune.wls")
+    set_tests_properties(wolfram_colour_zero_prune PROPERTIES LABELS wolfram TIMEOUT 300)
 
     # k-only lookup hoisting: ntPatchHoistWrappers must patch DiFfRG's CT_get.cc for ANY coordinate
     # list (none, p0, p0 p, ...) and abort on a wrapper it cannot recognise; an unpatched wrapper only

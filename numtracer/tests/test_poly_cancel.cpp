@@ -1,4 +1,4 @@
-// Correctness gate for the inverse-atom CANCELLATION passes in poly/mpoly.hpp:
+// Correctness gate for the inverse-atom CANCELLATION passes in poly/poly.hpp:
 //   divThroughMonomialAtoms — denominator is a single monomial (bare/unit-direction loop)
 //   divThroughPolyAtoms     — denominator is a genuine polynomial (shifted line, k² non-monomial)
 //
@@ -23,7 +23,7 @@
 #include "numtracer/engine/frame.hpp"
 #include "engine_test_util.hpp"
 using namespace numtracer; // the typed builders (LorentzIndex, Momentum, …) the tests spell unqualified
-#include "numtracer/poly/mpoly.hpp"
+#include "numtracer/poly/poly.hpp"
 
 #include <cmath>
 #include <cstdio>

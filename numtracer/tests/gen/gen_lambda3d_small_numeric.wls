@@ -113,7 +113,7 @@ Module[{genSrc, traces, symLine, nsym},
   If[!StringContainsQ[genSrc, RegularExpression["Frame frame\\(\\{[^\\n]*\\},\\s*\\{\\{"]],
     Print["FIXTURE GUARD FAILED: units table empty — the mixed unit-loop branch did not fire."]; Abort[]];
   If[!StringContainsQ[genSrc, "sdr"] || !StringContainsQ[traces, "dress("],
-    Print["FIXTURE GUARD FAILED: no dressing atoms — the dressed (DPoly) path is not exercised."]; Abort[]];
+    Print["FIXTURE GUARD FAILED: no dressing atoms — the dressed (DressedPoly) path is not exercised."]; Abort[]];
   If[!StringContainsQ[traces, "std::complex"],
     Print["FIXTURE GUARD FAILED: traces are all real — the complex path is not exercised."]; Abort[]];
 ];

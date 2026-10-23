@@ -107,7 +107,7 @@ $ntHeads = {
   <|"Form" :> ntEpsFund[n_, idx___], "Sector" -> "Fundamental", "Labels" :> {idx}, "Rewritten" -> True|>,
   (* ntDressedNum[options, din, dout]: a dressed propagator numerator kept EAGER (symbolic dressing
      collection). `options` is a tensor-FREE list of {coeffExpr, spec} (spec = {"ident"} |
-     {"slash",vlc}), so it exposes only its spinor labels; the dressings fold in C++ (one DPoly trace)
+     {"slash",vlc}), so it exposes only its spinor labels; the dressings fold in C++ (one DressedPoly trace)
      instead of distributing the numerator into 2^D diagrams. *)
   <|"Form" :> ntDressedNum[opts_, din_, dout_], "Sector" -> "Dirac", "Labels" :> {din, dout},
     "Spinor" :> {din, dout}|>,

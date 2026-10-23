@@ -485,6 +485,8 @@ splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
             If[keepColLeakQ || !FreeQ[termRest, $colourHeadPat],
               Message[MakeNTKernel::colrest, Short[DeleteDuplicates @ Cases[rest, $colourHeadPat, {0, Infinity}], 6], Short[rest, 8]];
               Abort[]];
+            (* a branch whose colour vanishes (tr T^a = 0) is dropped before its Dirac/Lorentz build *)
+            If[ntColourZeroQ[colProd], Return[Nothing, Module]];
             {
               colProd,
               If[keepDiracQ || !FreeQ[termRest, $diracHeadPat],
@@ -606,7 +608,36 @@ compileColourSum[e_, ids_] := Module[{
     If[Length[terms] > $ntColSumMaxBranches,
       Message[MakeNTKernel::colsum, Length[terms], $ntColSumMaxBranches];
       Abort[]];
-    compileColour[#, ids]& /@ terms];
+    compileColour[#, ids]& /@ Select[terms, ! ntSingleGeneratorLoopQ[#] &]];
+
+(* ntSingleGeneratorLoopQ memoised on the colour product: a diagram's branches share few distinct
+   colour products. Cleared per generation in ntResetGeneration. *)
+$ntColZeroCache = <||>;
+ntColourZeroQ[c_] := Lookup[$ntColZeroCache, Key[c], $ntColZeroCache[c] = ntSingleGeneratorLoopQ[c]];
+
+(* tr T^a = 0: does the colour product `term` contain a closed fundamental index loop that runs through
+   generators and plain deltas only and holds exactly ONE generator? Then the whole product vanishes.
+   A loop through a dressed diagonal delta (ntSUNDiagFund) is left alone: tr(T^a D) need not vanish.
+   Powers of a bare head are expanded into repeated factors, as in compileColour. *)
+ntSingleGeneratorLoopQ[term_] :=
+  Module[{facs, fund, byLabel, edges, comps},
+    facs = If[Head[term] === Times, List @@ term, {term}] /.
+      Power[b_, k_Integer?Positive] /; MatchQ[b, $colourHeadPat] :> Sequence @@ ConstantArray[b, k];
+    (* {kind, label, label} per factor on a fundamental line: 1 = generator, 0 = delta, 2 = dressed delta *)
+    fund = Replace[facs, {
+        ntSUNT[n_, _, i_, j_] :> {1, {n, i}, {n, j}},
+        ntSUNDeltaFund[n_, i_, j_] :> {0, {n, i}, {n, j}},
+        ntSUNDiagFund[n_, i_, j_, _] :> {2, {n, i}, {n, j}},
+        _ -> Nothing}, {1}];
+    If[FreeQ[fund[[All, 1]], 1], Return[False]];
+    (* label -> the positions of the factors carrying it (twice the same position for a self-trace) *)
+    byLabel = GroupBy[Join @@ MapIndexed[{#1[[2]] -> #2[[1]], #1[[3]] -> #2[[1]]} &, fund], First -> Last];
+    edges = Flatten[Subsets[DeleteDuplicates[#], {2}] & /@ Values[byLabel], 1];
+    comps = ConnectedComponents[Graph[Range[Length[fund]], UndirectedEdge @@@ edges]];
+    AnyTrue[comps, Function[c,
+      Count[fund[[c, 1]], 1] == 1 && FreeQ[fund[[c, 1]], 2] &&
+        (* closed: every label of the loop occurs exactly twice *)
+        AllTrue[Lookup[byLabel, DeleteDuplicates[Join[fund[[c, 2]], fund[[c, 3]]]]], Length[#] == 2 &]]]];
 
 (* ---- spinor slots of the Dirac heads (used by the spinor-loop walk below) ---------------------- *)
 
@@ -621,7 +652,7 @@ diracIn[h_] := First[spinorLabelsHead[h]];
 diracSpinorSymmetricQ[_ntDeltaDirac] := True;
 diracSpinorSymmetricQ[_]             := False;
 
-(* ---- Dirac trace in the C++ generator (network/dirac.hpp `dirac_value`) ----------------------
+(* ---- Dirac trace in the C++ generator (engine/contract.hpp `trace_dirac_loop`) ---------------
    The gamma chain is emitted as a `DiracChain` literal and the generator traces the closed spinor loop
    NUMERICALLY (4×4 matrix products) against the Lorentz rest, as colour is folded by
    `SUNNet`/`compileColour`. *)
@@ -882,9 +913,12 @@ compileDiracBody[factors_, ids_, env_, nonzeroCompMask_] := Module[
       Reap[StringRiffle[chainTokCpp[#, dressed, vecOf, ids, env, nonzeroCompMask] & /@ #, ", "] & /@ loops, "slot"]];
     slots = Flatten[slots, 1];
     (* the ntVec factors absorbed into a chain γ as its slash *)
-    slashVecs = Cases[Join @@ loops /. ntTransposed[g_] :> g,
-                      ntGamma[mu_, _, _] /; KeyExistsQ[vecOf, mu] :> ntVec[vecOf[mu], mu]];
-    restFacs = DeleteCases[factors, Alternatives @@ Join[diracFacs, slashVecs]];
+    (* the rest drops the Dirac heads and the ntVec absorbed into a chain γ as its slash. The loops
+       hold exactly the Dirac factors of diracFacs (orderDiracFacs reorders and may mark a transpose,
+       nothing else), so the slashed legs are read off diracFacs directly. *)
+    slashVecs = Association[# -> vecOf[#] & /@ Select[Cases[diracFacs, ntGamma[mu_, _, _] :> mu], KeyExistsQ[vecOf, #] &]];
+    restFacs = Select[factors,
+      ! MatchQ[#, $diracHeadPat] && ! MatchQ[#, ntVec[q_, mu_] /; Lookup[slashVecs, Key[mu], Missing[]] === q] &];
     If[! FreeQ[restFacs, $diracHeadPat],
       Message[compileDirac::diracleak, Select[restFacs, ! FreeQ[#, $diracHeadPat] &]];
       Abort[]];

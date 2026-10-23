@@ -1,6 +1,6 @@
 # The numeric contraction engine
 
-> Headers: `engine/{contract,contract_dressed}.hpp`, `codegen/lower_poly.hpp`, `poly/mpoly.hpp`,
+> Headers: `engine/{contract,contract_dressed}.hpp`, `codegen/lower_poly.hpp`, `poly/poly.hpp`,
 > `network/{network,dirac,sun_net}.hpp` · Namespaces: `numtracer::engine`, `numtracer::poly`, `numtracer::network`
 
 This is the heart of how NumTracer generates a kernel. Given one diagram — a closed Dirac chain, a
@@ -17,13 +17,13 @@ Neither intermediate is ever formed. The result is already a small polynomial.
 
 ## The polynomial it works in
 
-`poly/mpoly.hpp` defines `Poly`, the arithmetic currency of the whole engine: a multivariate
+`poly/poly.hpp` defines `Poly`, the arithmetic currency of the whole engine: a multivariate
 polynomial over the frame's scalar symbols that also tracks surviving inverse propagator
 denominators `1/k²`. Everything below produces and combines `Poly`s through addition,
 multiplication, monomial-level cancellation of `k²·(1/k²)` (`divThroughMonomialAtoms`), and
 collection of equal-momentum propagator groups (`reduce_units`).
 
-Every `Poly` (and `DPoly`) is minted through a `numtracer::Frame` (`engine/frame.hpp`), which
+Every `Poly` (and `DressedPoly`) is minted through a `numtracer::Frame` (`engine/frame.hpp`), which
 fixes the symbol list — and with it the symbol-space size `nsym` — **once**: you write
 `frame.mono(...)`, `frame.inv_denominator(...)`, `frame.var(i)`, `frame.zero()`, and contract with
 `frame.trace(...)`. Because the frame carries `nsym`, the raw size-taking factories never appear in
@@ -93,24 +93,24 @@ passes decide whether the factor dies or lives.
 that exact pattern — a sorted multiset of runtime-call ids carried on each term — for structures
 that must stay symbolic to the end of the trace rather than cancel:
 
-* **`DPoly`** (`poly/dpoly.hpp`) — a **dressed Dirac numerator** like `Mq·δ + Z(p)·γ·p` is a
+* **`DressedPoly`** (`poly/dressed_poly.hpp`) — a **dressed Dirac numerator** like `Mq·δ + Z(p)·γ·p` is a
   *sum* of structures with runtime coefficients. Rather than distribute the diagram into `2^D`
-  traces, the front-end keeps it eager and the engine collects one `DPoly`: a map from a
-  **dressing-atom multiset** (`DMono`) to the kinematic `Poly` it multiplies. The coefficient
-  *is* an `Poly`, so `DPoly` reuses `Poly::operator*`/`+` verbatim and undressed flows are
-  byte-identical (their `DPoly` is a single empty-dressing term). Walked through in the
+  traces, the front-end keeps it eager and the engine collects one `DressedPoly`: a map from a
+  **dressing-atom multiset** (`DressingMono`) to the kinematic `Poly` it multiplies. The coefficient
+  *is* an `Poly`, so `DressedPoly` reuses `Poly::operator*`/`+` verbatim and undressed flows are
+  byte-identical (their `DressedPoly` is a single empty-dressing term). Walked through in the
   [step-18](../tutorials/step-18.md).
 
-  **Where the `DPoly` is assembled matters.** The generator's *trace table* is plain `Poly` even
+  **Where the `DressedPoly` is assembled matters.** The generator's *trace table* is plain `Poly` even
   for dressed flows: at codegen time each structure×dressing combination is stripped to its bare
-  structure, and the dressing is carried alongside as a per-sub-term scalar plus a `DMono`. So
+  structure, and the dressing is carried alongside as a per-sub-term scalar plus a `DressingMono`. So
   combinations that share a concrete Dirac structure and differ only in dressing collapse to **one**
   contraction — a 6.2× reduction in distinct traces on the dense quark–gluon flows, and what makes
-  full-basis `ZAAqbq1` generate at all. The `DPoly` is then built in phase B, where
+  full-basis `ZAAqbq1` generate at all. The `DressedPoly` is then built in phase B, where
   `fold_net_dressed` (`engine/generator_phases.hpp`) routes each sub-term's scaled `Poly` into its
-  dressing channel. The alternative — collecting the `DPoly` during contraction
+  dressing channel. The alternative — collecting the `DressedPoly` during contraction
   (`Frame::trace` with slots, engine entry `ndetail::contract_dressed`) — is still the reference
-  implementation and what `tests/test_dpoly.cpp` grades against, but it re-contracts once per
+  implementation and what `tests/test_dressed_poly.cpp` grades against, but it re-contracts once per
   dressing channel.
 * **`SUNPoly`** (`network/sun_net.hpp`) — the SU($N$) analogue described in
   [step 3](#sun-fold): a group-diagonal `δ` folds to `Σ_a c_a Z_a` over named
@@ -190,7 +190,7 @@ intermediate blow-ups.
 Two cancellations then keep the emitted polynomial small, and they are where the compactness actually
 comes from:
 
-- **Unit-vector constraints** (`reduce_units`, `poly/mpoly.hpp`). The loop momentum is written as
+- **Unit-vector constraints** (`reduce_units`, `poly/poly.hpp`). The loop momentum is written as
   magnitude × unit direction, so `ΣUμ² = 1` holds exactly; rewriting `U_last² → 1 − Σ_{μ<last} Uμ²`
   bounds the last component to power ≤ 1 and collapses the bare-loop denominator `Σ(l·Uμ)² = l²·ΣUμ²`
   to the monomial `l²`, which then cancels.

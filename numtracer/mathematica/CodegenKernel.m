@@ -225,7 +225,7 @@ Options[mkGenerateKernel] =
     "KernelNamespace" -> "numtracer_kernels",
 (* Where `complex`/`compute` are looked up via `using`. *)
     "SupportNamespace" -> "numtracer",
-(* Dressing-parameter type: Automatic = `const auto&`, or a concrete type string, which also makes
+(* Dressing-parameter type: Automatic = generic (a function-template parameter), or a concrete type string, which also makes
    parameters typed in their own entry use that type. *)
     "DressingType" -> Automatic,
 (* Opt-in: compute every coordinate transform and every dressing lookup once (see ntShareGridLookups).
@@ -237,9 +237,9 @@ Options[mkGenerateKernel] =
     "SharedGrids" -> {},
 (* Opt-in: turn launch-constant dressing lookups into host-evaluated kernel parameters. *)
     "HoistLoopConstLookups" -> False,
-(* Opt-in, finite-T DiFfRG flows only (needs "MatsubaraVar"): emit the kernel also in hoisted form,
-   pre()/post() plus pre_reads, so the integrator computes the part depending only on the radial
-   variable, the frequency and the shared parameters once per (radial node, frequency node); see
+(* Opt-in: emit the kernel also in hoisted form, pre()/post() plus pre_reads, so that DiFfRG's
+   integrator computes the part depending only on the radial variable (and, for a finite-T flow, the
+   frequency) and the shared parameters once per radial node (per (radial, frequency) node); see
    ntHoistKernelText. *)
     "Hoist" -> False,
 (* Hoist: the runtime parameters a caller may pass per point to DiFfRG's map_points() (e.g. the
@@ -271,7 +271,7 @@ Options[mkGenerateKernel] =
   };
 
 (* The dressing-collection path needs no option: mkGenerateKernel detects the `ntDressedNum` tokens
-   NumTrace emits under "DressingCollection" -> True and routes to the DPoly generator branch. *)
+   NumTrace emits under "DressingCollection" -> True and routes to the DressedPoly generator branch. *)
 
 (* "ComplexRuntimeProjection": what to do when a coefficient carries a Complex below a head the
    symbolic real/imag split cannot traverse — in practice a finite-density denominator l0 + I muq,
@@ -308,7 +308,7 @@ ntParamName[nm_] := ToString[nm];
 ntRuntimeParamType[entry_, adNames_List, scalarNames_List, dressTy_] :=
   With[{nm = ntParamName[If[AssociationQ[entry], entry["Name"], entry]]},
     Which[
-(* `auto` is not cosmetic: it makes the emitted function an abbreviated template, which is the only
+(* `auto` is not cosmetic: it makes the emitted function a template (see ntExplicitTemplates), the only
    reason kernel()/constant() can bind autodiff::real from DiFfRG's integrator_AD twin. Dressings are
    `auto` too unless "DressingType" names a type: DiFfRG's integrators pass a kernel the compact
    handle of each interpolator, in the kernel's precision, while the host-side ntHoisted() receives
@@ -319,7 +319,7 @@ ntRuntimeParamType[entry_, adNames_List, scalarNames_List, dressTy_] :=
       AssociationQ[entry], entry["Type"],
       True, dressTy]];
 
-MakeNTKernel::adtype = "ntRuntimeParamType: `1` runtime parameter(s) named in ADParams were not typed auto (const double& instead of const auto&). The kernel would still compile and run, but its autodiff twin (AD_get.cc in the consumer) cannot bind autodiff::real. Usual cause: the AD name did not survive the ToString/SymbolName normalisation, or ADParams names something that is not a runtime parameter. Offending name(s) and their types:\n`2`";
+MakeNTKernel::adtype = "ntRuntimeParamType: `1` runtime parameter(s) named in ADParams were not typed auto (const double& instead of a template parameter). The kernel would still compile and run, but its autodiff twin (AD_get.cc in the consumer) cannot bind autodiff::real. Usual cause: the AD name did not survive the ToString/SymbolName normalisation, or ADParams names something that is not a runtime parameter. Offending name(s) and their types:\n`2`";
 
 (* POST-CONDITION on a finished ntMkParam list: every ADParams name in the signature is typed auto.
    kernel(), constant() and ntHoisted share runtimeParams, so one check covers all three. Nothing
@@ -332,6 +332,24 @@ ntAssertADTyped[params_List, adNames_List] :=
         StringRiffle[(#["Name"] <> " got " <> ToString[#["Type"]])& /@ missed, ", "]];
       Abort[]];
     params];
+
+(* Emit every generic ("auto") parameter as an explicit function-template parameter: `const T7& ZA3`
+   under `template<typename T7, ...>` instead of `const auto& ZA3`. The two are equivalent C++20, but
+   nvcc 12.x's front end (cudafe++) crashes on an abbreviated template with 10 or more `auto`
+   parameters ("check_name_hiding_by_template_parameters"). "template" is FunKit's spelling: its
+   MakeCppFunction names the parameter at position n `Tn` and writes the template header. *)
+ntExplicitTemplates[params_List] := Map[If[#["Type"] === "auto", Append[#, "Type" -> "template"], #]&, params];
+
+(* `template<...>` header and parameter list of `params`, spelled as FunKit's MakeCppFunction spells
+   them. For the functions NumTracer writes as text (ntHoisted). *)
+ntTemplatedSignature[params_List] :=
+  With[{tpos = Flatten[Position[#["Type"]& /@ params, "template", {1}]]},
+    {If[tpos === {}, "", "template<" <> StringRiffle[("typename T" <> ToString[#])& /@ tpos, ", "] <> ">\n"],
+     StringRiffle[MapIndexed[
+       If[TrueQ[#1["Const"]], "const ", ""] <>
+         If[#1["Type"] === "template", "T" <> ToString[First[#2]], #1["Type"]] <>
+         If[TrueQ[#1["Reference"]], "& ", " "] <> #1["Name"]&,
+       params], ", "]}];
 
 (* ---- STAGE: which trace groups may drop their imaginary half ("PruneRealTraces") --------------
    A group whose dressing coefficient is REAL has only Re(trace) consumed (the consumer takes Re of
@@ -460,13 +478,13 @@ ntGenOptions[OptionsPattern[mkGenerateKernel]] :=
         "VerdictMacro" -> ntVerdictMacro[ns],
         "Dressings" -> OptionValue["Dressings"],
         "ScalarParams" -> scalarParams,
-(* AD-flagged scalars (d1V, d2V for FE-potential flows) must be `const auto&` so the kernel also
+(* AD-flagged scalars (d1V, d2V for FE-potential flows) must be template parameters so the kernel also
    accepts autodiff::real from the integrator_AD twin; everything else stays `const double&`.
    Both name lists are normalised here and nowhere else. *)
         "ScalarParamNames" -> ntParamName /@ scalarParams,
         "ADNames" -> ntParamName /@ OptionValue["ADParams"],
         "ParameterOrder" -> OptionValue["ParameterOrder"],
-(* Automatic -> `const auto&` (fully generic); else a concrete type string (an interpolator type) *)
+(* Automatic -> "auto", a template parameter (fully generic); else a concrete type string (an interpolator type) *)
         "DressingType" -> Replace[OptionValue["DressingType"], Automatic -> "auto"],
 (* Which of `args` the loop-independent constant() receives. Automatic = p and k (a 1-D grid); a
    caller with another grid passes its coordinate names via "CoordinateArgs". k is always included. *)
@@ -613,6 +631,7 @@ ntResetGeneration[env_, mask_, frame_] :=
     $dsCache = <||>;
     $odCache = <||>;
     $dslCache = <||>;
+    $ntColZeroCache = <||>;
 (* the generation-fixed half of every net-builder memo key, hashed ONCE here instead of on each
    (recursive) call. Covers everything those builders read besides the expression and its ids. *)
     $ctCtx = Hash[{env, mask, frame}];
@@ -642,6 +661,12 @@ ntDiagramRecords[diag_, d_, base_, env_, mask_, frame_] :=
     $ntCanonIdsSrc = diag["Ids"];
     $ntCanonRules = Dispatch[Normal[KeyDrop[diag["Ids"], Keys[env]]]];
     coeff = ntResolveFrame[diag["Coeff"], frame];
+(* A constant colour part in which every term vanishes (tr T^a = 0, ntSingleGeneratorLoopQ) zeroes
+   the whole diagram: compileColourSum would return no branch and nothing would be emitted. Decide it
+   here, before the Dirac and Lorentz net build pays for the components. *)
+    With[{x = Expand[Times @@ Join @@ (#["Factors"] & /@ Select[diag["Components"], #["Constant"] &])]},
+      If[x === 0 || AllTrue[If[Head[x] === Plus, List @@ x, {x}], ntSingleGeneratorLoopQ],
+        Return[{}]]];
     Scan[
       Function[comp,
         If[comp["Constant"],
@@ -654,7 +679,7 @@ ntDiagramRecords[diag_, d_, base_, env_, mask_, frame_] :=
 (* Non-constant component. The DISCONNECTED components of ONE diagram MULTIPLY — they are NOT
    separate summed diagrams. Collect them for the post-loop assembly. Route by structure:
      - any colour (entangled in a Plus, or a top-level T^a × …) or a gamma chain: collect the
-       component's splitColourGroups entries (dirac_value net per colour branch / chunked
+       component's splitColourGroups entries (DiracChain + Lorentz net per colour branch / chunked
        Lorentz net) as ONE Dirac/colour component in diracComps;
      - pure Lorentz (no colour, no gamma): accumulate factors — ALL pure-Lorentz components
        fold into ONE product net (disjoint ids make the C++ contract_factors multiply them). *)
@@ -662,6 +687,10 @@ ntDiagramRecords[diag_, d_, base_, env_, mask_, frame_] :=
             AppendTo[diracComps, ntProfTimed["splitColourGroups", splitColourGroups[comp["Factors"], diag["Ids"], env, mask]]],
             pureLorAcc = Join[pureLorAcc, comp["Factors"]]]]],
       diag["Components"]];
+(* A component whose every colour branch vanished (splitColourGroups returned no entry) is a zero
+   factor of the product, so the whole diagram is zero. Without this the assembly below would read the
+   empty component as a unit net. *)
+    If[MemberQ[diracComps, {}], Return[{}]];
 (* The diagram's CONSTANT colour/flavour part, as a list of {netString, scalar} branches — one
    branch unless a constant component was a sum. Colour folds to a scalar (sun_value -> Cx)
    and the generator already sums colour by emitting several nets into one group, so a summed
@@ -1032,7 +1061,7 @@ ntKernelSignature[o_, args_, fillArgs_, hoistCalls_, hoistSyms_, hasDr_, drAtoms
           ]
         ]
       ];
-    ntAssertADTyped[runtimeParams, adNames];
+    runtimeParams = ntExplicitTemplates[ntAssertADTyped[runtimeParams, adNames]];
     kernelParams = Join[ntMkParam[#, $ntRealT]& /@ sigArgs, runtimeParams, ntMkParam[#, $ntRealT]& /@ hoistSyms];
 (* The loop-independent `constant` is called by DiFfRG as constant(pos..., k, scalars..., dressings...),
    where pos is the FULL coordinate tuple of the flow's grid (quadrature_integrator.hh builds
@@ -1048,13 +1077,13 @@ ntKernelSignature[o_, args_, fillArgs_, hoistCalls_, hoistSyms_, hasDr_, drAtoms
     hoistFnStr =
       If[hoistCalls === {},
         None,
-        Module[{hkParams, vals},
-          hkParams = Join[
+        Module[{hkSig, vals},
+          hkSig = ntTemplatedSignature[Join[
             ntMkParam[#, $ntRealT]& /@ Select[args, # === Global`k&],
-            runtimeParams];
+            runtimeParams]];
           vals = (SymbolName[Head[#]] <> "(" <> cppFlat[#[[1]]] <> ")")& /@ hoistCalls;
-          "static device::array<" <> $ntRealT <> ", " <> ToString[Length[hoistCalls]] <> "> ntHoisted(" <>
-            StringRiffle[FunKit`MakeParameterString /@ hkParams, ", "] <> ")\n{\n  " <>
+          hkSig[[1]] <> "static device::array<" <> $ntRealT <> ", " <> ToString[Length[hoistCalls]] <> "> ntHoisted(" <>
+            hkSig[[2]] <> ")\n{\n  " <>
             StringRiffle[ntSupportUsings[o["SupportNamespace"]], "\n  "] <> "\n  return {{" <>
             StringRiffle[vals, ",\n    "] <> "}};\n}"]];
 (* [[maybe_unused]]: a frame may not reference every fill() argument (e.g. an angle or dressing atom
@@ -1115,15 +1144,16 @@ ntFiniteExtentPartition[integrand_, matsubaraSym_, decayRegs_, forced_] :=
         "TailExpr" -> tailPart|>]];
 
 (* ---- LOOP-INVARIANT HOISTING ("Hoist") ----------------------------------------------------------
-   For DiFfRG's finite-T integrators (kernel_has_pre in quadrature_integrator_fT.hh). Next to every
+   For DiFfRG's integrators (kernel_has_pre in DiFfRG/physics/integration/hoist.hh). Next to every
    lowered `kernel(...)` definition this emits
      pre_reads     one flag per kernel() parameter: whether pre() reads it;
      pre(...)      the body's statements that depend neither on an excluded parameter nor on one
                    another that does, returned as a DiFfRG::device::tuple;
      post(P, ...)  the remaining statements, with the hoisted names bound from P; returns kernel().
-   The integrator evaluates pre() once per (radial node, frequency node) and post() at every
-   quadrature point. Excluded are every box variable but the radial one, the external coordinates
-   (the parameters between the frequency and the first runtime parameter) and "PointArguments".
+   The integrator evaluates pre() once per radial node -- per (radial node, frequency node) for a
+   finite-T flow -- and post() at every quadrature point. Excluded are every box variable but the
+   radial (first) one, the external coordinates (the parameters before the first runtime parameter,
+   after the frequency for a finite-T flow) and "PointArguments".
    It works on the lowered TEXT, which COEN emits as one `const T name = expr;` per line (shared
    lookups with a leading [[maybe_unused]]). Only such lines move; declarations, the fill() call and
    the return stay in post(). P holds only the values post() reads. *)
@@ -1151,8 +1181,12 @@ ntMatchingBracket[chars_List, open_Integer, {l_String, r_String}] :=
       If[depth === 0, Return[i, Module]];
       i++]];
 
-(* The excluded parameter names of a kernel with parameters `names` (in order), frequency `mvar` and
-   runtime parameters `runtime`. *)
+(* The excluded parameter names of a kernel with parameters `names` (in order), frequency `mvar` (None
+   for a vacuum flow) and runtime parameters `runtime`. *)
+ntHoistExcluded[names_List, None, runtime_List, pointArgs_List] :=
+  Module[{rIdx = FirstPosition[names, _?(MemberQ[runtime, #]&), {Length[names] + 1}, {1}][[1]]},
+    If[rIdx < 2, Return[None, Module]];
+    Join[names[[2 ;; rIdx - 1]], Intersection[names, pointArgs]]];
 ntHoistExcluded[names_List, mvar_String, runtime_List, pointArgs_List] :=
   Module[{fIdx = FirstPosition[names, mvar, {None}][[1]], rIdx},
     If[fIdx === None, Return[None, Module]];
@@ -1160,8 +1194,9 @@ ntHoistExcluded[names_List, mvar_String, runtime_List, pointArgs_List] :=
     Join[names[[2 ;; fIdx - 1]], names[[fIdx + 1 ;; rIdx - 1]], Intersection[names, pointArgs]]];
 
 (* One definition `fn` (prefix ... "auto kernel(" ... "}") -> {pre_reads, pre, post} as text; None without
-   the frequency parameter, Missing["NothingToHoist"] if post() would take nothing from pre(). *)
-ntHoistDefinition[fn_String, mvar_String, runtime_List, pointArgs_List] :=
+   the frequency parameter (finite T) or a radial one before the runtime parameters (vacuum),
+   Missing["NothingToHoist"] if post() would take nothing from pre(). *)
+ntHoistDefinition[fn_String, mvar_, runtime_List, pointArgs_List] :=
   Module[{chars = Characters[fn], kpos, open, close, prefix, sigStr, names, excluded, bOpen, bClose, lines,
           stmtRx = RegularExpression["^\\s*(?:\\[\\[maybe_unused\\]\\]\\s*)?const (?:auto|double|float) (\\w+) = (.*);\\s*$"],
           declRx = RegularExpression["^\\s*[\\w:<>]+\\s+(\\w+)\\s*(?:\\[|=|;)"],
@@ -1213,7 +1248,7 @@ ntHoistDefinition[fn_String, mvar_String, runtime_List, pointArgs_List] :=
         "
   return DiFfRG::device::make_tuple(" <> StringRiffle[exported, ", "] <> ");
 }",
-      prefix <> "auto post(const auto &P_, " <> sigStr <> ")
+      ntPostPrefix[prefix] <> "auto post(const TP_ &P_, " <> sigStr <> ")
 {
 " <>
         StringRiffle[Join[usings,
@@ -1222,15 +1257,27 @@ ntHoistDefinition[fn_String, mvar_String, runtime_List, pointArgs_List] :=
 "] <> "
 }"}];
 
+(* position of the first character of the line holding character `pos` *)
+ntLineStart[chars_List, pos_Integer] := Max[Join[{0}, Select[Range[1, pos - 1], chars[[#]] === "\n" &]]] + 1;
+
+(* post()'s prefix: kernel()'s, with one more template parameter for the pre() tuple P_ *)
+ntPostPrefix[prefix_String] :=
+  If[StringContainsQ[prefix, "template<"],
+    StringReplace[prefix, "template<" -> "template<typename TP_, ", 1],
+    StringReplace[prefix, StartOfString ~~ ws : WhitespaceCharacter... :> ws <> "template<typename TP_>\n" <> ws, 1]];
+
 (* Every `kernel(...)` definition in `text` (one, or one per #if branch of a complex flow) followed by
-   its pre_reads/pre/post; None if a definition has no frequency parameter or nothing to hoist. *)
-ntHoistKernelText[text_String, mvar_String, runtime_List, pointArgs_List] :=
+   its pre_reads/pre/post; None if a definition has no frequency parameter (mvar a String) or no radial
+   one (mvar None), or nothing to hoist. *)
+ntHoistKernelText[text_String, mvar_, runtime_List, pointArgs_List] :=
   Module[{starts, pieces = {}, last = 0, chars = Characters[text], ok = True},
     starts = First /@ StringPosition[text, "auto kernel("];
     Do[
       Module[{lineStart, bOpen, bClose, fn, parts},
-        lineStart = Max[Join[{0}, Select[Range[1, st - 1], chars[[#]] === "
-" &]]] + 1;
+        lineStart = ntLineStart[chars, st];
+(* the `template<...>` header (see ntExplicitTemplates) is part of the definition *)
+        If[lineStart > 1 && StringStartsQ[StringTrim[StringTake[text, {ntLineStart[chars, lineStart - 1], lineStart - 1}]], "template<"],
+          lineStart = ntLineStart[chars, lineStart - 1]];
         bOpen = First[Select[Range[ntMatchingBracket[chars, st + StringLength["auto kernel"], {"(", ")"}] + 1, Length[chars]],
                   chars[[#]] === "{" &, 1]];
         bClose = ntMatchingBracket[chars, bOpen, {"{", "}"}];
@@ -1248,17 +1295,15 @@ ntHoistKernelText[text_String, mvar_String, runtime_List, pointArgs_List] :=
 ntHoistedKernelFn[kernelFn_String, o_, split_, matsubaraSym_] :=
   Module[{res},
     If[!TrueQ[o["Hoist"]], Return[{kernelFn, {}}, Module]];
-(* a vacuum flow has nothing to hoist over; silent, since DiFfRG turns "Hoist" on for every flow *)
-    If[matsubaraSym === None, Return[{kernelFn, {}}, Module]];
     If[split,
       ntLog["[hoist] not applied: Matsubara-split kernel"];
       Return[{kernelFn, {}}, Module]];
 (* k leads the runtime parameters of a DiFfRG kernel but is not among ScalarParams; without it, k would
    count as an external coordinate and every regulator would stay in post(). *)
-    res = ntHoistKernelText[kernelFn, ntParamName[matsubaraSym],
+    res = ntHoistKernelText[kernelFn, If[matsubaraSym === None, None, ntParamName[matsubaraSym]],
             Join[{"k"}, ntParamName /@ Join[o["ScalarParams"], o["Dressings"]]], o["PointArguments"]];
     If[res === None,
-      ntLog["[hoist] not applied: no kernel(...) with the frequency parameter, or nothing worth hoisting"];
+      ntLog["[hoist] not applied: no kernel(...) with the frequency (finite T) or radial (vacuum) parameter, or nothing worth hoisting"];
       {kernelFn, {}},
       {res, {"static constexpr bool has_pre = true;"}}]];
 

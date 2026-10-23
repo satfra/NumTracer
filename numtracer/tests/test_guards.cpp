@@ -37,6 +37,7 @@
 //        left alone (the front-end's NumTrace::badlabel owns those), so no valid net changes value —
 //        which is what the anchors below pin down.
 #include "numtracer/network/dirac.hpp"
+#include "oracle/wick_trace.hpp" // dirac_value (test-only Wick-pairing trace)
 #include "engine_test_util.hpp"
 #include "numtracer/network/network.hpp"
 #include "numtracer/network/sun_net.hpp"
@@ -263,7 +264,7 @@ int main() {
        throws([&] { (void)pdetail::eval(x0, {1.0}, {}); }));
     ok("eval: missing atom value throws (was a segfault)", throws([&] { (void)pdetail::eval(withAtom, {1.0, 2.0}, {0.5}); }));
     ok("eval: all values present still evaluates", !throws([&] { (void)pdetail::eval(withAtom, {1.0, 2.0}, {0.5, 0.25}); }));
-    DPoly dp = env.dzero();
+    DressedPoly dp = env.dzero();
     dp.add({3}, x0);
     ok("eval: missing dressing value throws", throws([&] { (void)pdetail::eval(dp, {1.0, 2.0}, {}, {1.0}); }));
     ok("Frame::var out of range throws", throws([&] { (void)env.var(2); }));

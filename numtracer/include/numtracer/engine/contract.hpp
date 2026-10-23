@@ -32,14 +32,10 @@
 #include "numtracer/engine/spinor_mat.hpp" // Matrix<4, Poly> / gammaC / cmatC / slashC
 #include "numtracer/network/dirac.hpp"     // DiracChain / DFac
 #include "numtracer/network/network.hpp"   // LorentzNet / LorentzFactor
-#include "numtracer/poly/mpoly.hpp"        // Poly (the polynomial type)
+#include "numtracer/poly/poly.hpp"         // Poly (the polynomial type)
 
 #include <algorithm>
 #include <array>
-#include <cassert>
-#include <cmath>
-#include <cstdio>
-#include <cstdlib>
 #include <memory>
 #include <stdexcept>
 #include <string> // the open-index guard's diagnostic (assert_no_open_ids)
@@ -86,7 +82,7 @@ namespace numtracer::inline engine
     /// @param units    unit-constraint groups (`Σ U² = 1`); empty when the frame has none
     NUMTRACER_FUNC Poly contract(int nsym, const DiracChain &dirac, const LorentzNet &lor,
                                  const std::vector<std::array<Poly, 4>> &comp, const std::vector<Poly> &atomDen,
-                                 const std::vector<std::vector<int>> &units = {});
+                                 const std::vector<std::vector<int>> &units);
 
     /// @brief Projector-algebra fusion on one term's element list, applied BEFORE the projectors are
     ///        expanded into `δ − kk/k²`. Two projectors on the **same momentum** contracting over a
@@ -260,7 +256,7 @@ namespace numtracer::inline engine
     // (σ) and C are block-DIAGONAL, so they do not flip it: a Comm is two gammas, a C is two
     // (C = γ²γ⁴) and a LoopSep is none, all 0 mod 2. An odd antidiagonal count ⇒ the final product
     // is antidiagonal ⇒ tr = 0.
-    // Keep this count in step with its sibling in network/dirac.hpp; the two engines must agree.
+    // Keep this count in step with the test oracle (tests/oracle/wick_trace.hpp): the two must agree.
     std::size_t nAntidiag = 0;
     // `hasC` / `hasTr` piggyback on this pass: a separate scan would cost a full traversal per call
     // inside the phase-A Dirac fold, for tokens almost no chain carries.
@@ -855,8 +851,8 @@ namespace numtracer::inline engine
     ///
     /// Throws (via @ref assert_no_open_ids) if the factor list does not close — see there for why an
     /// open index cannot simply be left free.
-    inline Poly contract_factors(int nsym, std::vector<Factor> facs, const std::vector<Poly> &atomDen = {},
-                                 const std::vector<std::vector<int>> &units = {})
+    inline Poly contract_factors(int nsym, std::vector<Factor> facs, const std::vector<Poly> &atomDen,
+                                 const std::vector<std::vector<int>> &units)
     {
       assert_no_open_ids(facs);
       // Algorithm (greedy min-width elimination), repeated until no shared ids remain:
@@ -937,8 +933,8 @@ namespace numtracer::inline engine
     ///        uncontracted Lorentz index (an ill-formed/mis-split diagram) and still throws.
     ///        This is what lets the dressed-collection combination loop produce odd / self-paired
     ///        chains (which the front-end odd-trace filter never sees) without a spurious abort.
-    inline Poly close_free_legs(int nsym, const Factor &T, const std::vector<Poly> &atomDen = {},
-                                const std::vector<std::vector<int>> &units = {})
+    inline Poly close_free_legs(int nsym, const Factor &T, const std::vector<Poly> &atomDen,
+                                const std::vector<std::vector<int>> &units)
     {
       const std::vector<Poly> &entries = T.data();
       if (T.ids.empty()) return entries.empty() ? PolyFactory::constant(nsym, Cx{1, 0}) : entries[0];
@@ -1003,8 +999,8 @@ namespace numtracer::inline engine
     ///        (indices shared between loops, or a loop's self-paired indices, are summed). One loop with
     ///        no free legs is its scalar; one loop with free legs defers to @ref close_free_legs (odd→0 /
     ///        paired self-contract / unpaired→throw).
-    inline Poly close_loops(int nsym, const std::vector<Factor> &fs, const std::vector<Poly> &atomDen = {},
-                            const std::vector<std::vector<int>> &units = {})
+    inline Poly close_loops(int nsym, const std::vector<Factor> &fs, const std::vector<Poly> &atomDen,
+                            const std::vector<std::vector<int>> &units)
     {
       if (fs.empty()) return PolyFactory::constant(nsym, Cx{1, 0});
       if (fs.size() == 1) return close_free_legs(nsym, fs[0], atomDen, units);
@@ -1024,11 +1020,6 @@ namespace numtracer::inline engine
       return x.vid == y.vid && x.vlc == y.vlc;
     }
 
-    inline bool isProjKind(LorentzFactor::Kind k)
-    {
-      return k == LorentzFactor::ProjT || k == LorentzFactor::ProjL || k == LorentzFactor::ProjE ||
-             k == LorentzFactor::ProjM;
-    }
     /// `tr P` in 4D: `tr P_T=3, tr P_L=1, tr P_E=1, tr P_M=2` (cf. test_projector_identity).
     inline int projTrace4D(LorentzFactor::Kind k)
     {
@@ -1069,7 +1060,7 @@ namespace numtracer::inline engine
       // cheap early-exit: nothing to fuse without ≥2 projector elements.
       int nproj = 0, maxIdx = -1;
       for (const LorentzFactor &el : e) {
-        if (isProjKind(el.kind)) ++nproj;
+        if (el.is_projector()) ++nproj;
         maxIdx = std::max(maxIdx, std::max(std::max(el.a, el.b), std::max(el.c, el.d)));
       }
       if (nproj < 2) return;
@@ -1099,9 +1090,9 @@ namespace numtracer::inline engine
         }
 
         for (std::size_t i = 0; i < e.size() && !changed; ++i) {
-          if (!isProjKind(e[i].kind) || e[i].a == e[i].b) continue;
+          if (!e[i].is_projector() || e[i].a == e[i].b) continue;
           for (std::size_t j = i + 1; j < e.size(); ++j) {
-            if (!isProjKind(e[j].kind) || e[j].a == e[j].b) continue;
+            if (!e[j].is_projector() || e[j].a == e[j].b) continue;
             if (!same_momentum(e[i], e[j])) continue; // same momentum only
             const LorentzFactor::Kind kA = e[i].kind, kB = e[j].kind;
             // same projector (full field identity) ⇒ idempotent; T·E / T·M ⇒ the E/M factor survives;

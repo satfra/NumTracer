@@ -11,6 +11,7 @@
 // Symbolic momentum components are Poly variables; the engine result is evaluated at random points
 // and compared to the numeric truth to ≤ 1e-12. Build via the test CMake (adds -I include).
 #include "oracle/dense_trace.hpp"          // chiral_gamma_trace<K> (test-only γ-trace oracle)
+#include "oracle/wick_trace.hpp"           // dirac_value (test-only Wick-pairing trace)
 #include "numtracer/dirac/dirac_data.hpp"  // kGamma, kGamma5, kC
 #include "engine_test_util.hpp"
 using namespace numtracer; // the typed builders (LorentzIndex, Momentum, …) the tests spell unqualified

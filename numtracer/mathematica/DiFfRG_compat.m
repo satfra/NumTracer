@@ -134,8 +134,8 @@ Options[MakeNTKernelDiFfRG] =
    ntShareGridLookups). Default: only the lookups of one dressing share it. *)
     "SharedGrids" -> {},
 (* MakeNTKernel's "Hoist" / "PointArguments": also emit the kernel in hoisted form (pre()/post(), see
-   kernel_has_pre in DiFfRG's quadrature_integrator_fT.hh). It only applies to finite-T flows and is a
-   no-op otherwise, so Automatic = True. PointArguments names the parameters a caller passes per point
+   kernel_has_pre in DiFfRG's integration/hoist.hh): pre() is tabulated per radial node, per (radial,
+   frequency) node at finite T. Automatic = True. PointArguments names the parameters a caller passes per point
    to map_points(), e.g. the field-dependent inputs of a potential flow; pre() never reads them.
    Automatic = the AD parameters (V', V'', ...) with "MapPoints" -> True, none otherwise: map() and get()
    have no per-point arguments, and every listed parameter keeps the lines that read it out of pre().
@@ -213,7 +213,7 @@ MakeNTKernelDiFfRG::noparams = "\"Parameters\" is required (the DiFfRG kernelPar
 
 MakeNTKernelDiFfRG::nointeg = "\"Integrator\" and \"IntegrationVariables\" are required.";
 
-MakeNTKernelDiFfRG::mixtype = "Parameters declare more than one interpolator type `1`; emitting the dressing parameters as `const auto&`.";
+MakeNTKernelDiFfRG::mixtype = "Parameters declare more than one interpolator type `1`; emitting the dressing parameters as template parameters.";
 
 (* ---- k-only lookup hoisting: patch the DiFfRG-generated wrappers ---------------------------
    When MakeNTKernel hoisted M loop-constant dressing lookups ("HoistCount" of ntMakeNTKernel, see
@@ -396,7 +396,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
       ];
 (* AD-flagged scalar params (e.g. d1V, d2V for the FE-potential flows): the DiFfRG integrator has an
    autodiff twin (integrator_AD) that forwards these as autodiff::real, so the kernel must declare them
-   as `const auto&`, not `const double&`. Thread their names to MakeNTKernel so it types them auto. *)
+   generically (template parameters), not `const double&`. Thread their names to MakeNTKernel so it types them auto. *)
     adParams = ntADParamNames[params];
     (* resolve paths *)
     flowDir = ntFlowDir[OptionValue["FlowDirectory"]];

@@ -1,7 +1,7 @@
 # step-18: Dressed numerators and vertex collection
 
 *Builds on: [step-03](step-03.md), [step-05](step-05.md) · Built on by: — ·
-Tags: `dressing`, `dpoly` · **Tier A** (a C++20 compiler, nothing else)*
+Tags: `dressing`, `dressed-poly` · **Tier A** (a C++20 compiler, nothing else)*
 
 ## Introduction
 
@@ -37,7 +37,7 @@ matrix products and the Lorentz contraction — is nearly identical across all o
 ### The mechanism: keep it eager
 
 NumTracer does not distribute. It keeps each dressed numerator **eager** as a *slot* — the list of
-its structure options — contracts the chain **once**, and collects the result into a `DPoly`:
+its structure options — contracts the chain **once**, and collects the result into a `DressedPoly`:
 
 > a polynomial whose **variables** are the dressing calls and whose **coefficients** are the
 > kinematic polynomials (`nt::Poly`) the engine already computes.
@@ -47,7 +47,7 @@ Lorentz work is done a single time regardless of how many structures each numera
 whole diagram lowers to **one** trace function whose dressing factors the shared CSE collects.
 
 This is the Dirac-side twin of [step-17](step-17.md): there a group-diagonal $\delta$ folds to a
-`SUNPoly`, here a dressed numerator folds to a `DPoly`. Same idea, different sector.
+`SUNPoly`, here a dressed numerator folds to a `DressedPoly`. Same idea, different sector.
 
 ```{admonition} It is on by default
 :class: note
@@ -63,7 +63,7 @@ mechanism's footprint.
 | `DSlotOpt{coeff, dress, toks, netFacs}` | one structure option: a coefficient × a product of dressing atoms × a Dirac structure |
 | `DSlot = vector<DSlotOpt>` | one dressed numerator = the sum of its options |
 | `DChainTok` | one token of a dressed chain: either a **fixed** factor (`dtfix`) or a **slot reference** (`dtslot i`) |
-| `DPoly` | the collected result: dressing monomials → kinematic `Poly` coefficients |
+| `DressedPoly` | the collected result: dressing monomials → kinematic `Poly` coefficients |
 
 The `toks` / `netFacs` pair is more general than this step needs, and the generality is the point:
 
@@ -88,7 +88,7 @@ $$
 \qquad S = M_q\mathbb{1} + Z\,\slashed{\cdot}
 $$
 
-with two dressed numerators. Distributed that is $2\times2 = 4$ traces; collected it is one `DPoly`.
+with two dressed numerators. Distributed that is $2\times2 = 4$ traces; collected it is one `DressedPoly`.
 
 ### The slots
 
@@ -115,7 +115,7 @@ carry the same dressing and can be merged.
 ```
 
 A dressed chain is a list of `DChainTok`: `dtfix` for an ordinary factor, `dtslot i` for a reference
-into the slot list. `F.trace(chain, slots, net)` contracts it once and returns the `DPoly`.
+into the slot list. `F.trace(chain, slots, net)` contracts it once and returns the `DressedPoly`.
 
 The reference computation in the program does the opposite — it enumerates the $2\times2$ choices,
 builds each concrete undressed chain, traces it the *ordinary* way with `F.trace`, and weights
@@ -130,7 +130,7 @@ cmake --build build --target dressed_numerators && ./build/dressed_numerators
 
 ```text
 Dressed quark bubble  tr( γ^μ S(p) γ^ν S(q) ) δ_{μν},  S = Mq·𝟙 + Z·slash
-  DPoly dressing monomials (one trace collected) : 2   (distributed would be 4 traces)
+  DressedPoly dressing monomials (one trace collected) : 2   (distributed would be 4 traces)
   collected == distributed over 5000 random points : worst |Δ| = 0.00e+00  (0 bad)
 ALL TESTS PASSED
 ```
@@ -142,7 +142,7 @@ contraction and never formed the terms. A $2^D$ distribution would have built al
 two away.
 
 **The agreement is exactly zero**, not $10^{-12}$. Collected and distributed are not two algorithms
-that happen to agree numerically; they are the same arithmetic in a different order, and the `DPoly`
+that happen to agree numerically; they are the same arithmetic in a different order, and the `DressedPoly`
 coefficients are literally the polynomials the distributed path would have produced.
 
 ```{admonition} Sizing the dressing values
@@ -186,7 +186,7 @@ so the antisymmetric pair is never split. Disable with `NT_NO_SIGMA_FOLD` if you
 ## Possibilities for extensions
 
 1. **Add a third structure.** Give `S(p)` a third option — say $Z_2(p)\,p^2\,\mathbb{1}$ with its
-   own dressing id. Distributed that is $3\times2 = 6$ traces; check how many `DPoly` monomials
+   own dressing id. Distributed that is $3\times2 = 6$ traces; check how many `DressedPoly` monomials
    result and whether the reference loop still agrees.
 
 2. **Why only two monomials?** Count the gammas of each structure choice: the two mixed
@@ -195,7 +195,7 @@ so the antisymmetric pair is never split. Disable with `NT_NO_SIGMA_FOLD` if you
    now; then check.
 
 3. **Share an id across three terms.** Give all options the same dressing id and confirm the
-   `DPoly` collapses to a single monomial whose coefficient is the sum of the individual traces.
+   `DressedPoly` collapses to a single monomial whose coefficient is the sum of the individual traces.
 
 4. **An open-legged slot.** Build a slot whose options are `{gamma(mu)}` and
    `{slash(p), gamma(mu)}` — a miniature dressed vertex — and close `mu` with a metric. This is

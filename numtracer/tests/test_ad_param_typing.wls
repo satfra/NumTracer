@@ -2,8 +2,8 @@
 (* Unit gate for the C++ TYPE given to each runtime kernel parameter — ntRuntimeParamType and
    ntAssertADTyped in mathematica/CodegenKernel.m.
 
-   WHY IT EXISTS. An AD-flagged scalar must be emitted `const auto&`, not `const double&`: FunKit's
-   MakeParameterString turns "auto" into an abbreviated function template, and that is the only
+   WHY IT EXISTS. An AD-flagged scalar must be typed "auto", not `const double&`: NumTracer emits it as a
+   function-template parameter (ntExplicitTemplates), and that is the only
    reason kernel()/constant() can bind autodiff::real from DiFfRG's integrator_AD twin. The
    ParameterOrder rework (fc7fb4e) silently lost that — a With[] closed one line early, so the
    MemberQ that gates the AD branch tested an UNBOUND symbol, which is False rather than an error,
@@ -19,7 +19,7 @@
      - only */src/AD_get.cc — emitted here but compiled by the CONSUMER project — fails.
 
    On top of that, "ADParams" is reachable only through MakeNTKernelDiFfRG, which no test in this
-   repo calls, and not one committed kernel signature under tests/gen contains `const auto&`. So a
+   repo calls, and no committed kernel under tests/gen has an AD-typed parameter. So a
    full codegen regeneration is blind to this BY CONSTRUCTION, not by oversight. A symbolic unit
    test is the only place the property is observable without building a DiFfRG consumer.
 
@@ -53,7 +53,7 @@ Begin["NumTracer`Private`"];
 
 (* Total number of check[] calls below. An Abort escaping mid-file would otherwise leave a passing
    tally simply because the remaining checks never executed; asserting the count closes that. *)
-$nExpected = 24;
+$nExpected = 27;
 $fail = 0; nRan = 0;
 check[label_, cond_] := (
   nRan++;
@@ -163,6 +163,18 @@ check["several AD names typed double ABORTS",
   abortsQ[
     Hold[ntAssertADTyped[{mk["d1V", "double"], mk["d2V", "double"]}, {"d1V", "d2V"}]],
     MakeNTKernel::adtype]];
+
+Print["=== 7. generic parameters become explicit template parameters ==="];
+(* nvcc 12.x's cudafe++ crashes on an abbreviated template with 10+ `const auto&` parameters, so
+   "auto" is emitted as FunKit's "template" type: `const T<position>& name` under template<...>. *)
+tp = ntExplicitTemplates[good];
+check["auto -> template, everything else untouched",
+  (#["Type"]& /@ tp) === {"double", "template", "double", "TexLinearInterpolator1D"}];
+check["text signature: header names the template positions",
+  ntTemplatedSignature[tp] === {"template<typename T2>\n",
+    "const double& k, const T2& d1V, const double& rhoL, const TexLinearInterpolator1D& ZA"}];
+check["text signature without template parameters has no header",
+  First[ntTemplatedSignature[bad]] === ""];
 
 Print[""];
 (* NOT routed through check[]: its argument is evaluated before check[] bumps the counter, so the

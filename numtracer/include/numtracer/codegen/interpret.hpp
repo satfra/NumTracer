@@ -29,12 +29,23 @@ namespace numtracer::inline network
     for (std::size_t i = 0; i <= static_cast<std::size_t>(root); ++i) {
       const RInstr &in = ins[i];
       switch (in.op) {
-      case RCONST: v[i] = in.value; break;
-      case RVAR: v[i] = f[in.a]; break;
-      case RADD: v[i] = val(in.a) + val(in.b); break;
-      case RMUL: v[i] = val(in.a) * val(in.b); break;
-      case RNEG: v[i] = -val(in.a); break;
-      default: NT_THROW(std::invalid_argument, "interpret: unknown opcode");
+      case RCONST:
+        v[i] = in.value;
+        break;
+      case RVAR:
+        v[i] = f[in.a];
+        break;
+      case RADD:
+        v[i] = val(in.a) + val(in.b);
+        break;
+      case RMUL:
+        v[i] = val(in.a) * val(in.b);
+        break;
+      case RNEG:
+        v[i] = -val(in.a);
+        break;
+      default:
+        NT_THROW(std::invalid_argument, "interpret: unknown opcode");
       }
     }
     return val(root);
@@ -48,4 +59,4 @@ namespace numtracer::inline network
     return Cx{re, im};
   }
 
-} // namespace numtracer::network
+} // namespace numtracer::inline network

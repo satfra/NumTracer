@@ -8,7 +8,7 @@
 /// (engine/generator_phases.hpp), emitted by mathematica/CodegenGenerator.m.
 #pragma once
 
-#include "numtracer/poly/mpoly.hpp"
+#include "numtracer/poly/poly.hpp"
 #include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
 #include "numtracer/codegen/precision.hpp"
 #include "numtracer/codegen/gen.hpp" // network::GlobalEnv (mark_complex_atoms)

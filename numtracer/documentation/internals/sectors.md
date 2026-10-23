@@ -1,6 +1,6 @@
 # Sector data
 
-> Headers: `dirac/dirac_data.hpp`, `sun/sun_data.hpp`, `core/cmat.hpp`, `tests/oracle/dense_trace.hpp`
+> Headers: `dirac/dirac_data.hpp`, `sun/sun_data.hpp`, `core/matrix.hpp`, `tests/oracle/dense_trace.hpp`
 
 The contraction engine is ignorant of physics — it folds matrices and sums indices. The physics
 constants live in small, typed-out tables that the engine reads. Each sector has a `constexpr`
@@ -57,5 +57,5 @@ dresses each colour/flavour component differently (a group-diagonal $\delta$) fo
 `sun_value_dressed` to a polynomial $\sum_a c_a Z_a$ over runtime per-component dressing leaves;
 `sun_value` is left untouched, so colour-blind flows are unchanged.
 
-`core/cmat.hpp` defines `Matrix<N, T>`, a plain dense N×N matrix (complex entries by default)
+`core/matrix.hpp` defines `Matrix<N, T>`, a plain dense N×N matrix (complex entries by default)
 that holds the generator tables; `Matrix<4, Poly>` is the spinor matrix of the Dirac sector.

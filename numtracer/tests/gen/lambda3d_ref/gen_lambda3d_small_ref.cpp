@@ -101,10 +101,10 @@ int main(int argc, char** argv){
   std::vector<std::vector<Cx>> dsc(NNET);
   for(size_t i=0;i<NNET;++i){ const auto& r=dscU[dscR[i]]; dsc[i].reserve(r.size());
     for(int k: r) dsc[i].push_back(dscV[k]); }
-  std::vector<DMono> sdrV = {{0,0,0},{0,0,1},{0,1,1},{1,1,1},{2,4},{2,5},{3,4},{3,5},{2,2},{2,3},{3,3},{2,6},{2,7},{3,6},{3,7},{0,0,8},{0,0,9},{0,1,8},{0,1,9},{1,1,8},{1,1,9}};
+  std::vector<DressingMono> sdrV = {{0,0,0},{0,0,1},{0,1,1},{1,1,1},{2,4},{2,5},{3,4},{3,5},{2,2},{2,3},{3,3},{2,6},{2,7},{3,6},{3,7},{0,0,8},{0,0,9},{0,1,8},{0,1,9},{1,1,8},{1,1,9}};
   std::vector<std::vector<int>> sdrU = {{0,1,1,2,1,2,2,3,0,1,1,2,1,2,2,3,0,1,1,2,1,2,2,3,0,1,1,2,1,2,2,3},{0,1,1,2,1,2,2,3},{0,1,1,2,1,2,2,3,0,1,1,2,1,2,2,3},{4,5,5,6,7,7,6,7,7,4,5,5,6,7,7,6,7,7,4,5,5,6,7,7,6,7,7,4,5,5,6,7,7,6,7,7},{4,5,5,6,7,7,6,7,7},{4,5,5,6,7,7,6,7,7,4,5,5,6,7,7,6,7,7},{8,9,9,9,10,10,9,10,10,8,9,9,9,10,10,9,10,10,8,9,9,9,10,10,9,10,10,8,9,9,9,10,10,9,10,10},{8,9,9,9,10,10,9,10,10},{8,9,9,9,10,10,9,10,10,8,9,9,9,10,10,9,10,10},{11,12,12,13,14,14,13,14,14,11,12,12,13,14,14,13,14,14,11,12,12,13,14,14,13,14,14,11,12,12,13,14,14,13,14,14},{11,12,12,13,14,14,13,14,14},{11,12,12,13,14,14,13,14,14,11,12,12,13,14,14,13,14,14},{15,16,16,16,17,18,18,18,17,18,18,18,19,20,20,20,15,16,16,16,17,18,18,18,17,18,18,18,19,20,20,20,15,16,16,16,17,18,18,18,17,18,18,18,19,20,20,20,15,16,16,16,17,18,18,18,17,18,18,18,19,20,20,20},{15,16,16,16,17,18,18,18,17,18,18,18,19,20,20,20},{15,16,16,16,17,18,18,18,17,18,18,18,19,20,20,20,15,16,16,16,17,18,18,18,17,18,18,18,19,20,20,20}};
   std::vector<int> sdrR = ntSdrR();
-  std::vector<std::vector<DMono>> sdr(NNET);
+  std::vector<std::vector<DressingMono>> sdr(NNET);
   for(size_t i=0;i<NNET;++i){ const auto& r=sdrU[sdrR[i]]; sdr[i].reserve(r.size());
     for(int k: r) sdr[i].push_back(sdrV[k]); }
   frame.add_denominators(sln);
@@ -145,8 +145,8 @@ int main(int argc, char** argv){
   long netWindow = numtracer::engine::net_window((long)sidx.size(), workersB);
   numtracer::engine::check_group_partition(groups, 66);
   frame.fold_groups_streaming_dressed(sidx, dsc, sdr, groups, traceTable, nCache, workersB, netWindow, trace,
-    [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },
-    [&](size_t gi, DPoly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });
+    [&](int d, DressedPoly &&m){ return scaleCx(m, colv[d]); },
+    [&](size_t gi, DressedPoly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });
   if(ntprof) std::fprintf(stderr,"[num] phase B+lower: %d nets in %d groups, window %ld, %.1f s (W=%u)\n", 66, 6, netWindow, std::chrono::duration<double>(std::chrono::steady_clock::now()-tB).count(), workersB);
   { std::vector<Poly> dead; traceTable.swap(dead); }
   const auto tEmit = std::chrono::steady_clock::now();

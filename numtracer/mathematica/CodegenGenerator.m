@@ -87,7 +87,7 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
       traceKeyFlat = None];
 
 (* Per net: merge the sub-terms that share a trace AND a dress channel (merging across channels would
-   corrupt the DPoly), summing scalars; drop the zero sums. Do this BEFORE counting references: a
+   corrupt the DressedPoly), summing scalars; drop the zero sums. Do this BEFORE counting references: a
    repeat inside ONE net is a single reference, and a cancelled channel must not be contracted. Each
    net yields three columns {trace key, dress id, summed scalar} (ntMergeNetTerms). *)
     merged = MapThread[ntMergeNetTerms, {traceDressKeyPacked, traceKeyPacked, drI, subScalars}];
@@ -115,7 +115,7 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
         lorIdx   = Mod[a, nLs]; diracIdx = Quotient[a, nLs];
         Transpose[{uDs[[diracIdx + 1]], uLs[[lorIdx + 1]], uDc[[chainIdx + 1]], uDl[[slotIdx + 1]]}]];
 (* the fold entries, per net: distinct-trace index, the dress-atom multiset itself (downstream builds
-   the DMono table from it) and the scalar *)
+   the DressingMono table from it) and the scalar *)
     netTraceRows  = TakeList[Lookup[subIdxOf, foldKeys], foldLens];
     netDressRows  = TakeList[uDr[[(Join @@ merged[[All, 2]]) + 1]], foldLens];
     netScalarRows = merged[[All, 3]];
@@ -203,7 +203,7 @@ ntLptBinPack[defs_List, nUnits_Integer] :=
    Each branch yields {ds, ls, scal, dc, dl, dr} columns (usually one sub-term). A DRESSED branch
    (ntDressedCore[chainStr, slotsStr]) expands the Cartesian product of its chain's slot options,
    each a triple {structStr, num, dr}: the structures (dl) form the trace key, ∏ num folds into the
-   scalar, and the dress-atom multiset (dr) becomes the DPoly key. Non-dressed branches carry an
+   scalar, and the dress-atom multiset (dr) becomes the DressedPoly key. Non-dressed branches carry an
    empty dress key. Traces are dressing-stripped, so combinations differing only in dressing share
    ONE trace; the dressing rides the per-sub-term scalar + monomial into the phase-B fold.
 
@@ -264,7 +264,7 @@ ntGenExpandSubTerms[coreNets_, restScalars_] :=
                                   {{internDiracNet["DiracChain{}"]}, {internLorNet[lsStr]}, ntPackCx[{scal}], {internChain[chain]}, {internSlotTuple[{}]}, {internDressMono[{}]}},
 (* dl = this combination's STRUCTURAL option-string LIST (one dressing-free structStr per chain
    slot), interned so the table emitter still pools the distinct structures; the numeric Cx folds
-   into the sub-term scalar and the dress ids become the DPoly key. *)
+   into the sub-term scalar and the dress ids become the DressedPoly key. *)
                                   Module[{tb = slotCombo[slotOpts], n},
                                     n = tb[[4]];
                                     {ConstantArray[internDiracNet["DiracChain{}"], n],
@@ -302,23 +302,23 @@ ntGenColourTables[colourNets_, nNet_] :=
     uCol = hc["Rows"];
     {mainDecls, chunkDefs} =
       If[uCol === {},
-        {"static std::vector<SUNNet> ntColNets(){ return {}; }\n", {}},
+        {"static std::vector<SUNNet> ntColNets() { return {}; }\n", {}},
         Module[{envDecl, chunks},
-          envDecl = StringJoin["SUN sun" <> # <> "(" <> # <> "); "& /@ DeleteDuplicates @ Flatten @ StringCases[uCol, "sun" ~~ r : DigitCharacter.. ~~ "." :> r]];
+          envDecl = StringJoin["SUN sun" <> # <> "(" <> # <> ");\n"& /@ DeleteDuplicates @ Flatten @ StringCases[uCol, "sun" ~~ r : DigitCharacter.. ~~ "." :> r]];
           chunks = ntSplitByChars[uCol, 2];
           {StringJoin[
              MapIndexed["void ntColNets_c" <> ToString[#2[[1]] - 1] <> "(std::vector<SUNNet>& o);\n"&, chunks],
-             "static std::vector<SUNNet> ntColNets(){ std::vector<SUNNet> o; o.reserve(" <> ToString[Length[uCol]] <> "); " <> StringJoin[Table["ntColNets_c" <> ToString[k - 1] <> "(o); ", {k, Length[chunks]}]] <> "return o; }\n"],
-           MapIndexed["void ntColNets_c" <> ToString[#2[[1]] - 1] <> "(std::vector<SUNNet>& o){ " <> envDecl <> StringJoin[("o.push_back(" <> # <> "); ")& /@ #1] <> "}\n"&, chunks]}]];
+             "static std::vector<SUNNet> ntColNets() {\n  std::vector<SUNNet> o;\n  o.reserve(" <> ToString[Length[uCol]] <> ");\n  " <> StringJoin[Table["ntColNets_c" <> ToString[k - 1] <> "(o);\n  ", {k, Length[chunks]}]] <> "\n  return o;\n}\n"],
+           MapIndexed["void ntColNets_c" <> ToString[#2[[1]] - 1] <> "(std::vector<SUNNet>& o) {\n  " <> envDecl <> StringJoin[("  o.push_back(" <> # <> ");\n")& /@ #1] <> "}\n"&, chunks]}]];
     colR = ntGenBigTable["ntColR", "std::vector<int>", ntIntStrs[hc["RowIdx"]], "std::vector<int> colR"];
     ntStageResult["ntGenColourTables", {"MainDecls", "ChunkDefs", "ColRDef", "MainText"},
       <|"MainDecls" -> mainDecls, "ChunkDefs" -> chunkDefs, "ColRDef" -> colR[[1]],
         "MainText" ->
           StringJoin["  std::vector<SUNNet> colnetsU = ntColNets();\n", colR[[2]],
             "  std::vector<numtracer::Cx> colvU(colnetsU.size());\n",
-            "  for(size_t i=0;i<colnetsU.size();++i) colvU[i]=sun_value(colnetsU[i]);\n",
+            "  for(size_t i = 0; i < colnetsU.size(); ++i) colvU[i] = sun_value(colnetsU[i]);\n",
             "  std::vector<numtracer::Cx> colv(" <> ToString[nNet] <> ");\n",
-            "  for(int i=0;i<" <> ToString[nNet] <> ";++i) colv[i]=colvU[colR[i]];\n"]|>]];
+            "  for(int i = 0; i < " <> ToString[nNet] <> "; ++i) colv[i] = colvU[colR[i]];\n"]|>]];
 
 (* ---- STAGE 3: preambles -----------------------------------------------------------------------
    Pre: the main TU's includes, helpers and the colour-net assembler. UnitPre: the header every -O0
@@ -326,17 +326,17 @@ ntGenColourTables[colourNets_, nNet_] :=
 ntGenPreambles[hasDressed_, colMainDecls_String, colourUnitsQ_] :=
   Module[{tmpl, unitInc},
     (* shared wrapper templates so the net-builder strings compile. *)
-    tmpl = StringJoin["  template<int Mu,int Nu,int Lb,int Mask,int Inv> LorentzNet tproj(){ return leaf({.kind=LorentzFactor::ProjT,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv}); }\n",
-                      "  template<int Mu,int Nu,int Lb,int Mask,int Inv> LorentzNet lproj(){ return leaf({.kind=LorentzFactor::ProjL,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv}); }\n",
-                      "  template<int Mu,int Nu,int Lb,int Mask,int InvS> LorentzNet mproj(){ return leaf({.kind=LorentzFactor::ProjM,.a=Mu,.b=Nu,.vid=Lb,.atomS=InvS}); }\n",
-                      "  template<int Mu,int Nu,int Lb,int Mask,int Inv,int InvS> LorentzNet eproj(){ return leaf({.kind=LorentzFactor::ProjE,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv,.atomS=InvS}); }\n",
-                      "  template<int Mu,int Nu> LorentzNet lmetric(){ return metric(LorentzIndex{Mu},LorentzIndex{Nu}); }\n",
-                      "  template<int Lbl,int Base,int Mask> LorentzNet lvec(){ return leaf({.kind=LorentzFactor::Vector,.a=Lbl,.b=-1,.vlc={{1.0,Base}}}); }\n",
-                      "  template<int A,int B,int C,int D> LorentzNet leps(){ return epsilon(LorentzIndex{A},LorentzIndex{B},LorentzIndex{C},LorentzIndex{D}); }\n",
-                      "  inline LorentzNet konst(double c){ return LorentzNet{LorentzTerm{Cx{c,0}, {}}}; }\n",
+    tmpl = StringJoin["  template<int Mu,int Nu,int Lb,int Mask,int Inv> LorentzNet tproj() { return leaf({.kind=LorentzFactor::ProjT,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv}); }\n",
+                      "  template<int Mu,int Nu,int Lb,int Mask,int Inv> LorentzNet lproj() { return leaf({.kind=LorentzFactor::ProjL,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv}); }\n",
+                      "  template<int Mu,int Nu,int Lb,int Mask,int InvS> LorentzNet mproj() { return leaf({.kind=LorentzFactor::ProjM,.a=Mu,.b=Nu,.vid=Lb,.atomS=InvS}); }\n",
+                      "  template<int Mu,int Nu,int Lb,int Mask,int Inv,int InvS> LorentzNet eproj() { return leaf({.kind=LorentzFactor::ProjE,.a=Mu,.b=Nu,.vid=Lb,.atom=Inv,.atomS=InvS}); }\n",
+                      "  template<int Mu,int Nu> LorentzNet lmetric() { return metric(LorentzIndex{Mu},LorentzIndex{Nu}); }\n",
+                      "  template<int Lbl,int Base,int Mask> LorentzNet lvec() { return leaf({.kind=LorentzFactor::Vector,.a=Lbl,.b=-1,.vlc={{1.0,Base}}}); }\n",
+                      "  template<int A,int B,int C,int D> LorentzNet leps() { return epsilon(LorentzIndex{A},LorentzIndex{B},LorentzIndex{C},LorentzIndex{D}); }\n",
+                      "  inline LorentzNet konst(double c) { return LorentzNet{LorentzTerm{Cx{c,0}, {}}}; }\n",
                       "  template<class L> struct litco;\n",
-                      "  template<numtracer::Cx C> struct litco<numtracer::Lit<C>>{ static constexpr numtracer::Cx v=C; };\n",
-                      "  template<class L> LorentzNet sc(LorentzNet x){ return scale(litco<L>::v, std::move(x)); }\n"
+                      "  template<numtracer::Cx C> struct litco<numtracer::Lit<C>> { static constexpr numtracer::Cx v=C; };\n",
+                      "  template<class L> LorentzNet sc(LorentzNet x) { return scale(litco<L>::v, std::move(x)); }\n"
                       ];
 (* The shared header block goes through a per-flow `_pch.hh` so the build can precompile it ONCE
    instead of per unit TU (unit compiles are header-bound; the PCH cuts their work ~5x).
@@ -401,7 +401,7 @@ ntGenPreambles[hasDressed_, colMainDecls_String, colourUnitsQ_] :=
             "// GENERATED by MakeNTKernel — do not edit. Numeric net-builder unit (compiled -O0).\n",
             "// =================================================================================\n\n",
             "#ifndef NT_GEN_PCH\n" <> unitInc <> "#endif\n\n",
-            "namespace numtracer {\n" <> tmpl <> "}\nusing namespace numtracer;\n"]|>]
+            "namespace numtracer {\n" <> tmpl <> "}\n\nusing namespace numtracer;\n\n"]|>]
     ];
 
 (* ---- STAGE 4: net-level CSE -------------------------------------------------------------------
@@ -441,8 +441,8 @@ ntGenNetCSE[dPool_List, lPool_List, diracNetIds_, lorNetIds_] :=
     ntStageResult["ntGenNetCSE", {"Defs", "Decls", "DiracPool", "LorPool"},
       <|"Defs" ->
           Join[
-            KeyValueMap["const DiracChain& " <> #2 <> "(){ static const DiracChain v = " <> #1 <> "; return v; }"&, dMap],
-            KeyValueMap["const LorentzNet& " <> #2 <> "(){ static const LorentzNet v = " <> #1 <> "; return v; }"&, lMap]],
+            KeyValueMap["const DiracChain& " <> #2 <> "() {\n  static const DiracChain v = " <> #1 <> ";\n  return v;\n}"&, dMap],
+            KeyValueMap["const LorentzNet& " <> #2 <> "() {\n  static const LorentzNet v = " <> #1 <> ";\n  return v;\n}"&, lMap]],
         "Decls" ->
           StringJoin[
             Riffle[
@@ -572,7 +572,7 @@ ntGenMainPrologue[ncomp_, nsInner_, hasDressed_] :=
   ntStageResult["ntGenMainPrologue", {"Text"},
     <|"Text" ->
       StringJoin[
-        "int main(int argc, char** argv){\n",
+        "int main(int argc, char** argv) {\n",
         If[ntSingleQ[], "  numtracer::codegen::emit_precision() = numtracer::codegen::EmitPrecision::Single;\n", ""],
         "  std::string decor = \"static inline\";\n  std::string hns = \"" <> nsInner <> "\";\n",
         "  for(int a = 1; a < argc; ++a) {\n    std::string s = argv[a];\n    if(s == \"-d\" && a+1 < argc) decor = argv[++a];\n    else if(s == \"-n\" && a+1 < argc) hns = argv[++a];\n  }\n",
@@ -600,8 +600,8 @@ ntGenMainPrologue[ncomp_, nsInner_, hasDressed_] :=
         If[hasDressed,
 (* rebuild the per-sub-term chain/slot tables from the interned pools (chp/optp) + index arrays
    (sdchR/sdslR) — O(nSub), reproduces the full sdch/sdsl exactly, so the trace lambda is untouched. *)
-          "  std::vector<std::vector<DChainTok>> chp = chp0(); std::vector<int> sdchR = sdchR0();\n" <>
-          "  std::vector<DSlotOpt> optp = optp0(); std::vector<std::vector<int>> sdslR = sdslR0();\n" <>
+          "  std::vector<std::vector<DChainTok>> chp = chp0();\n  std::vector<int> sdchR = sdchR0();\n" <>
+          "  std::vector<DSlotOpt> optp = optp0();\n  std::vector<std::vector<int>> sdslR = sdslR0();\n" <>
           "  const size_t NSD = sdchR.size();\n" <>
           "  std::vector<std::vector<DChainTok>> sdch(NSD);\n" <>
           "  std::vector<std::vector<DSlot>> sdsl(NSD);\n" <>
@@ -649,21 +649,21 @@ ntGenMainTables[netTraceRows_, netDressRows_, netScalarRows_, hasDressed_] :=
             dscU[[2]],
             dscR[[2]],
             "  std::vector<std::vector<Cx>> dsc(NNET);\n",
-            "  for(size_t i = 0; i < NNET; ++i){\n",
+            "  for(size_t i = 0; i < NNET; ++i) {\n",
             "    const auto& r = dscU[dscR[i]];\n",
             "    dsc[i].reserve(r.size());\n",
             "    for(int k : r) dsc[i].push_back(dscV[k]);\n",
             "  }\n",
-(* the dressed phase-B fold routes each sub-term's scaled Poly trace into its DPoly channel
+(* the dressed phase-B fold routes each sub-term's scaled Poly trace into its DressedPoly channel
    sdr[i][j] (empty monomial = undressed); sdrV and sdrU are small, so they stay inline. *)
             If[hasDressed,
-              "  std::vector<DMono> sdrV = {" <>
+              "  std::vector<DressingMono> sdrV = {" <>
                 StringRiffle[ntIntRow /@ sdr["Values"], ","] <> "};\n" <>
               "  std::vector<std::vector<int>> sdrU = {" <>
                 StringRiffle[ntIntRow /@ sdr["Rows"], ","] <> "};\n" <>
               sdrR[[2]] <>
-              "  std::vector<std::vector<DMono>> sdr(NNET);\n" <>
-              "  for(size_t i = 0; i < NNET; ++i){\n" <>
+              "  std::vector<std::vector<DressingMono>> sdr(NNET);\n" <>
+              "  for(size_t i = 0; i < NNET; ++i) {\n" <>
               "    const auto& r = sdrU[sdrR[i]];\n" <>
               "    sdr[i].reserve(r.size());\n" <>
               "    for(int k : r) sdr[i].push_back(sdrV[k]);\n" <>
@@ -715,7 +715,7 @@ ntGenMainPhaseA[nSub_, nReused_, hasDressed_, mIdx_] :=
    it to put the singletons in phase A's balanced work list. *)
         "  long nCache = " <> ToString[If[hasDressed, nSub, nReused]] <> ";\n",
         "  if(const long v = numtracer::env_int(\"NT_GEN_MEMO_MAX\",-1); v >= 0) nCache = std::min<long>(v,NSUB);\n",
-(* Traces are dressing-stripped, so phase A caches plain Poly on both paths; the DPoly is assembled
+(* Traces are dressing-stripped, so phase A caches plain Poly on both paths; the DressedPoly is assembled
    only in the phase-B fold. *)
 (* The parallel phases contract through a CONST view: every atom is registered above, so a
    contraction only reads the frame. *)
@@ -742,7 +742,7 @@ ntGenMainPhaseA[nSub_, nReused_, hasDressed_, mIdx_] :=
         "  // ---------------------------------------------------------------------------------------------\n\n",
         "  auto tA = std::chrono::steady_clock::now();\n",
         "  std::vector<Poly> traceTable = frame.contract_traces<Poly>(nCache, workersA, trace);\n",
-        "  if(ntprof){\n",
+        "  if(ntprof) {\n",
         "    std::size_t tb = 0;\n",
         "    for(auto &p : traceTable) tb += poly_bytes(p);\n",
         "    std::fprintf(stderr, \"[num] phase A: %ld distinct traces, %ld cached, table %.1f MB, %.1f s (W=%u)\\n\",\n",
@@ -773,7 +773,7 @@ ntGenMainPhaseA[nSub_, nReused_, hasDressed_, mIdx_] :=
    ORDER INVARIANT: each group left-folds its members in group order, and the sink runs on the calling
    thread for gi = 0,1,2,... ascending; that fixes GlobalEnv intern order and the CSE instruction
    stream. The scale is spelled per branch so each keeps its exact expression (poly*constant vs
-   DPoly scaleCx). *)
+   DressedPoly scaleCx). *)
 ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_, ncomp_] :=
   With[{nGrp = Length[groups],
         grp = ntGenBigTable["ntGroups", "std::vector<std::vector<int>>", ntIntRow /@ groups, "std::vector<std::vector<int>> groups"]},
@@ -806,9 +806,9 @@ ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_, ncomp_] :=
    wrong kernel with no other symptom. O(nNet), once per generation, so never gate it on a flag. *)
             "  numtracer::engine::check_group_partition(groups, " <> ToString[nNet] <> ");\n",
 (* The dressed fold reads the plain-Poly trace table + the per-sub-term dressing monomials sdr and
-   builds the per-net DPoly channel by channel (fold_groups_streaming_dressed). *)
+   builds the per-net DressedPoly channel by channel (fold_groups_streaming_dressed). *)
             If[hasDressed,
-                "  frame.fold_groups_streaming_dressed(\n      sidx, dsc, sdr, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "      [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },\n" <> "      [&](size_t gi, DPoly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });\n",
+                "  frame.fold_groups_streaming_dressed(\n      sidx, dsc, sdr, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "      [&](int d, DressedPoly &&m){ return scaleCx(m, colv[d]); },\n" <> "      [&](size_t gi, DressedPoly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });\n",
                 "  frame.fold_groups_streaming<Poly>(\n      sidx, dsc, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "      [&](int d, Poly &&m){ return m*frame.constant(colv[d]); },\n" <> "      [&](size_t gi, Poly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });\n"
             ],
             "  if(ntprof)\n    std::fprintf(stderr, \"[num] phase B+lower: %d nets in %d groups, window %ld, %.1f s (W=%u)\\n\", " <> ToString[nNet] <> ", " <> ToString[nGrp] <> ", netWindow,\n                 std::chrono::duration<double>(std::chrono::steady_clock::now()-tB).count(), workersB);\n",

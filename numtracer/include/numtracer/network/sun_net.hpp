@@ -23,10 +23,10 @@
 /// separately and multiplies.
 #pragma once
 
-#include "numtracer/core/config.hpp"        // NT_THROW (exception-optional guard for -fno-exceptions builds)
-#include "numtracer/core/export.hpp"        // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
+#include "numtracer/core/config.hpp"     // NT_THROW (exception-optional guard for -fno-exceptions builds)
+#include "numtracer/core/export.hpp"     // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
 #include "numtracer/poly/tolerances.hpp" // kZeroSnapTol
-#include "numtracer/sun/sun_data.hpp"       // SUNData<N> tables, Matrix<N>, Cx, sun_detail::FEntry
+#include "numtracer/sun/sun_data.hpp"    // SUNData<N> tables, Matrix<N>, Cx, sun_detail::FEntry
 
 #include <algorithm>
 #include <array>
@@ -265,7 +265,7 @@ namespace numtracer::inline network
     /// @brief A runtime-sized N×N complex matrix (row-major) for the cold generator path.
     ///
     /// The typed-out tables (`sun/sun_data.hpp`) use the stack-allocated, compile-time-sized
-    /// @ref numtracer::Mat; here `N` is a runtime value, so a heap-backed dynamic matrix is used instead.
+    /// @ref numtracer::Matrix; here `N` is a runtime value, so a heap-backed dynamic matrix is used instead.
     /// Generator-only, so the heap allocation and lack of unrolling are irrelevant.
     struct DynMat {
       int n = 0;                              ///< Dimension `N`.

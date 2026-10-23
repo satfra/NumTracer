@@ -15,12 +15,12 @@
 // Every include below is deliberately re-exported (this header's whole purpose); the trailing
 // `IWYU pragma: export` markers say so, so include-what-you-use / clangd do not flag them "unused".
 
-// Core: the constexpr complex NTTP, the compile-time constant carrier, the dense complex matrix,
-// and the compiled-vs-header-only export gate.
-#include "numtracer/core/cmat.hpp"   // IWYU pragma: export
+// Core: the constexpr complex NTTP, the compiled-vs-header-only export gate, the compile-time
+// constant carrier, and the dense matrix.
 #include "numtracer/core/cx.hpp"     // IWYU pragma: export
 #include "numtracer/core/export.hpp" // IWYU pragma: export
 #include "numtracer/core/lit.hpp"    // IWYU pragma: export
+#include "numtracer/core/matrix.hpp" // IWYU pragma: export
 
 // Typed-out tables (cross-checked against the runtime oracles): Euclidean Weyl gamma matrices and
 // the SU(2)/SU(3) structure/generator data.
@@ -40,8 +40,8 @@
 #include "numtracer/engine/contract_dressed.hpp" // IWYU pragma: export
 #include "numtracer/engine/frame.hpp"            // IWYU pragma: export
 #include "numtracer/engine/spinor_mat.hpp"       // IWYU pragma: export
-#include "numtracer/poly/dpoly.hpp"              // IWYU pragma: export
-#include "numtracer/poly/mpoly.hpp"              // IWYU pragma: export
+#include "numtracer/poly/dressed_poly.hpp"              // IWYU pragma: export
+#include "numtracer/poly/poly.hpp"               // IWYU pragma: export
 
 // Codegen: the real-SSA CSE, the Poly lowering, the emitter, and the emitted-kernel support layer
 // (numtracer::complex / numtracer::compute) that a generated kernel compiles against.

@@ -232,11 +232,11 @@ ntChunkDef[name_String, ret_String, elems_List] :=
     tot = Total[StringLength /@ elems];
     Which[
       Length[elems] <= 1 || tot <= $ntDefChunk,
-        {{ret <> " " <> name <> "(){ return {" <> StringRiffle[elems, ", "] <> "}; }"}, ""},
+        {{ret <> " " <> name <> "() {\n  return {" <> StringRiffle[elems, ", "] <> "};\n}"}, ""},
 
       (* --- every row identical: the fill ctor, and the payload is emitted ONCE --- *)
       Length[u] === 1,
-        {{ret <> " " <> name <> "(){ return " <> ret <> "(" <> ToString[Length[elems]] <> ", " <> First[u] <> "); }"}, ""},
+        {{ret <> " " <> name <> "() {\n  return " <> ret <> "(" <> ToString[Length[elems]] <> ", " <> First[u] <> ");\n}"}, ""},
 
       (* --- few distinct rows: distinct table + an index run --- *)
       (* Conservative: compares payloads only, charging the index to the new form while giving the
@@ -253,13 +253,13 @@ ntChunkDef[name_String, ret_String, elems_List] :=
           xs = ntIntStrs[pos];
           xchunks = ntSplitByChars[xs, 1];
           xnc = Length[xchunks];
-          xdefs = MapIndexed["void " <> name <> "_x" <> ToString[#2[[1]] - 1] <> "(std::vector<int>& o){ static const int a[] = {" <> StringRiffle[#1, ","] <> "}; o.insert(o.end(), a, a + " <> ToString[Length[#1]] <> "); }"&, xchunks];
+          xdefs = MapIndexed["void " <> name <> "_x" <> ToString[#2[[1]] - 1] <> "(std::vector<int>& o) {\n  static const int a[] = {" <> StringRiffle[#1, ","] <> "};\n  o.insert(o.end(), a, a + " <> ToString[Length[#1]] <> "); }"&, xchunks];
           xdecl = StringJoin[Table["void " <> name <> "_x" <> ToString[k - 1] <> "(std::vector<int>&);\n", {k, xnc}]];
           {
             Join[uDefs, xdefs,
-              {ret <> " " <> name <> "(){ " <> ret <> " u = " <> name <> "_u(); std::vector<int> x; x.reserve(" <> n <> "); " <>
-                 StringJoin[Table[name <> "_x" <> ToString[k - 1] <> "(x); ", {k, xnc}]] <>
-                 ret <> " o; o.reserve(" <> n <> "); for (int i : x) o.push_back(u[i]); return o; }"}],
+              {ret <> " " <> name <> "() {\n  " <> ret <> "\n  u = " <> name <> "_u();\n  std::vector<int> x;\n  x.reserve(" <> n <> ");\n  " <>
+                 StringJoin[Table[name <> "_x" <> ToString[k - 1] <> "(x);\n", {k, xnc}]] <>
+                 ret <> " o;\n  o.reserve(" <> n <> ");\n  for (int i : x) o.push_back(u[i]);\n  return o;\n}"}],
             uDecl <> ret <> " " <> name <> "_u();\n" <> xdecl}],
 
       True,
@@ -273,9 +273,9 @@ ntChunkDef[name_String, ret_String, elems_List] :=
           nChunks = Length[chunks];
           defs =
             If[intElems,
-              MapIndexed["void " <> name <> "_c" <> ToString[#2[[1]] - 1] <> "(" <> ret <> "& o){ static const int a[] = {" <> StringRiffle[#1, ","] <> "}; o.insert(o.end(), a, a + " <> ToString[Length[#1]] <> "); }"&, chunks],
-              MapIndexed["void " <> name <> "_c" <> ToString[#2[[1]] - 1] <> "(" <> ret <> "& o){ " <> StringJoin[("o.push_back(" <> # <> "); ")& /@ #1] <> "}"&, chunks]];
-          {Append[defs, ret <> " " <> name <> "(){ " <> ret <> " o; o.reserve(" <> ToString[Length[elems]] <> "); " <> StringJoin[Table[name <> "_c" <> ToString[k - 1] <> "(o); ", {k, nChunks}]] <> "return o; }"], StringJoin[Table["void " <> name <> "_c" <> ToString[k - 1] <> "(" <> ret <> "&);\n", {k, nChunks}]]}
+              MapIndexed["void " <> name <> "_c" <> ToString[#2[[1]] - 1] <> "(" <> ret <> "& o) {\n  static const int a[] = {" <> StringRiffle[#1, ","] <> "};\n  o.insert(o.end(), a, a + " <> ToString[Length[#1]] <> ");\n}"&, chunks],
+              MapIndexed["void " <> name <> "_c" <> ToString[#2[[1]] - 1] <> "(" <> ret <> "& o) {\n" <> StringJoin[("  o.push_back(" <> # <> ");\n")& /@ #1] <> "}"&, chunks]];
+          {Append[defs, ret <> " " <> name <> "() {\n  " <> ret <> " o;\n  o.reserve(" <> ToString[Length[elems]] <> ");\n  " <> StringJoin[Table[name <> "_c" <> ToString[k - 1] <> "(o); ", {k, nChunks}]] <> "return o;\n}"], StringJoin[Table["void " <> name <> "_c" <> ToString[k - 1] <> "(" <> ret <> "&);\n", {k, nChunks}]]}
         ]
     ]];
 
@@ -287,7 +287,7 @@ ntChunkDef[name_String, ret_String, elems_List] :=
 
 ntBigTableFns[name_String, ret_String, elems_List] :=
   If[elems === {},
-    {"static " <> ret <> " " <> name <> "(){ return {}; }\n", name <> "()"},
+    {"static " <> ret <> " " <> name <> "() { return {}; }\n", name <> "()"},
     Module[{chunks, nChunks},
       chunks = ntSplitByChars[elems, 2];
       nChunks = Length[chunks];
@@ -295,12 +295,12 @@ ntBigTableFns[name_String, ret_String, elems_List] :=
          chars each); a single chunk skips the concatenation wrapper *)
       {
         If[nChunks === 1,
-          "static " <> ret <> " " <> name <> "(){ return {" <> StringRiffle[First[chunks], ","] <> "}; }\n",
+          "static " <> ret <> " " <> name <> "() {\n  return {" <> StringRiffle[First[chunks], ","] <> "};\n}\n",
           StringJoin[
-            MapIndexed["static " <> ret <> " " <> name <> "_c" <> ToString[#2[[1]] - 1] <> "(){ return {" <> StringRiffle[#1, ","] <> "}; }\n"&, chunks],
-            "static " <> ret <> " " <> name <> "(){ " <> ret <> " o; o.reserve(" <> ToString[Length[elems]] <> ");\n" <>
+            MapIndexed["static " <> ret <> " " <> name <> "_c" <> ToString[#2[[1]] - 1] <> "() {\n  return {" <> StringRiffle[#1, ","] <> "};\n}\n"&, chunks],
+            "static " <> ret <> " " <> name <> "() {\n  " <> ret <> " o;\n  o.reserve(" <> ToString[Length[elems]] <> ");\n" <>
               StringJoin[Table["  { " <> ret <> " c = " <> name <> "_c" <> ToString[k - 1] <> "(); o.insert(o.end(), std::make_move_iterator(c.begin()), std::make_move_iterator(c.end())); }\n", {k, nChunks}]] <>
-              "  return o; }\n"]],
+              "  return o;\n}\n"]],
         name <> "()"}]];
 
 (* the same over every net of one family (dnet/lnet/dch/dsl); returns {flatDefs, declString}. *)

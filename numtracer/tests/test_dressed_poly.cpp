@@ -1,14 +1,14 @@
 // Correctness gate for the dressing-collection layer (symbolic dressing collection).
 //
 // Validates:
-//   A) DPoly arithmetic — add / operator+ / operator* collect over dressing monomials, and pdetail::eval()
+//   A) DressedPoly arithmetic — add / operator+ / operator* collect over dressing monomials, and pdetail::eval()
 //      equals the manual sum.
-//   B) Dressing-free reduction — a dressed chain with NO slots produces a DPoly with a single empty
-//      dressing monomial whose Poly is bit-equal to ndetail::contract(...), and to_genprog(DPoly) emits
+//   B) Dressing-free reduction — a dressed chain with NO slots produces a DressedPoly with a single empty
+//      dressing monomial whose Poly is bit-equal to ndetail::contract(...), and to_genprog(DressedPoly) emits
 //      the SAME program (instruction stream + root) as to_genprog(Poly). This guarantees no-regression
 //      for every existing (un-dressed) flow.
 //   C) Dressed contraction — a quark line with dressed numerators S(p)=Mq·δ + Z(p)·p̸ kept EAGER and
-//      collected into one DPoly equals the explicit distributed sum Σ_combos (∏dressings)·trace, both
+//      collected into one DressedPoly equals the explicit distributed sum Σ_combos (∏dressings)·trace, both
 //      evaluated at random points (≤1e-10), with the trace computed ONCE instead of per combination.
 #include "numtracer/engine/frame.hpp"
 #include "engine_test_util.hpp"
@@ -33,21 +33,21 @@ int main()
   std::uniform_real_distribution<double> U(-1.0, 1.0);
   int fails = 0;
 
-  // ---- A) DPoly arithmetic + eval ----
-  std::printf("== A: DPoly arithmetic ==\n");
+  // ---- A) DressedPoly arithmetic + eval ----
+  std::printf("== A: DressedPoly arithmetic ==\n");
   {
     const int nsym = 2;
     nm::Frame env(ntest::names(nsym));
     // a = d0 * (x0)  +  {} * (3)
-    nm::DPoly a = env.dzero();
-    a.add(nm::DMono{0}, env.var(0));
-    a.add(nm::DMono{}, env.constant(Cx{3, 0}));
+    nm::DressedPoly a = env.dzero();
+    a.add(nm::DressingMono{0}, env.var(0));
+    a.add(nm::DressingMono{}, env.constant(Cx{3, 0}));
     // b = d0 * (x1) + d1 * (2)
-    nm::DPoly b = env.dzero();
-    b.add(nm::DMono{0}, env.var(1));
-    b.add(nm::DMono{1}, env.constant(Cx{2, 0}));
-    nm::DPoly sum = a + b;   // d0*(x0+x1) + d1*2 + {}*3
-    nm::DPoly prod = a * b;  // collects d0*d0, d0*d1, {}*d0, {}*d1
+    nm::DressedPoly b = env.dzero();
+    b.add(nm::DressingMono{0}, env.var(1));
+    b.add(nm::DressingMono{1}, env.constant(Cx{2, 0}));
+    nm::DressedPoly sum = a + b;   // d0*(x0+x1) + d1*2 + {}*3
+    nm::DressedPoly prod = a * b;  // collects d0*d0, d0*d1, {}*d0, {}*d1
     std::vector<double> x = {0.4, -0.7};
     std::vector<double> atomVal;            // none
     std::vector<double> drVal = {1.5, -2.0}; // d0=1.5, d1=-2.0
@@ -65,7 +65,7 @@ int main()
   }
 
   // ---- B) dressing-free reduction == Poly path (no-regression guarantee) ----
-  std::printf("\n== B: dressing-free DPoly == Poly path ==\n");
+  std::printf("\n== B: dressing-free DressedPoly == Poly path ==\n");
   {
     const int nsym = 8; // p:0..3, q:4..7
     nm::Frame env(ntest::names(nsym));
@@ -83,7 +83,7 @@ int main()
     std::vector<nm::DChainTok> dchain;
     for (const auto &f : chain)
       dchain.push_back(nm::dtfix(f));
-    nm::DPoly dp = ntest::contract_dressed(env, dchain, /*slots*/ {}, lor, comp, {});
+    nm::DressedPoly dp = ntest::contract_dressed(env, dchain, /*slots*/ {}, lor, comp, {});
     bool oneTerm = (dp.size() == 1) && dp.terms[0].first.empty();
     bool mpEqual = oneTerm && (dp.terms[0].second.terms.size() == mp.terms.size());
     if (mpEqual)
@@ -124,7 +124,7 @@ int main()
     nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, {}, {}}, nm::DSlotOpt{Cx{1, 0}, {2}, {network::slash(Momentum{{{1.0, 1}}})}, {}}};
     std::vector<nm::DChainTok> dchain = {nm::dtfix(network::gamma(LorentzIndex{100})), nm::dtslot(0),
                                          nm::dtfix(network::gamma(LorentzIndex{101})), nm::dtslot(1)};
-    nm::DPoly dp = ntest::contract_dressed(env, dchain, {sP, sQ}, lor, comp, {});
+    nm::DressedPoly dp = ntest::contract_dressed(env, dchain, {sP, sQ}, lor, comp, {});
 
     // distributed reference: enumerate the 2×2 structure choices explicitly
     auto refTrace = [&](int cp, int cq, const std::vector<double> &x) {
@@ -174,7 +174,7 @@ int main()
     nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, {}, {}}, nm::DSlotOpt{Cx{1, 0}, {1}, {network::slash(Momentum{{{1.0, 0}}})}, {}}};
     std::vector<nm::DChainTok> dchain = {nm::dtfix(network::comm(LorentzIndex{100}, LorentzIndex{101})), nm::dtslot(0),
                                          nm::dtfix(network::gamma(LorentzIndex{102})), nm::dtfix(network::gamma(LorentzIndex{103}))};
-    nm::DPoly dp = ntest::contract_dressed(env, dchain, {sP}, lor, comp, {});
+    nm::DressedPoly dp = ntest::contract_dressed(env, dchain, {sP}, lor, comp, {});
     auto refTrace = [&](int cp, const std::vector<double> &x) {
       network::DiracChain c = {network::comm(LorentzIndex{100}, LorentzIndex{101})};
       if (cp == 1) c.push_back(network::slash(Momentum{{{1.0, 0}}}));
@@ -221,7 +221,7 @@ int main()
     nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, {}, {}}, nm::DSlotOpt{Cx{1, 0}, {2}, {network::slash(Momentum{{{1.0, 1}}})}, {}}};
     std::vector<nm::DChainTok> dchain = {nm::dtfix(network::gamma(LorentzIndex{100})), nm::dtfix(network::gamma(LorentzIndex{101})),
                                          nm::dtslot(0), nm::dtfix(network::comm(LorentzIndex{102}, LorentzIndex{103})), nm::dtslot(1)};
-    nm::DPoly dp = ntest::contract_dressed(env, dchain, {sP, sQ}, lor, comp, {});
+    nm::DressedPoly dp = ntest::contract_dressed(env, dchain, {sP, sQ}, lor, comp, {});
     auto refTrace = [&](int cp, int cq, const std::vector<double> &x) {
       network::DiracChain c = {network::gamma(LorentzIndex{100}), network::gamma(LorentzIndex{101})};
       if (cp == 1) c.push_back(network::slash(Momentum{{{1.0, 0}}}));
@@ -270,7 +270,7 @@ int main()
     nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, {}, {}}, nm::DSlotOpt{Cx{1, 0}, {2}, {network::slash(Momentum{{{1.0, 1}}})}, {}}};
     std::vector<nm::DChainTok> dchain = {nm::dtfix(network::gamma(LorentzIndex{100})), nm::dtslot(0),
                                          nm::dtfix(network::comm(LorentzIndex{101}, Momentum{{{1.0, 2}}})), nm::dtslot(1)};
-    nm::DPoly dp = ntest::contract_dressed(env, dchain, {sP, sQ}, lor, comp, {});
+    nm::DressedPoly dp = ntest::contract_dressed(env, dchain, {sP, sQ}, lor, comp, {});
     auto refTrace = [&](int cp, int cq, const std::vector<double> &x) {
       network::DiracChain c = {network::gamma(LorentzIndex{100})};
       if (cp == 1) c.push_back(network::slash(Momentum{{{1.0, 0}}}));
@@ -305,7 +305,7 @@ int main()
   // ---- G) OPEN gluon-leg vertex slot {γ^μ, σ^{μν}p̸_ν} collected vs distributed (Stage 4, CP1) ----
   // The quark-gluon vertex is a SUM of structures sharing ONE open gluon axis μ. Unlike a propagator
   // numerator (every option internally contracted), here every option carries the SAME open μ, closed
-  // by the surrounding net — so the collected DPoly must equal the distributed structure sum.
+  // by the surrounding net — so the collected DressedPoly must equal the distributed structure sum.
   std::printf("\n== G: open gluon-leg vertex slot {gamma^mu, sigma^{mu nu}} collected vs distributed ==\n");
   {
     const int nsym = 4; // p:0..3
@@ -322,7 +322,7 @@ int main()
     o1.coeff = Cx{1, 0}; o1.dress = {1}; o1.toks = {network::comm(LorentzIndex{200}, Momentum{{{1.0, 0}}})};      // T7: σ^{μν}p̸_ν
     nm::DSlot sV = {o0, o1};
     std::vector<nm::DChainTok> dchain = {nm::dtslot(0), nm::dtfix(network::gamma(LorentzIndex{101}))};
-    nm::DPoly dp = ntest::contract_dressed(env, dchain, {sV}, lor, comp, {});
+    nm::DressedPoly dp = ntest::contract_dressed(env, dchain, {sV}, lor, comp, {});
     auto refTrace = [&](int cp, const std::vector<double> &x) {
       network::DiracChain c;
       if (cp == 0) c.push_back(network::gamma(LorentzIndex{200}));            // γ^μ
@@ -414,7 +414,7 @@ int main()
     for (const Cfg &cfg : cfgs) {
       std::vector<nm::DChainTok> dchain = {nm::dtfix(cfg.pre[0]), nm::dtslot(0)};
       for (const network::DFac &d : cfg.post) dchain.push_back(nm::dtfix(d));
-      nm::DPoly dp = ntest::contract_dressed(env, dchain, {sV}, cfg.base, comp, {});
+      nm::DressedPoly dp = ntest::contract_dressed(env, dchain, {sV}, cfg.base, comp, {});
       int worst = 0;
       double maxerr = 0.0;
       for (int it = 0; it < 5000; ++it) {
@@ -468,7 +468,7 @@ int main()
       std::vector<nm::DChainTok> dchain;
       for (const network::DFac &d : cfg.pre) dchain.push_back(nm::dtfix(d));
       dchain.push_back(nm::dtslot(0));
-      nm::DPoly dp = ntest::contract_dressed(env, dchain, {sV}, base, comp, {});
+      nm::DressedPoly dp = ntest::contract_dressed(env, dchain, {sV}, base, comp, {});
       int worst = 0; double maxerr = 0.0;
       for (int it = 0; it < 5000; ++it) {
         std::vector<double> x(nsym);
@@ -526,7 +526,7 @@ int main()
     // 2-leg net: contract the two gluon legs together (g_{μν}) — a closed two-gluon sub-net.
     LorentzNet base = {LorentzTerm{Cx{1, 0}, {ntest::fmet(MU, NU)}}};
     std::vector<nm::DChainTok> dchain = {nm::dtfix(pre[0]), nm::dtfix(pre[1]), nm::dtslot(0)};
-    nm::DPoly dp = ntest::contract_dressed(env, dchain, {sV}, base, comp, {});
+    nm::DressedPoly dp = ntest::contract_dressed(env, dchain, {sV}, base, comp, {});
     int worst = 0; double maxerr = 0.0; std::vector<double> mag(3, 0.0);
     for (int it = 0; it < 5000; ++it) {
       std::vector<double> x(nsym);
@@ -586,8 +586,8 @@ int main()
     // the whole point: NO surrounding Lorentz structure.
     const LorentzNet emptyNNet = {};
     const network::LorentzNet emptyNetVal = {};
-    nm::DPoly dpN = ntest::contract_dressed(env, chain, {sV}, emptyNNet, comp, {});
-    nm::DPoly dpV = ntest::contract_dressed(env, chain, {sV}, emptyNetVal, comp, {});
+    nm::DressedPoly dpN = ntest::contract_dressed(env, chain, {sV}, emptyNNet, comp, {});
+    nm::DressedPoly dpV = ntest::contract_dressed(env, chain, {sV}, emptyNetVal, comp, {});
     // distributed reference: the commutator option keeps the empty net, the metric option's factor is
     // written into a one-term net by hand — that IS the distributed diagram, built with public builders.
     // Splice IN PLACE while walking the chain: the slot sits between the two γ5, and a γ chain does not
@@ -626,8 +626,8 @@ int main()
   // The generator no longer keys its trace table on the dressing: it strips each option's dressing
   // (coeff→1, dress→{}) into a per-sub-term scalar (`sc`, the numeric part) and monomial (`dmono`, the
   // dressing-atom ids), contracts each STRUCTURAL combination once into a plain Poly
-  // (ndetail::contract_structural), and folds the table back into a DPoly per net (fold_net_dressed:
-  // Σ_j sc[j]·T[k_j] ⊗ dmono[j]). This must reproduce the collected DPoly EXACTLY — a half-carried
+  // (ndetail::contract_structural), and folds the table back into a DressedPoly per net (fold_net_dressed:
+  // Σ_j sc[j]·T[k_j] ⊗ dmono[j]). This must reproduce the collected DressedPoly EXACTLY — a half-carried
   // dressing would silently drop a channel. Validate the whole decomposition against the reference
   // ndetail::contract_dressed on the 147-like chain (multi-γ + σ + two dressed slots).
   std::printf("\n== K: lever (b) structural-trace + carried-dressing assembly == the dressed contraction ==\n");
@@ -654,15 +654,15 @@ int main()
     std::vector<nm::DChainTok> chain = {nm::dtfix(network::gamma(LorentzIndex{100})), nm::dtslot(0),
                                         nm::dtfix(network::gamma(LorentzIndex{101})), nm::dtslot(1)};
 
-    // reference: the collected DPoly.
-    nm::DPoly ref = ntest::contract_dressed(env, chain, slots, lor, comp, {});
+    // reference: the collected DressedPoly.
+    nm::DressedPoly ref = ntest::contract_dressed(env, chain, slots, lor, comp, {});
 
     // lever (b): enumerate the structural combinations, contract each to a PLAIN Poly, and carry the
     // dressing (coeff → sc, atoms → dmono) exactly as Codegen*.m does. Then fold_net_dressed reassembles.
     std::vector<nm::Poly> T;
     std::vector<int> sidx;
     std::vector<Cx> sc;
-    std::vector<nm::DMono> dmono;
+    std::vector<nm::DressingMono> dmono;
     const int nSlots = static_cast<int>(slots.size());
     std::vector<int> ch(nSlots, 0);
     bool done = false;
@@ -670,7 +670,7 @@ int main()
       // structural slots (dressing stripped), and this combo's (dressCx, dressIds).
       std::vector<nm::DSlot> ss(nSlots);
       Cx dressCx{1, 0};
-      nm::DMono dressIds;
+      nm::DressingMono dressIds;
       for (int s = 0; s < nSlots; ++s) {
         const nm::DSlotOpt &o = slots[s][ch[s]];
         dressCx = Cx{dressCx.re * o.coeff.re - dressCx.im * o.coeff.im,
@@ -682,7 +682,7 @@ int main()
       sidx.push_back(static_cast<int>(T.size()));
       T.push_back(std::move(tr));
       sc.push_back(dressCx);
-      dmono.push_back(nm::dmono_sorted(std::move(dressIds)));
+      dmono.push_back(nm::dressing_mono_sorted(std::move(dressIds)));
       int k = 0;
       for (; k < nSlots; ++k) {
         if (++ch[k] < static_cast<int>(slots[k].size())) break;
@@ -692,7 +692,7 @@ int main()
     }
     // nCache == T.size() ⇒ every trace resident, the recompute lambda is never called.
     auto never = [&](int) { return env.zero(); };
-    nm::DPoly asmb =
+    nm::DressedPoly asmb =
         nm::fold_net_dressed(nsym, sidx, sc, dmono, T, static_cast<long>(T.size()), never);
 
     // structural comparison: same dressing channels, coefficients equal (bit-exact where the only extra

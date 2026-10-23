@@ -8,7 +8,7 @@
 /// TUs is an ODR violation on the inline hot paths) and never install it.
 ///
 /// Include constraints (same as the rest of the numeric engine): this header is pulled into
-/// `mpoly.hpp`/`contract.hpp`, which the `-O0 -fno-exceptions` net-builder TUs may see —
+/// `poly.hpp`/`contract.hpp`, which the `-O0 -fno-exceptions` net-builder TUs may see —
 /// so no `<thread>`, no `<mutex>`, no exceptions. Aggregation uses an atomic intrusive list of
 /// heap-allocated (deliberately leaked) per-thread counter blocks; the dump walks the list after
 /// phase A's workers have joined (generator_phases.hpp owns the dump).
@@ -28,7 +28,7 @@ namespace numtracer::stats
 
   /// One thread's phase-A counters. Fields are totals; times are nanoseconds.
   struct PhaseACounters {
-    // Poly arithmetic (mpoly.hpp)
+    // Poly arithmetic (poly.hpp)
     nt_u64 mul_calls = 0;      ///< operator* invocations with both sides non-empty
     nt_u64 mul_empty = 0;      ///< operator* short-circuits (an operand was the zero poly)
     nt_u64 mul_prod_terms = 0; ///< Σ |a|·|b| product monomials emitted into scratch

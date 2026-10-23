@@ -6,7 +6,7 @@
 /// a dressing function known only at kernel run time (e.g. A(p)·p̸ + B(p), or Σ_i λ_i(p)·T_i^μ). It
 /// enters the chain as a SLOT (@ref DSlot, one @ref DSlotOpt per term). The slot combinations are
 /// enumerated and each concrete chain goes through the same pipeline; @ref ndetail::contract_dressed
-/// collects the results per dressing monomial (a @ref DPoly), while @ref ndetail::contract_structural
+/// collects the results per dressing monomial (a @ref DressedPoly), while @ref ndetail::contract_structural
 /// sums them into a plain @ref Poly for the generator, which carries the dressings separately
 /// (see engine/generator_phases.hpp).
 ///
@@ -17,7 +17,7 @@
 /// Dirac chain with SLOT tokens: each slot is the structure sum of one dressed numerator. We collect
 /// it WITHOUT the `2^D`-diagram blowup: enumerate the structure choices, contract each concrete chain
 /// with the EXISTING @ref ndetail::contract (so all the validated Dirac/Lorentz machinery is reused
-/// verbatim), and accumulate the results into ONE @ref DPoly keyed by the dressing monomial. The whole
+/// verbatim), and accumulate the results into ONE @ref DressedPoly keyed by the dressing monomial. The whole
 /// diagram then lowers to ONE trace function whose dressing factors the shared CSE/Horner collects.
 ///
 /// Layout: declarations first (always visible), then the bodies, which compile only in the library
@@ -26,8 +26,9 @@
 
 #include "numtracer/core/export.hpp"     // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES
 #include "numtracer/engine/contract.hpp" // ndetail::contract_net, InputScan (bodies)
-#include "numtracer/poly/dpoly.hpp"      // DPoly / DMono
+#include "numtracer/poly/dressed_poly.hpp"      // DressedPoly / DressingMono
 
+#include <cassert>
 #include <utility>
 #include <vector>
 
@@ -87,13 +88,13 @@ namespace numtracer::inline engine
 
   namespace ndetail
   {
-    /// @brief Dressed-slot analogue of @ref contract: returns the collected @ref DPoly (one channel
-    ///        per dressing monomial). The engine behind the dressed @ref Frame::contract.
-    NUMTRACER_FUNC DPoly contract_dressed(int nsym, const std::vector<DChainTok> &chain,
+    /// @brief Dressed-slot analogue of @ref contract: returns the collected @ref DressedPoly (one channel
+    ///        per dressing monomial). The engine behind the dressed @ref Frame::trace.
+    NUMTRACER_FUNC DressedPoly contract_dressed(int nsym, const std::vector<DChainTok> &chain,
                                           const std::vector<DSlot> &slots, const LorentzNet &lor,
                                           const std::vector<std::array<Poly, 4>> &comp,
                                           const std::vector<Poly> &atomDen,
-                                          const std::vector<std::vector<int>> &units = {});
+                                          const std::vector<std::vector<int>> &units);
     /// @brief STRUCTURAL variant of @ref contract_dressed: contract the collected slots into a PLAIN
     ///        @ref Poly, DISCARDING the dressing dimension (the dressing monomial keys are summed
     ///        away). The generator strips each option's dressing (`coeff`→1, `dress`→{}) into a
@@ -107,7 +108,7 @@ namespace numtracer::inline engine
                                             const std::vector<DSlot> &slots, const LorentzNet &lor,
                                             const std::vector<std::array<Poly, 4>> &comp,
                                             const std::vector<Poly> &atomDen,
-                                            const std::vector<std::vector<int>> &units = {});
+                                            const std::vector<std::vector<int>> &units);
   } // namespace ndetail
 
 #if NUMTRACER_DEFINE_BODIES
@@ -144,14 +145,14 @@ namespace numtracer::inline engine
   {
     /// Enumerate the Cartesian product of slot-structure choices, contract each concrete Dirac chain
     /// via @p contract (an `Poly`-returning closure that runs the full Dirac+Lorentz contraction), and
-    /// collect the results into one @ref DPoly keyed by the dressing monomial. Each slot is referenced
+    /// collect the results into one @ref DressedPoly keyed by the dressing monomial. Each slot is referenced
     /// at most once in @p chain (a numerator occupies one chain position). @p contract receives the
     /// concrete Dirac chain AND this combination's extra Lorentz-net factors (the chosen options'
     /// @ref DSlotOpt::netFacs — open legs on vectors/metrics/…); empty for every option whose structure
     /// is purely Dirac-side ⇒ the caller takes a byte-identical fast path.
     ///
     /// The enumeration is factored out of @ref dress_collect so the two accumulation policies share it:
-    /// the DPoly collection (`emit(dmono, mp)` → `out.add(dmono, mp)`) and the STRUCTURAL Poly reduction
+    /// the DressedPoly collection (`emit(dmono, mp)` → `out.add(dmono, mp)`) and the STRUCTURAL Poly reduction
     /// (@ref dress_collect_mp: `emit(_, mp)` → `out += mp`, dropping the dressing key). @p emit is called
     /// once per surviving combination with the sorted dressing monomial and the (coeff·trace) `Poly`.
     template <class ContractFn, class Emit>
@@ -173,7 +174,7 @@ namespace numtracer::inline engine
       while (!done) {
         // build the concrete chain + accumulate this combination's numeric coeff and dressing monomial
         Cx combCoeff{1, 0};
-        DMono dressMono;
+        DressingMono dressMono;
         network::DiracChain concrete;
         concrete.reserve(chain.size());
         std::vector<LorentzFactor> extraNet; // this combination's options' net factors (usually empty)
@@ -209,7 +210,7 @@ namespace numtracer::inline engine
           Poly mp = contract(concrete, extraNet);
           if (!mp.empty()) {
             mp = mp * PolyFactory::constant(nsym, combCoeff);
-            emit(dmono_sorted(std::move(dressMono)), std::move(mp));
+            emit(dressing_mono_sorted(std::move(dressMono)), std::move(mp));
           }
         }
         // odometer over the slot choices: advance the lowest slot, carrying into the next on wrap.
@@ -223,14 +224,14 @@ namespace numtracer::inline engine
       }
     }
 
-    /// @brief The DPoly collection: accumulate each combination into its dressing-monomial channel.
+    /// @brief The DressedPoly collection: accumulate each combination into its dressing-monomial channel.
     template <class ContractFn>
-    inline DPoly dress_collect(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
+    inline DressedPoly dress_collect(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
                                ContractFn &&contract)
     {
-      DPoly out = DPolyFactory::zero(nsym);
+      DressedPoly out = DressedPolyFactory::zero(nsym);
       dress_enumerate(nsym, chain, slots, std::forward<ContractFn>(contract),
-                      [&](const DMono &d, Poly &&mp) { out.add(d, mp); });
+                      [&](const DressingMono &d, Poly &&mp) { out.add(d, mp); });
       return out;
     }
 
@@ -251,11 +252,11 @@ namespace numtracer::inline engine
 #ifndef NDEBUG
       for (const DSlot &s : slots)
         for (const DSlotOpt &o : s)
-          assert(o.dress.empty() && "dress_collect_mp requires dressing-free slots (lever (b))");
+          assert(o.dress.empty() && "dress_collect_mp requires dressing-free slots");
 #endif
       Poly out = PolyFactory::zero(nsym);
       dress_enumerate(nsym, chain, slots, std::forward<ContractFn>(contract),
-                      [&](const DMono &, Poly &&mp) { out = std::move(out) + std::move(mp); });
+                      [&](const DressingMono &, Poly &&mp) { out = std::move(out) + std::move(mp); });
       return out;
     }
   } // namespace ndetail
@@ -285,7 +286,7 @@ namespace numtracer::inline engine
       scan.verify(nMom, nAtom);
     }
 
-    NUMTRACER_FUNC DPoly contract_dressed(int nsym, const std::vector<DChainTok> &chain,
+    NUMTRACER_FUNC DressedPoly contract_dressed(int nsym, const std::vector<DChainTok> &chain,
                                           const std::vector<DSlot> &slots, const LorentzNet &lor,
                                           const std::vector<std::array<Poly, 4>> &comp,
                                           const std::vector<Poly> &atomDen, const std::vector<std::vector<int>> &units)
