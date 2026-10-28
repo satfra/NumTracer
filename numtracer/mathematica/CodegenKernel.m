@@ -1275,9 +1275,14 @@ ntHoistKernelText[text_String, mvar_, runtime_List, pointArgs_List] :=
     Do[
       Module[{lineStart, bOpen, bClose, fn, parts},
         lineStart = ntLineStart[chars, st];
-(* the `template<...>` header (see ntExplicitTemplates) is part of the definition *)
-        If[lineStart > 1 && StringStartsQ[StringTrim[StringTake[text, {ntLineStart[chars, lineStart - 1], lineStart - 1}]], "template<"],
-          lineStart = ntLineStart[chars, lineStart - 1]];
+(* the `template<...>` header (see ntExplicitTemplates) is part of the definition; a long signature
+   gets `// clang-format` guard lines between the two, which are skipped *)
+        Module[{hdr = lineStart, prev},
+          While[hdr > 1 &&
+              StringStartsQ[prev = StringTrim[StringTake[text, {ntLineStart[chars, hdr - 1], hdr - 1}]], "// clang-format"],
+            hdr = ntLineStart[chars, hdr - 1]];
+          If[hdr > 1 && StringStartsQ[StringTrim[StringTake[text, {ntLineStart[chars, hdr - 1], hdr - 1}]], "template<"],
+            lineStart = ntLineStart[chars, hdr - 1]]];
         bOpen = First[Select[Range[ntMatchingBracket[chars, st + StringLength["auto kernel"], {"(", ")"}] + 1, Length[chars]],
                   chars[[#]] === "{" &, 1]];
         bClose = ntMatchingBracket[chars, bOpen, {"{", "}"}];

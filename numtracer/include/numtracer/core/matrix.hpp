@@ -20,11 +20,13 @@ namespace numtracer
   /// @tparam T The entry type (complex by default).
   template <int N, typename T = std::complex<double>> struct Matrix {
     std::array<T, N * N> data{}; ///< Row-major element storage.
+
     /// @brief Mutable element access.
     /// @param i Row index.
     /// @param j Column index.
     /// @return Reference to element `(i,j)`.
     constexpr T &operator()(int i, int j) { return data[i * N + j]; }
+
     /// @brief Const element access.
     /// @param i Row index.
     /// @param j Column index.
@@ -32,7 +34,7 @@ namespace numtracer
     constexpr const T &operator()(int i, int j) const { return data[i * N + j]; }
   };
 
-  /// @brief Matrix product `A · B`.
+  /// @brief Matrix product `Σ_k A(i,k) B(k,j)`.
   ///
   /// Each entry starts from its first product rather than from a zero, so `T` needs only `+` and `*`
   /// (a `Poly` zero would need the frame's symbol count).
