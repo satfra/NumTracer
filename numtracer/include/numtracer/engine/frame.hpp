@@ -26,11 +26,12 @@
 /// members.
 #pragma once
 
-#include "numtracer/codegen/gen.hpp"              // GlobalEnv / FillFormulas / emit_fill
+#include "numtracer/codegen/gen.hpp"             // GlobalEnv / FillFormulas / emit_fill
+#include "numtracer/codegen/lower_poly.hpp"      // to_genprog
+#include "numtracer/codegen/poly_cpp.hpp"        // poly_to_cpp
 #include "numtracer/engine/contract.hpp"         // Poly/Matrix<4, Poly>, LorentzNet, DiracChain, ndetail::contract
 #include "numtracer/engine/contract_dressed.hpp" // DSlot/DChainTok, ndetail::contract_dressed/_structural
-#include "numtracer/codegen/lower_poly.hpp"      // to_genprog
-#include "numtracer/codegen/poly_cpp.hpp"   // poly_to_cpp
+#include "numtracer/engine/space.hpp"            // Space
 
 #include <algorithm>
 #include <array>
@@ -159,6 +160,8 @@ namespace numtracer::inline engine
     const std::vector<std::string> &symbol_names() const { return names_; }
     /// The unit-vector groups among the symbols.
     const std::vector<std::vector<int>> &units() const { return units_; }
+    /// The space's Lorentz and Spinor dimensions.
+    const Space &space() const { return space_; }
 
     // ── polynomials (these freeze the symbol list) ─────────────────────────────────────────────────
 
@@ -240,7 +243,6 @@ namespace numtracer::inline engine
       comp_[static_cast<std::size_t>(vid)][static_cast<std::size_t>(mu)] = std::move(p);
     }
 
-
     /// Generate @p N fresh Lorentz index labels: `auto [mu, nu] = F.indices<2>();`.
     /// They are distinct from each other and from all the previous ones.
     template <int N> std::array<LorentzIndex, N> indices()
@@ -260,7 +262,7 @@ namespace numtracer::inline engine
     /// (@ref trace assigns atoms itself).
     void add_denominators(const std::vector<LorentzNet> &nets)
     {
-      std::vector<Poly> den = ndetail::collect_atom_denoms(frozen_nsym(), nets, comp_);
+      std::vector<Poly> den = ndetail::collect_atom_denoms(frozen_nsym(), nets, comp_, space_);
       for (Poly &d : den)
         d = reduce_units(std::move(d), units_);
       if (atomDen_.empty()) {
@@ -300,7 +302,7 @@ namespace numtracer::inline engine
     /// The `const` form: every projector's atoms must already be registered.
     Poly trace(const DiracChain &chain, const LorentzNet &lor = {}) const
     {
-      return ndetail::contract(frozen_nsym(), chain, lor, comp_, atomDen_, units_);
+      return ndetail::contract(frozen_nsym(), chain, lor, comp_, atomDen_, units_, space_);
     }
 
     /// A pure Lorentz network contracted to a scalar polynomial:
@@ -322,14 +324,14 @@ namespace numtracer::inline engine
 
     DressedPoly trace(const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots, const LorentzNet &lor) const
     {
-      return ndetail::contract_dressed(frozen_nsym(), chain, slots, lor, comp_, atomDen_, units_);
+      return ndetail::contract_dressed(frozen_nsym(), chain, slots, lor, comp_, atomDen_, units_, space_);
     }
 
     /// Generated code: the slots' dressing is carried outside, so the result is a plain polynomial.
     Poly trace_structural(const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
                           const LorentzNet &lor) const
     {
-      return ndetail::contract_structural(frozen_nsym(), chain, slots, lor, comp_, atomDen_, units_);
+      return ndetail::contract_structural(frozen_nsym(), chain, slots, lor, comp_, atomDen_, units_, space_);
     }
 
     // ── evaluation ───────────────────────────────────────────────────────────────────────────────
@@ -473,8 +475,8 @@ namespace numtracer::inline engine
                           unsigned W, long window, TraceFn &&trace, ScaleFn &&scale, Sink &&sink) const
     {
       ::numtracer::engine::fold_groups_streaming<P>(nsym(), traceIdx, subScale, groups, traceTable, nCache, W, window,
-                                                     std::forward<TraceFn>(trace), std::forward<ScaleFn>(scale),
-                                                     std::forward<Sink>(sink));
+                                                    std::forward<TraceFn>(trace), std::forward<ScaleFn>(scale),
+                                                    std::forward<Sink>(sink));
     }
 
     /// Streaming phase B, dressed variant: a plain-Poly `traceTable` + the per-sub-term dressing
@@ -488,8 +490,8 @@ namespace numtracer::inline engine
                                        Sink &&sink) const
     {
       ::numtracer::engine::fold_groups_streaming_dressed(nsym(), traceIdx, subScale, subDress, groups, traceTable,
-                                                          nCache, W, window, std::forward<TraceFn>(trace),
-                                                          std::forward<ScaleFn>(scale), std::forward<Sink>(sink));
+                                                         nCache, W, window, std::forward<TraceFn>(trace),
+                                                         std::forward<ScaleFn>(scale), std::forward<Sink>(sink));
     }
 
   private:
@@ -498,6 +500,10 @@ namespace numtracer::inline engine
     /// of the cosine an angle's sine derives from
     std::vector<int> derivedFrom_;
     std::vector<std::vector<int>> units_; ///< unit-vector groups (Σ x² = 1)
+
+    /// Lorentz and Spinor dimensions of this frame
+    Space space_{};
+
     /// Set once the first polynomial is made. Atomic because the const members may run in parallel;
     /// they only ever read it once the frame is frozen (generated frames are frozen at construction).
     mutable std::atomic<bool> frozen_{false};

@@ -29,6 +29,7 @@
 #include "numtracer/core/config.hpp"       // NT_THROW (exception-optional guard for -fno-exceptions builds)
 #include "numtracer/core/envvar.hpp"       // env_flag / env_int — the single truth test for NT_* switches
 #include "numtracer/core/export.hpp"       // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
+#include "numtracer/engine/space.hpp"      // Space (the spatial context)
 #include "numtracer/engine/spinor_mat.hpp" // Matrix<4, Poly> / gammaC / cmatC / slashC
 #include "numtracer/network/dirac.hpp"     // DiracChain / DFac
 #include "numtracer/network/network.hpp"   // LorentzNet / LorentzFactor
@@ -82,7 +83,7 @@ namespace numtracer::inline engine
     /// @param units    unit-constraint groups (`Σ U² = 1`); empty when the frame has none
     NUMTRACER_FUNC Poly contract(int nsym, const DiracChain &dirac, const LorentzNet &lor,
                                  const std::vector<std::array<Poly, 4>> &comp, const std::vector<Poly> &atomDen,
-                                 const std::vector<std::vector<int>> &units);
+                                 const std::vector<std::vector<int>> &units, const Space &space);
 
     /// @brief Projector-algebra fusion on one term's element list, applied BEFORE the projectors are
     ///        expanded into `δ − kk/k²`. Two projectors on the **same momentum** contracting over a
@@ -100,7 +101,8 @@ namespace numtracer::inline engine
 
     /// @brief The projector denominators of @p lors: `atomDen[atom] = k²` and `atomDen[atomS] = |k⃗|²`.
     NUMTRACER_FUNC std::vector<Poly> collect_atom_denoms(int nsym, const std::vector<LorentzNet> &lors,
-                                                         const std::vector<std::array<Poly, 4>> &comp);
+                                                         const std::vector<std::array<Poly, 4>> &comp,
+                                                         const Space &space);
 
     /// @brief The 4 components of momentum `Σ coeff·comp(vid)` over the terms `[first, last)`.
     inline std::array<Poly, 4> mom_components(int nsym, const std::pair<double, int> *first,
@@ -1307,7 +1309,7 @@ namespace numtracer::inline engine
 
     NUMTRACER_FUNC Poly contract(int nsym, const DiracChain &dirac, const LorentzNet &lor,
                                  const std::vector<std::array<Poly, 4>> &comp, const std::vector<Poly> &atomDen,
-                                 const std::vector<std::vector<int>> &units)
+                                 const std::vector<std::vector<int>> &units, const Space &space)
     {
       InputScan scan;
       scan.add(dirac);
@@ -1328,7 +1330,8 @@ namespace numtracer::inline engine
   ///        atom `atomDen[atomS] = |k⃗|² = Σ_{μ=1..3} k_μ²` (component 0 = temporal). The result is
   ///        sized to hold every id seen (others are unused all-zero polynomials).
   NUMTRACER_FUNC std::vector<Poly> ndetail::collect_atom_denoms(int nsym, const std::vector<LorentzNet> &lors,
-                                                                const std::vector<std::array<Poly, 4>> &comp)
+                                                                const std::vector<std::array<Poly, 4>> &comp,
+                                                                const Space &space)
   {
     const auto isProj = [](const LorentzFactor &e) { return e.is_projector(); };
     int maxId = -1;

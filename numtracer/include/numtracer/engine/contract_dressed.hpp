@@ -24,9 +24,9 @@
 /// TU or a header-only build (see core/export.hpp).
 #pragma once
 
-#include "numtracer/core/export.hpp"     // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES
-#include "numtracer/engine/contract.hpp" // ndetail::contract_net, InputScan (bodies)
-#include "numtracer/poly/dressed_poly.hpp"      // DressedPoly / DressingMono
+#include "numtracer/core/export.hpp"       // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES
+#include "numtracer/engine/contract.hpp"   // ndetail::contract_net, InputScan (bodies)
+#include "numtracer/poly/dressed_poly.hpp" // DressedPoly / DressingMono
 
 #include <cassert>
 #include <utility>
@@ -91,10 +91,10 @@ namespace numtracer::inline engine
     /// @brief Dressed-slot analogue of @ref contract: returns the collected @ref DressedPoly (one channel
     ///        per dressing monomial). The engine behind the dressed @ref Frame::trace.
     NUMTRACER_FUNC DressedPoly contract_dressed(int nsym, const std::vector<DChainTok> &chain,
-                                          const std::vector<DSlot> &slots, const LorentzNet &lor,
-                                          const std::vector<std::array<Poly, 4>> &comp,
-                                          const std::vector<Poly> &atomDen,
-                                          const std::vector<std::vector<int>> &units);
+                                                const std::vector<DSlot> &slots, const LorentzNet &lor,
+                                                const std::vector<std::array<Poly, 4>> &comp,
+                                                const std::vector<Poly> &atomDen,
+                                                const std::vector<std::vector<int>> &units, const Space &space);
     /// @brief STRUCTURAL variant of @ref contract_dressed: contract the collected slots into a PLAIN
     ///        @ref Poly, DISCARDING the dressing dimension (the dressing monomial keys are summed
     ///        away). The generator strips each option's dressing (`coeff`→1, `dress`→{}) into a
@@ -108,7 +108,7 @@ namespace numtracer::inline engine
                                             const std::vector<DSlot> &slots, const LorentzNet &lor,
                                             const std::vector<std::array<Poly, 4>> &comp,
                                             const std::vector<Poly> &atomDen,
-                                            const std::vector<std::vector<int>> &units);
+                                            const std::vector<std::vector<int>> &units, const Space &space);
   } // namespace ndetail
 
 #if NUMTRACER_DEFINE_BODIES
@@ -227,7 +227,7 @@ namespace numtracer::inline engine
     /// @brief The DressedPoly collection: accumulate each combination into its dressing-monomial channel.
     template <class ContractFn>
     inline DressedPoly dress_collect(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
-                               ContractFn &&contract)
+                                     ContractFn &&contract)
     {
       DressedPoly out = DressedPolyFactory::zero(nsym);
       dress_enumerate(nsym, chain, slots, std::forward<ContractFn>(contract),
@@ -287,9 +287,10 @@ namespace numtracer::inline engine
     }
 
     NUMTRACER_FUNC DressedPoly contract_dressed(int nsym, const std::vector<DChainTok> &chain,
-                                          const std::vector<DSlot> &slots, const LorentzNet &lor,
-                                          const std::vector<std::array<Poly, 4>> &comp,
-                                          const std::vector<Poly> &atomDen, const std::vector<std::vector<int>> &units)
+                                                const std::vector<DSlot> &slots, const LorentzNet &lor,
+                                                const std::vector<std::array<Poly, 4>> &comp,
+                                                const std::vector<Poly> &atomDen,
+                                                const std::vector<std::vector<int>> &units, const Space &space)
     {
       check_dressed_inputs(chain, slots, lor, comp.size(), atomDen.size());
       return dress_collect(nsym, chain, slots, [&](const DiracChain &d, const std::vector<LorentzFactor> &slotFacs) {
@@ -302,7 +303,7 @@ namespace numtracer::inline engine
                                             const std::vector<DSlot> &slots, const LorentzNet &lor,
                                             const std::vector<std::array<Poly, 4>> &comp,
                                             const std::vector<Poly> &atomDen,
-                                            const std::vector<std::vector<int>> &units)
+                                            const std::vector<std::vector<int>> &units, const Space &space)
     {
       check_dressed_inputs(chain, slots, lor, comp.size(), atomDen.size());
       return dress_collect_mp(nsym, chain, slots, [&](const DiracChain &d, const std::vector<LorentzFactor> &slotFacs) {

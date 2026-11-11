@@ -36,15 +36,15 @@
 //        Both cores now count occurrences up front and refuse count == 1. Counts ≥ 3 are deliberately
 //        left alone (the front-end's NumTrace::badlabel owns those), so no valid net changes value —
 //        which is what the anchors below pin down.
-#include "numtracer/network/dirac.hpp"
-#include "oracle/wick_trace.hpp" // dirac_value (test-only Wick-pairing trace)
 #include "engine_test_util.hpp"
+#include "numtracer/codegen/lower_poly.hpp"
+#include "numtracer/engine/contract.hpp"
+#include "numtracer/engine/frame.hpp"
+#include "numtracer/network/dirac.hpp"
 #include "numtracer/network/network.hpp"
 #include "numtracer/network/sun_net.hpp"
-#include "numtracer/engine/frame.hpp"
-#include "numtracer/engine/contract.hpp"
-#include "numtracer/codegen/lower_poly.hpp"
 #include "numtracer/sun/sun_data.hpp"
+#include "oracle/wick_trace.hpp" // dirac_value (test-only Wick-pairing trace)
 
 #include <array>
 #include <cmath>
@@ -54,7 +54,8 @@
 
 using namespace numtracer;
 
-int main() {
+int main()
+{
   int fail = 0;
   auto ok = [&](const char *name, bool pass) {
     std::printf("  %s: %s\n", pass ? "ok  " : "FAIL", name);
@@ -101,16 +102,19 @@ int main() {
       }
     };
     // physically 4 gammas (nonzero trace) — the old count said "odd" and returned a structural zero
-    ok("dirac_value refuses {sigma,gamma,gamma}", refuses({comm(LorentzIndex{0}, LorentzIndex{1}), gamma(LorentzIndex{2}), gamma(LorentzIndex{3})}));
+    ok("dirac_value refuses {sigma,gamma,gamma}",
+       refuses({comm(LorentzIndex{0}, LorentzIndex{1}), gamma(LorentzIndex{2}), gamma(LorentzIndex{3})}));
     // physically 3 gammas (vanishing trace) — the old count said "even" and fell into trace_rec
     ok("dirac_value refuses {sigma,gamma}", refuses({comm(LorentzIndex{0}, LorentzIndex{1}), gamma(LorentzIndex{2})}));
     ok("dirac_value refuses a LoopSep chain", refuses({gamma(LorentzIndex{0}), loop_sep(), gamma(LorentzIndex{1})}));
     // tr(γ5 γγγγ) is nonzero; a γ5 read as an empty slash would silently return a wrong value.
-    ok("dirac_value refuses a gamma5 chain", refuses({gamma5(), gamma(LorentzIndex{0}), gamma(LorentzIndex{1}), gamma(LorentzIndex{2}), gamma(LorentzIndex{3})}));
+    ok("dirac_value refuses a gamma5 chain", refuses({gamma5(), gamma(LorentzIndex{0}), gamma(LorentzIndex{1}),
+                                                      gamma(LorentzIndex{2}), gamma(LorentzIndex{3})}));
 
     // plain gamma/slash chains must be completely unaffected by the guard + recount
     ok("even gamma chain still traces", !dirac_value({gamma(LorentzIndex{0}), gamma(LorentzIndex{1})}, 900000).empty());
-    ok("odd gamma chain still vanishes", dirac_value({gamma(LorentzIndex{0}), gamma(LorentzIndex{1}), gamma(LorentzIndex{2})}, 900000).empty());
+    ok("odd gamma chain still vanishes",
+       dirac_value({gamma(LorentzIndex{0}), gamma(LorentzIndex{1}), gamma(LorentzIndex{2})}, 900000).empty());
     ok("slash pair still traces",
        !dirac_value({slash(Momentum{{{1.0, 0}}}), slash(Momentum{{{1.0, 4}}})}, 900000).empty());
   }
@@ -142,8 +146,7 @@ int main() {
           std::vector<int> e(4, 0);
           e[mu] = 1;
           // vid 0 -> symbols as-is; vid 1 -> a different momentum (scaled), so k^2 differs.
-          comp[static_cast<std::size_t>(v)][static_cast<std::size_t>(mu)] =
-              env.mono(e, Cx{v == 0 ? 1.0 : 2.0, 0});
+          comp[static_cast<std::size_t>(v)][static_cast<std::size_t>(mu)] = env.mono(e, Cx{v == 0 ? 1.0 : 2.0, 0});
         }
       auto projNet = [](int vid, int inv, int a, int b) {
         LorentzFactor el{};
@@ -163,9 +166,9 @@ int main() {
       std::vector<LorentzNet> sameVid{projNet(0, 3, 0, 1), projNet(0, 3, 1, 2)};
       std::vector<LorentzNet> diffVid{projNet(0, 3, 0, 1), projNet(1, 3, 1, 2)};
       ok("collect_atom_denoms: same inv id + same momentum is silent",
-         !throws([&] { (void)ndetail::collect_atom_denoms(4, sameVid, comp); }));
+         !throws([&] { (void)ndetail::collect_atom_denoms(4, sameVid, comp, Space{}); }));
       ok("collect_atom_denoms: same inv id + DIFFERENT momentum throws",
-         throws([&] { (void)ndetail::collect_atom_denoms(4, diffVid, comp); }));
+         throws([&] { (void)ndetail::collect_atom_denoms(4, diffVid, comp, Space{}); }));
     }
 
     // D4: a non-finite coefficient must abort the lowering, not reach the emitted kernel.
@@ -198,7 +201,8 @@ int main() {
 
     // ANCHOR: the closed contraction p·P(l)·p = p²(1−cos²θ) is untouched by the guard.
     {
-      LorentzNet lor = {LorentzTerm{Cx{1, 0}, {ntest::fvec(mu, {{1.0, 0}}), ntest::fprojT(mu, nu, {{1.0, 1}}, 0), ntest::fvec(nu, {{1.0, 0}})}}};
+      LorentzNet lor = {LorentzTerm{
+          Cx{1, 0}, {ntest::fvec(mu, {{1.0, 0}}), ntest::fprojT(mu, nu, {{1.0, 1}}, 0), ntest::fvec(nu, {{1.0, 0}})}}};
       const double got = pdetail::eval(ntest::contract(env, DiracChain{}, lor, comp, atomDen), x, av).re;
       const double cth = l0 / std::sqrt(l2v);
       ok("open-index guard: closed p.P(l).p still exact", std::fabs(got - Pm * Pm * (1 - cth * cth)) < 1e-12);
@@ -213,7 +217,8 @@ int main() {
     // count-2 contraction that close_free_legs routes through contract_factors — it must still work.
     // tr(γ^μ p̸ γ_μ q̸) = −8 p·q in d = 4.
     {
-      const DiracChain ch = {gamma(LorentzIndex{mu}), slash(Momentum{{{1.0, 0}}}), gamma(LorentzIndex{mu}), slash(Momentum{{{1.0, 1}}})};
+      const DiracChain ch = {gamma(LorentzIndex{mu}), slash(Momentum{{{1.0, 0}}}), gamma(LorentzIndex{mu}),
+                             slash(Momentum{{{1.0, 1}}})};
       const double got = pdetail::eval(ntest::contract(env, ch, LorentzNet{}, comp, atomDen), x, av).re;
       ok("open-index guard: self-paired gamma legs still contract", std::fabs(got - (-8.0 * Pm * l0)) < 1e-12);
     }
@@ -226,32 +231,48 @@ int main() {
     enum { a, b, c, d, i, j, k };
 
     // ANCHORS: the closed nets keep their values.
-    ok("open-leg guard: f^{abc}f^{abc} still 24", sun_value({sun3.f(AdjIndex{a}, AdjIndex{b}, AdjIndex{c}), sun3.f(AdjIndex{a}, AdjIndex{b}, AdjIndex{c})}).re == 24.0);
-    ok("open-leg guard: tr(T^a T^a) still 4", std::fabs(sun_value({sun3.T(AdjIndex{a}, FundIndex{i}, FundIndex{j}), sun3.T(AdjIndex{a}, FundIndex{j}, FundIndex{i})}).re - 4.0) < 1e-12);
+    ok("open-leg guard: f^{abc}f^{abc} still 24",
+       sun_value({sun3.f(AdjIndex{a}, AdjIndex{b}, AdjIndex{c}), sun3.f(AdjIndex{a}, AdjIndex{b}, AdjIndex{c})}).re ==
+           24.0);
+    ok("open-leg guard: tr(T^a T^a) still 4", std::fabs(sun_value({sun3.T(AdjIndex{a}, FundIndex{i}, FundIndex{j}),
+                                                                   sun3.T(AdjIndex{a}, FundIndex{j}, FundIndex{i})})
+                                                            .re -
+                                                        4.0) < 1e-12);
     // a label used TWICE WITHIN ONE factor is a legal closed loop (δ^{aa} = N²−1), not an open leg.
     ok("open-leg guard: delta^{aa} still 8", sun_value({sun3.delta(AdjIndex{a}, AdjIndex{a})}).re == 8.0);
 
     // THE traps. Pre-guard values in comments — every one of them silently wrong.
-    ok("open adjoint delta leg throws (was 8)", throws([&] { (void)sun_value({sun3.delta(AdjIndex{a}, AdjIndex{b})}); }));
-    ok("open adjoint f legs throw (was 24)",
-       throws([&] { (void)sun_value({sun3.f(AdjIndex{a}, AdjIndex{b}, AdjIndex{c}), sun3.f(AdjIndex{a}, AdjIndex{b}, AdjIndex{d})}); }));
-    ok("open adjoint generator legs throw (was 4)",
-       throws([&] { (void)sun_value({sun3.T(AdjIndex{a}, FundIndex{i}, FundIndex{j}), sun3.T(AdjIndex{b}, FundIndex{j}, FundIndex{i})}); }));
-    ok("open fundamental delta leg throws (was 3)", throws([&] { (void)sun_value({sun3.delta(FundIndex{i}, FundIndex{j})}); }));
+    ok("open adjoint delta leg throws (was 8)",
+       throws([&] { (void)sun_value({sun3.delta(AdjIndex{a}, AdjIndex{b})}); }));
+    ok("open adjoint f legs throw (was 24)", throws([&] {
+         (void)sun_value(
+             {sun3.f(AdjIndex{a}, AdjIndex{b}, AdjIndex{c}), sun3.f(AdjIndex{a}, AdjIndex{b}, AdjIndex{d})});
+       }));
+    ok("open adjoint generator legs throw (was 4)", throws([&] {
+         (void)sun_value(
+             {sun3.T(AdjIndex{a}, FundIndex{i}, FundIndex{j}), sun3.T(AdjIndex{b}, FundIndex{j}, FundIndex{i})});
+       }));
+    ok("open fundamental delta leg throws (was 3)",
+       throws([&] { (void)sun_value({sun3.delta(FundIndex{i}, FundIndex{j})}); }));
     // the one case that was already caught (extract_cycles) — now caught earlier, still caught.
-    ok("open fundamental generator chain still throws",
-       throws([&] { (void)sun_value({sun3.T(AdjIndex{a}, FundIndex{i}, FundIndex{j}), sun3.T(AdjIndex{a}, FundIndex{j}, FundIndex{k})}); }));
+    ok("open fundamental generator chain still throws", throws([&] {
+         (void)sun_value(
+             {sun3.T(AdjIndex{a}, FundIndex{i}, FundIndex{j}), sun3.T(AdjIndex{a}, FundIndex{j}, FundIndex{k})});
+       }));
 
     // the DRESSED fold is a second contraction core with the same union-find; guard it too.
     auto arr = [](int dim) {
       std::vector<int> v(dim);
-      for (int n = 0; n < dim; ++n) v[n] = n;
+      for (int n = 0; n < dim; ++n)
+        v[n] = n;
       return v;
     };
-    ok("dressed: closed diagAdj loop still evaluates",
-       !throws([&] { (void)sun_value_dressed({sun3.diag(AdjIndex{a}, AdjIndex{b}, arr(8)), sun3.delta(AdjIndex{b}, AdjIndex{a})}); }));
-    ok("dressed: open diagAdj leg throws",
-       throws([&] { (void)sun_value_dressed({sun3.diag(AdjIndex{a}, AdjIndex{b}, arr(8)), sun3.delta(AdjIndex{b}, AdjIndex{c})}); }));
+    ok("dressed: closed diagAdj loop still evaluates", !throws([&] {
+         (void)sun_value_dressed({sun3.diag(AdjIndex{a}, AdjIndex{b}, arr(8)), sun3.delta(AdjIndex{b}, AdjIndex{a})});
+       }));
+    ok("dressed: open diagAdj leg throws", throws([&] {
+         (void)sun_value_dressed({sun3.diag(AdjIndex{a}, AdjIndex{b}, arr(8)), sun3.delta(AdjIndex{b}, AdjIndex{c})});
+       }));
   }
 
   // ---- input checks at the API entry points: each of these used to crash or return a wrong number ----
@@ -262,18 +283,22 @@ int main() {
     const Poly withAtom = x0 * env.inv_denominator(1);
     ok("eval: too few symbol values throws (was a silent wrong number)",
        throws([&] { (void)pdetail::eval(x0, {1.0}, {}); }));
-    ok("eval: missing atom value throws (was a segfault)", throws([&] { (void)pdetail::eval(withAtom, {1.0, 2.0}, {0.5}); }));
-    ok("eval: all values present still evaluates", !throws([&] { (void)pdetail::eval(withAtom, {1.0, 2.0}, {0.5, 0.25}); }));
+    ok("eval: missing atom value throws (was a segfault)",
+       throws([&] { (void)pdetail::eval(withAtom, {1.0, 2.0}, {0.5}); }));
+    ok("eval: all values present still evaluates",
+       !throws([&] { (void)pdetail::eval(withAtom, {1.0, 2.0}, {0.5, 0.25}); }));
     DressedPoly dp = env.dzero();
     dp.add({3}, x0);
     ok("eval: missing dressing value throws", throws([&] { (void)pdetail::eval(dp, {1.0, 2.0}, {}, {1.0}); }));
     ok("Frame::var out of range throws", throws([&] { (void)env.var(2); }));
 
     std::vector<std::array<Poly, 4>> comp(1, {x0, env.zero(), env.zero(), env.zero()});
-    ok("momentum id outside the component table throws (was std::bad_alloc)",
-       throws([&] { (void)ntest::contract(env, {slash(Momentum{{{1.0, 3}}}), slash(Momentum{{{1.0, 0}}})}, {}, comp, {}); }));
-    ok("projector without a registered 1/k^2 throws",
-       throws([&] { (void)ntest::contract(env, {}, ntest::ivec(0, 0) * ntest::iprojT(0, 1, 0, 5) * ntest::ivec(1, 0), comp, {}); }));
+    ok("momentum id outside the component table throws (was std::bad_alloc)", throws([&] {
+         (void)ntest::contract(env, {slash(Momentum{{{1.0, 3}}}), slash(Momentum{{{1.0, 0}}})}, {}, comp, {});
+       }));
+    ok("projector without a registered 1/k^2 throws", throws([&] {
+         (void)ntest::contract(env, {}, ntest::ivec(0, 0) * ntest::iprojT(0, 1, 0, 5) * ntest::ivec(1, 0), comp, {});
+       }));
 
     // SU(N): one label in an adjoint AND a fundamental slot (sun3.T(a, a, B) in the old int API)
     ok("SU(N) label in both sectors throws (was 4)",

@@ -21,7 +21,8 @@ namespace ntest
   inline std::vector<std::string> names(int n)
   {
     std::vector<std::string> r;
-    for (int i = 0; i < n; ++i) r.push_back("x" + std::to_string(i));
+    for (int i = 0; i < n; ++i)
+      r.push_back("x" + std::to_string(i));
     return r;
   }
 
@@ -37,13 +38,22 @@ namespace ntest
     f.atomS = atomS;
     return f;
   }
-  inline LorentzFactor fprojT(int a, int b, Vlc k, int atom) { return fproj(LorentzFactor::ProjT, a, b, std::move(k), atom, -1); }
-  inline LorentzFactor fprojL(int a, int b, Vlc k, int atom) { return fproj(LorentzFactor::ProjL, a, b, std::move(k), atom, -1); }
+  inline LorentzFactor fprojT(int a, int b, Vlc k, int atom)
+  {
+    return fproj(LorentzFactor::ProjT, a, b, std::move(k), atom, -1);
+  }
+  inline LorentzFactor fprojL(int a, int b, Vlc k, int atom)
+  {
+    return fproj(LorentzFactor::ProjL, a, b, std::move(k), atom, -1);
+  }
   inline LorentzFactor fprojE(int a, int b, Vlc k, int atom, int atomS)
   {
     return fproj(LorentzFactor::ProjE, a, b, std::move(k), atom, atomS);
   }
-  inline LorentzFactor fprojM(int a, int b, Vlc k, int atomS) { return fproj(LorentzFactor::ProjM, a, b, std::move(k), -1, atomS); }
+  inline LorentzFactor fprojM(int a, int b, Vlc k, int atomS)
+  {
+    return fproj(LorentzFactor::ProjM, a, b, std::move(k), -1, atomS);
+  }
   inline LorentzFactor feps(int a, int b, int c, int d)
   {
     return epsilon(LorentzIndex{a}, LorentzIndex{b}, LorentzIndex{c}, LorentzIndex{d}).front().e.front();
@@ -53,24 +63,24 @@ namespace ntest
   inline Poly contract(const Frame &F, const DiracChain &chain, const LorentzNet &lor,
                        const std::vector<std::array<Poly, 4>> &comp, const std::vector<Poly> &atomDen)
   {
-    return ndetail::contract(F.nsym(), chain, lor, comp, atomDen, F.units());
+    return ndetail::contract(F.nsym(), chain, lor, comp, atomDen, F.units(), F.space());
   }
   inline DressedPoly contract_dressed(const Frame &F, const std::vector<DChainTok> &chain,
                                       const std::vector<DSlot> &slots, const LorentzNet &lor,
                                       const std::vector<std::array<Poly, 4>> &comp, const std::vector<Poly> &atomDen)
   {
-    return ndetail::contract_dressed(F.nsym(), chain, slots, lor, comp, atomDen, F.units());
+    return ndetail::contract_dressed(F.nsym(), chain, slots, lor, comp, atomDen, F.units(), F.space());
   }
   inline Poly contract_structural(const Frame &F, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
                                   const LorentzNet &lor, const std::vector<std::array<Poly, 4>> &comp,
                                   const std::vector<Poly> &atomDen)
   {
-    return ndetail::contract_structural(F.nsym(), chain, slots, lor, comp, atomDen, F.units());
+    return ndetail::contract_structural(F.nsym(), chain, slots, lor, comp, atomDen, F.units(), F.space());
   }
   inline std::vector<Poly> collect_atom_denoms(const Frame &F, const std::vector<LorentzNet> &lors,
                                                const std::vector<std::array<Poly, 4>> &comp)
   {
-    return ndetail::collect_atom_denoms(F.nsym(), lors, comp);
+    return ndetail::collect_atom_denoms(F.nsym(), lors, comp, F.space());
   }
 
   // ── SU(N) factors on integer labels (group 0, as generated code builds them) ─────────────────────
@@ -89,7 +99,10 @@ namespace ntest
 
   // ── whole-net builders on integer labels and a single momentum id, as generated code writes them ──
   inline LorentzNet imet(int a, int b) { return leaf({.kind = LorentzFactor::Metric, .a = a, .b = b}); }
-  inline LorentzNet ivec(int a, int vid) { return leaf({.kind = LorentzFactor::Vector, .a = a, .b = -1, .vlc = {{1.0, vid}}}); }
+  inline LorentzNet ivec(int a, int vid)
+  {
+    return leaf({.kind = LorentzFactor::Vector, .a = a, .b = -1, .vlc = {{1.0, vid}}});
+  }
   inline LorentzNet iprojT(int a, int b, int vid, int atom)
   {
     return leaf({.kind = LorentzFactor::ProjT, .a = a, .b = b, .vid = vid, .atom = atom});
