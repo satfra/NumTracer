@@ -681,6 +681,16 @@ ntGenMainPhaseA[nSub_, nReused_, hasDressed_, mIdx_] :=
    also applies the unit-vector reduction (bare-loop k^2 -> the monomial l1^2, so it cancels). *)
         "\n  // Add all denominators to the Frame (idempotent, so each distinct trace is enough)\n",
         "  frame.add_denominators(sln);\n",
+(* the slot options' own Lorentz factors (netFacs) carry projectors too, e.g. an external projector
+   written as a sum of Dirac structures, which may occur in no net at all *)
+        If[hasDressed,
+          "  {\n" <>
+          "    std::vector<LorentzNet> optNets;\n" <>
+          "    for(const DSlotOpt &o : optp)\n" <>
+          "      if(!o.netFacs.empty()) optNets.push_back(LorentzNet{LorentzTerm{Cx{1,0}, o.netFacs}});\n" <>
+          "    frame.add_denominators(optNets);\n" <>
+          "  }\n",
+          ""],
 (* MATSUBARA EVENNESS, proven while contracting. If every trace and every atom denominator carries
    only EVEN powers of the Matsubara frequency, kernel(+w) == kernel(-w), and DiFfRG may collapse
    `kernel(+w) + kernel(-w)` to `2*kernel(w)`, halving the Matsubara-sum work.
@@ -833,10 +843,16 @@ ntGenMainEmission[ncomp_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDresse
         "  fm.var = [](int id)->std::string {\n",
         Table["    if(id==" <> ToString[i - 1] <> ") return \"" <> ncomp["varFill"][[i]] <> "\";\n", {i, 1, Length[ncomp["varFill"]]}],
         "    return \"" <> ntZeroLit[] <> "\"; };\n",
+(* an atom the traces read but no projector registered has an empty denominator: fail, not 1/0 *)
+        "  auto ntDen = [&](int id)->const Poly& {\n",
+        "    const auto &d = frame.denominators();\n",
+        "    if(id < 0 || (size_t)id >= d.size() || d[(size_t)id].empty())\n",
+        "      throw std::runtime_error(\"projector atom \" + std::to_string(id) + \" is read, but no projector registered its denominator\");\n",
+        "    return d[(size_t)id]; };\n",
         If[TrueQ[ncomp["complex"]],
-          "  fm.inv = [&](int id)->std::string { return numtracer::inv_fill_cpp(frame.denominators()[(size_t)id], frame.symbol_names(), false); };\n" <>
-          "  fm.invIm = [&](int id)->std::string { return numtracer::inv_fill_cpp(frame.denominators()[(size_t)id], frame.symbol_names(), true); };\n",
-          "  fm.inv = [&](int id)->std::string { return \"" <> If[ntSingleQ[], "1.f", "1.0"] <> "/(\" + frame.denominator_cpp(id) + \")\"; };\n"],
+          "  fm.inv = [&](int id)->std::string { return numtracer::inv_fill_cpp(ntDen(id), frame.symbol_names(), false); };\n" <>
+          "  fm.invIm = [&](int id)->std::string { return numtracer::inv_fill_cpp(ntDen(id), frame.symbol_names(), true); };\n",
+          "  fm.inv = [&](int id)->std::string { ntDen(id); return \"" <> If[ntSingleQ[], "1.f", "1.0"] <> "/(\" + frame.denominator_cpp(id) + \")\"; };\n"],
 (* dressing fill (kind-2 `dress` leaves): the kernel BODY evaluates each dressing atom (where the
    regulators REG::* and the interpolator parameters are in scope) into `dr_<id>` and passes the
    VALUE to fill(); fill just stores it. So fm.dress returns the passed-in argument name. *)
