@@ -213,6 +213,8 @@ MakeNTKernelDiFfRG::noparams = "\"Parameters\" is required (the DiFfRG kernelPar
 
 MakeNTKernelDiFfRG::nointeg = "\"Integrator\" and \"IntegrationVariables\" are required.";
 
+MakeNTKernelDiFfRG::kfirst = "\"Parameters\" must start with k: the kernel takes k first after the coordinates, the DiFfRG wrapper passes the parameters in list order, so `1` ahead of k would permute the kernel's arguments. Pass per-point kinematics after k.";
+
 MakeNTKernelDiFfRG::mixtype = "Parameters declare more than one interpolator type `1`; emitting the dressing parameters as template parameters.";
 
 (* ---- k-only lookup hoisting: patch the DiFfRG-generated wrappers ---------------------------
@@ -352,6 +354,13 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
       Abort[]
     ];
     parameterOrder = OptionValue["ParameterOrder"] /. Automatic :> Cases[params, a_?AssociationQ :> a];
+    (* The kernel takes k right after the coordinates (ntKernelSignature: the frame arguments, k among them, come
+       before the runtime parameters), while DiFfRG's wrappers pass the coordinates and then the parameters in this
+       list's order. A parameter ahead of k would silently permute the kernel's arguments. *)
+    If[Length[parameterOrder] > 0 && MemberQ[parameterOrder, a_ /; a["Name"] === "k"] && parameterOrder[[1]]["Name"] =!= "k",
+      Message[MakeNTKernelDiFfRG::kfirst, parameterOrder[[1]]["Name"]];
+      Abort[]
+    ];
     If[OptionValue["Integrator"] === Automatic || OptionValue["IntegrationVariables"] === Automatic,
       Message[MakeNTKernelDiFfRG::nointeg];
       Abort[]
@@ -661,8 +670,12 @@ UpdateNTFlows[name_String, opts : OptionsPattern[]] :=
   Module[{flowDir, f, txt},
     flowDir = ntFlowDir[OptionValue["FlowDirectory"]];
 (* (1) DiFfRG aggregation — regenerates flows/CMakeLists.txt from its template (wipes any prior patch).
-   Chatter captured; step (4) prints the NumTracer-native summary once the patch is back on. *)
-    With[{chatter = Last @ ntCapturePrint[DiFfRG`CodeTools`UpdateFlows[name]]},
+   Chatter captured; step (4) prints the NumTracer-native summary once the patch is back on. UpdateFlows has
+   no output-directory option and writes to DiFfRG`CodeTools`Directory`flowDir, so that is blocked to flowDir
+   as in MakeNTKernelDiFfRG; otherwise "FlowDirectory" would aggregate the session's flow tree instead. *)
+    With[{chatter = Last @ ntCapturePrint[Internal`InheritedBlock[{DiFfRG`CodeTools`Directory`flowDir},
+        DiFfRG`CodeTools`Directory`flowDir = flowDir;
+        DiFfRG`CodeTools`UpdateFlows[name]]]},
       ntLog["[DiFfRG] ", #]& /@ chatter];
     f = FileNameJoin[{flowDir, "CMakeLists.txt"}];
     If[!FileExistsQ[f],
