@@ -68,7 +68,7 @@ dominated their `-O0` compile: turning exceptions off cut a representative unit 
 - nvcc does not force-inline everything: on SP_EM ZA4 (55 traces, 435k SSA) it out-of-lines 26 on
   its own; the gate takes that to 51.
 
-## numeric/trace_fold.hpp — phase A / phase B
+## engine/generator_phases.hpp — phase A / phase B
 
 - Trace redundancy on dense flows: 30,807 contractions for 6,041 distinct traces (5.1x), and
   246,456 for 32,784 (7.5x). Hence the distinct-trace table.
@@ -85,7 +85,7 @@ dominated their `-O0` compile: turning exceptions off cut a representative unit 
   never ran. Before it was made fatal, a full regeneration of all 29 DEFAULT_FLOWS reported zero
   violations.
 
-## numeric/mpoly.hpp — polynomial storage and the reductions
+## poly/poly.hpp — polynomial storage and the reductions
 
 - Inline `Mono` buffers: with `std::vector` members every product term in `operator*` was a heap
   allocation; profiling the generator run showed malloc/free at ~17% of total time.
@@ -104,12 +104,12 @@ dominated their `-O0` compile: turning exceptions off cut a representative unit 
   13,269 -> 4,832, atom factors 1,168 -> 832, fused SSA 33,775 -> 7,649 (0.23x); 384 of 1,168 trial
   divisions are exact. The lead pre-filter rejects >= 2/3 of trials (100% on some flows).
 
-## numeric/numeric_contract.hpp — Dirac fold, elimination, lowering
+## engine/contract.hpp + codegen/lower_poly.hpp — Dirac fold, elimination, lowering
 
 - Dirac DFS prefix sharing: re-folding each of the 4^f free-leg assignments from scratch (the former
   `NT_DIRAC_FLAT=1` A/B control, removed) took 3.64 B mul2 calls against the DFS's 522 M on a
   production flow. Entries are bit-identical either way.
-- Lazy transposed-gamma blocks: building ~40 MPoly by value on every `numeric_dirac` call cost +1.4%
+- Lazy transposed-gamma blocks: building ~40 MPoly by value on every `trace_dirac_loop` call cost +1.4%
   instructions on an all-untransposed fold.
 - `eliminate` seeded from the first factor instead of `constant(1) * e`: with 2-4 factors per group
   the identity multiply was 1/4 to 1/2 of all elimination multiplies.

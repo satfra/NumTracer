@@ -14,17 +14,17 @@ peak RSS +16%.
 
 ## Where the time is (HEAD 0658d59)
 
-| flow | phase A share in `numeric_dirac` |
+| flow | phase A share in `trace_dirac_loop` |
 |---|---|
 | za4_147 | 85% |
 | ZAAqbq1SmallRef | 25% |
 
-The cost inside `numeric_dirac` is the polynomial arithmetic of the 2×2 Weyl-block products.
+The cost inside `trace_dirac_loop` is the polynomial arithmetic of the 2×2 Weyl-block products.
 After the four bit-identical MPoly levers, no structural waste is left in that arithmetic itself.
 
 ## The DFS and its cost
 
-`numeric_dirac(chain)` computes the trace of one closed spinor loop for all 4^f assignments of its
+`trace_dirac_loop(chain)` computes the trace of one closed spinor loop for all 4^f assignments of its
 f free γ legs. It walks the chain in token order with a DFS: free legs branch 4 ways, and the
 running block product is shared along each prefix.
 
@@ -62,7 +62,7 @@ The model ignores two things, so the real gain will be smaller than 1/ratio:
 
 Rough expectation for za4_147 phase A: 2–4×.
 
-## Proposed change (option A, ~40 lines in `numeric_dirac`)
+## Proposed change (option A, ~40 lines in `trace_dirac_loop`)
 
 1. Pick the start token that minimises C (O(L²) over L ≤ ~20 tokens; negligible).
 2. Walk the rotated chain. Free legs are then met in rotated order, so each leaf's flat index must
