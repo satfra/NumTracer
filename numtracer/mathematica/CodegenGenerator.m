@@ -784,7 +784,7 @@ ntGenMainPhaseA[nSub_, nReused_, hasDressed_, mIdx_] :=
    thread for gi = 0,1,2,... ascending; that fixes GlobalEnv intern order and the CSE instruction
    stream. The scale is spelled per branch so each keeps its exact expression (poly*constant vs
    DressedPoly scaleCx). *)
-ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_, ncomp_] :=
+ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_, ncomp_, ttSpec_ : None] :=
   With[{nGrp = Length[groups],
         grp = ntGenBigTable["ntGroups", "std::vector<std::vector<int>>", ntIntRow /@ groups, "std::vector<std::vector<int>> groups"]},
     ntStageResult["ntGenMainPhaseB", {"Defs", "Text"},
@@ -817,10 +817,12 @@ ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_, ncomp_] :=
             "  numtracer::engine::check_group_partition(groups, " <> ToString[nNet] <> ");\n",
 (* The dressed fold reads the plain-Poly trace table + the per-sub-term dressing monomials sdr and
    builds the per-net DressedPoly channel by channel (fold_groups_streaming_dressed). *)
-            If[hasDressed,
+            Which[
+              ttSpec =!= None, ntGenTablesPhaseB[ttSpec, hasDressed],
+              hasDressed,
                 "  frame.fold_groups_streaming_dressed(\n      sidx, dsc, sdr, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "      [&](int d, DressedPoly &&m){ return scaleCx(m, colv[d]); },\n" <> "      [&](size_t gi, DressedPoly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });\n",
-                "  frame.fold_groups_streaming<Poly>(\n      sidx, dsc, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "      [&](int d, Poly &&m){ return m*frame.constant(colv[d]); },\n" <> "      [&](size_t gi, Poly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });\n"
-            ],
+              True,
+                "  frame.fold_groups_streaming<Poly>(\n      sidx, dsc, groups, traceTable, nCache, workersB, netWindow, trace,\n" <> "      [&](int d, Poly &&m){ return m*frame.constant(colv[d]); },\n" <> "      [&](size_t gi, Poly &&acc){ progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0)); });\n"],
             "  if(ntprof)\n    std::fprintf(stderr, \"[num] phase B+lower: %d nets in %d groups, window %ld, %.1f s (W=%u)\\n\", " <> ToString[nNet] <> ", " <> ToString[nGrp] <> ", netWindow,\n                 std::chrono::duration<double>(std::chrono::steady_clock::now()-tB).count(), workersB);\n",
 (* the trace table is dead once every group has folded; emission below only needs the lowered
    instruction streams, which are orders of magnitude smaller. *)
@@ -829,7 +831,7 @@ ntGenMainPhaseB[groups_, nNet_, realOnlyG_, hasDressed_, ncomp_] :=
 
 (* the fill formulas, the header preamble, the Matsubara verdict, and the trace bodies *)
 (* genName: the generator source file's name, quoted in the header's first line *)
-ntGenMainEmission[ncomp_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDressed_, mIdx_, nGrp_, genName_] :=
+ntGenMainEmission[ncomp_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDressed_, mIdx_, nGrp_, genName_, ttSpec_ : None] :=
   ntStageResult["ntGenMainEmission", {"Text"},
     <|"Text" ->
       StringJoin[
@@ -868,7 +870,7 @@ ntGenMainEmission[ncomp_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDresse
    NT_TRACE_COMPLEX (e.g. to cuda::std::complex<double>) BEFORE including the traces header; host
    consumers get std::complex<double>. The alias lives in the per-kernel namespace so multiple
    traces headers coexist in one TU. *)
-        "  std::cout << \"#pragma once\\n#include <cmath>\\n" <>
+        "  std::cout << \"#pragma once\\n#include <cmath>\\n" <> If[ttSpec === None, "", "#include <cstddef>\\n"] <>
           If[complexQ,
             "#include <complex>\\n",
             ""
@@ -907,6 +909,8 @@ ntGenMainEmission[ncomp_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDresse
           "  {\n",
           "    std::unordered_map<std::string,std::string> seen;\n",
           "    seen.reserve((size_t)" <> ToString[nGrp] <> ");\n",
+(* with tables, ttCanon[i] records the trace whose body trace i repeats, so its table is shared too *)
+          If[ttSpec === None, "", "    ttCanon.assign((size_t)" <> ToString[nGrp] <> ", 0);\n"],
           "    for(int i = 0; i < " <> ToString[nGrp] <> "; ++i) {\n",
           "      const std::string nm = \"tr\" + std::to_string(i);\n",
           "      std::ostringstream os;\n",
@@ -915,19 +919,56 @@ ntGenMainEmission[ncomp_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDresse
           "      std::string body = s.substr(s.find('{'));\n",
           "      auto it = seen.find(body);\n",
           "      if(it == seen.end()) {\n",
+          If[ttSpec === None, "", "        ttCanon[(size_t)i] = i;\n"],
           "        seen.emplace(std::move(body), nm);\n",
           "        std::cout << s;\n",
           "      }\n",
           "      else {\n",
+          If[ttSpec === None, "", "        ttCanon[(size_t)i] = std::stoi(it->second.substr(2));\n"],
           "        const std::string sig = s.substr(0, s.find(\" \" + nm + \"(\"));\n",
           "        const std::string rt = sig.substr(sig.rfind(' ') + 1);\n",
           "        std::cout << decor << \" \" << rt << \" \" << nm << \"(const " <> $ntRealT <> " *f) { return \" << it->second << \"(f); }\\n\";\n",
           "      }\n",
           "    }\n",
           "  }\n",
+          If[ttSpec === None, "", ntGenTablesEmission[ttSpec]],
           "  std::cout << \"}} // namespace " <> kernelNs <> "::\" << hns << \"\\n\";\n",
           "  if(ntprof)\n    std::fprintf(stderr, \"[num] emission: %.1f s\\n\",\n                 std::chrono::duration<double>(std::chrono::steady_clock::now()-tEmit).count());\n",
           "\n  return 0;\n}\n"]|>];
+
+(* ---- trace tables (CodegenTables.m) -------------------------------------------------------------
+   Phase B also takes each group's table form (numtracer/codegen/trace_table.hpp: one piece per
+   dressing monomial and real / imaginary part), right after lowering it, so the form knows whether
+   the trace is complex. select_table_traces then keeps a table only where the inline trace costs
+   more than the reconstruction plus Balance instructions per byte of entries, and interns the slots
+   the reconstructions read before the fill is printed. *)
+ntGenTablesPhaseB[ttSpec_, dressed_] :=
+  StringJoin[
+    "  const TableScales tsc{" <> ToString[ttSpec["Radial"]] <> ", " <> ToString[ttSpec["External"]] <> "};\n",
+    "  std::vector<std::optional<TabulatedTrace>> tabs;\n",
+    "  std::vector<int> ttCanon;\n",
+    If[dressed,
+      "  frame.fold_groups_streaming_dressed(\n      sidx, dsc, sdr, groups, traceTable, nCache, workersB, netWindow, trace,\n" <>
+      "      [&](int d, DressedPoly &&m){ return scaleCx(m, colv[d]); },\n" <>
+      "      [&](size_t gi, DressedPoly &&acc){\n",
+      "  frame.fold_groups_streaming<Poly>(\n      sidx, dsc, groups, traceTable, nCache, workersB, netWindow, trace,\n" <>
+      "      [&](int d, Poly &&m){ return m*frame.constant(colv[d]); },\n" <>
+      "      [&](size_t gi, Poly &&acc){\n"],
+    "        progs.push_back(to_genprog(acc, genv, realOnly[gi]!=0));\n",
+(* a trace that is not homogeneous in the inferred scales stays inline under Automatic and is an
+   error when tables were requested explicitly *)
+    "        try { tabs.push_back(tabulate(acc, frame.denominators(), tsc, progs.back().rootIm != numtracer::kRealProgram, genv)); }\n",
+    "        catch(const std::exception &e) {\n",
+    If[TrueQ[ttSpec["Explicit"]],
+      "          throw;\n",
+      "          std::fprintf(stderr, \"[tables] trace %zu stays inline: %s\\n\", gi, e.what());\n          tabs.push_back(std::nullopt);\n"],
+    "        } });\n",
+    "  select_table_traces(tabs, progs, " <> ToString[CForm[N @ ttSpec["Balance"]]] <> ", tsc, genv);\n"];
+
+(* After the traces, whose dedup loop fills ttCanon: tab_fill, one ttrN per group, tab_size. *)
+ntGenTablesEmission[ttSpec_] :=
+  "  emit_trace_tables(std::cout, tabs, ttCanon, fm, \"" <> ttSpec["FillArgSigDouble"] <> "\", {" <>
+    StringRiffle["\"" <> # <> "\""& /@ ttSpec["FillArgNames"], ", "] <> "}, tsc, genv, decor);\n";
 
 (* ---- the driver --------------------------------------------------------------------------------
    `mIdx` is the Poly var index (0-based) of the Matsubara frequency, or -1 for "not a finite-T
@@ -935,7 +976,7 @@ ntGenMainEmission[ncomp_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDresse
    NT_GEN_NO_DEDUP=1 turns the dedup join off (I4): every occurrence is its own trace, nothing is
    merged, dropped or cached. It is the escape hatch and the control for the equivalence test, which
    must compare kernel VALUES: dedup changes GlobalEnv interning order and so renumbers every sN. *)
-emitNumericGenerator[coreNets_, restScalars_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kernelNs_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, mIdx_:-1, genName_:""] :=
+emitNumericGenerator[coreNets_, restScalars_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kernelNs_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, mIdx_:-1, genName_:"", ttSpec_ : None] :=
   Module[{nNet = Length[coreNets], hasDressed = !FreeQ[coreNets, _ntDressedCore],
           noDedup = ntEnvFlag["NT_GEN_NO_DEDUP"], sub, col, preambles, cse, joined, unitSrc, main, ntT},
     sub = ntGenExpandSubTerms[coreNets, restScalars];
@@ -958,7 +999,7 @@ emitNumericGenerator[coreNets_, restScalars_, colourNets_, groups_, ncomp_, nsIn
     ntT = First @ AbsoluteTiming[
       main =
         With[{tables = ntGenMainTables[joined["netTraceRows"], joined["netDressRows"], joined["netScalarRows"], hasDressed],
-              phaseB = ntGenMainPhaseB[groups, nNet, realOnlyG, hasDressed, ncomp]},
+              phaseB = ntGenMainPhaseB[groups, nNet, realOnlyG, hasDressed, ncomp, ttSpec]},
           StringJoin[
             tables["Defs"], col["ColRDef"], phaseB["Defs"],
             "\n",
@@ -968,6 +1009,6 @@ emitNumericGenerator[coreNets_, restScalars_, colourNets_, groups_, ncomp_, nsIn
             col["MainText"],
             phaseB["Text"],
             ntGenMainEmission[ncomp, nsInner, kernelNs, fillArgSig, complexQ, hasDressed, mIdx, Length[groups],
-              If[genName === "", "gen_" <> nsInner <> ".cpp", genName]]["Text"]]];];
+              If[genName === "", "gen_" <> nsInner <> ".cpp", genName], ttSpec]["Text"]]];];
     ntLog["[prof] main() data tables: ", ntT, " s"];
     {preambles["Pre"], unitSrc["Units"], unitSrc["Decl"], main, joined["nSub"]}];

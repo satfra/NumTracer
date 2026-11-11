@@ -36,6 +36,7 @@
 // and the all-diagram driver.
 #include "numtracer/codegen/lower_poly.hpp"      // IWYU pragma: export
 #include "numtracer/codegen/poly_cpp.hpp"        // IWYU pragma: export
+#include "numtracer/codegen/trace_table.hpp"     // IWYU pragma: export
 #include "numtracer/engine/contract.hpp"         // IWYU pragma: export
 #include "numtracer/engine/contract_dressed.hpp" // IWYU pragma: export
 #include "numtracer/engine/frame.hpp"            // IWYU pragma: export

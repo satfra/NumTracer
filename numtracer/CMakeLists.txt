@@ -310,6 +310,7 @@ if(NUMTRACER_BUILD_TESTS)
   nt_add_test(test_poly_cancel tests/test_poly_cancel.cpp NAME poly_cancel)
 
   nt_add_test(test_lowering_norm tests/test_lowering_norm.cpp NAME lowering_norm)
+  nt_add_test(test_trace_table tests/test_trace_table.cpp NAME trace_table)
 
   # The device __noinline__ size gate. It was dead in production twice over, each time silently (a
   # dead gate emits a valid, merely all-inline kernel), so it needs a test that asserts it FIRES.

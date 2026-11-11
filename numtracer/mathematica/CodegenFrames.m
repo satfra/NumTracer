@@ -248,6 +248,9 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
     <|
       "nsym" -> nsym,
       "usyms" -> usyms,
+      (* the components as polynomials in usyms, keyed by momentum Base (trace tables infer the
+         momentum scales from them) *)
+      "compExpr" -> compExpr,
       "compCpp" -> compCpp,
       "varFill" -> varFill,
       "symNamesCpp" -> (("(" <> # <> ")")& /@ varFill),

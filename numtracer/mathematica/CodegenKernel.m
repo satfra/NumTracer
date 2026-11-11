@@ -267,7 +267,13 @@ Options[mkGenerateKernel] =
    nothing; the `numtrace` CMake target does that as a build step. NT_OFFLINE overrides. *)
     "Offline" -> False,
 (* coordinate argument NAMES of this flow's grid; see the "ConstArgQ" key built in ntGenOptions *)
-    "CoordinateArgs" -> Automatic
+    "CoordinateArgs" -> Automatic,
+(* Trace tables (CodegenTables.m): False | True | Automatic | <|"Balance" -> B, "Scales" -> {name}|>.
+   Rewrites each trace as a short polynomial in the loop momentum and the external scale whose
+   coefficients a DiFfRG integrator tabulates once per run (kernel_tab/post_tab). Automatic tabulates
+   where the inline trace costs more than B = $ntTraceTableBalance flops per table byte and silently
+   falls back otherwise; True tabulates every trace it can and errors when the flow cannot be. *)
+    "TraceTables" -> False
   };
 
 (* The dressing-collection path needs no option: mkGenerateKernel detects the `ntDressedNum` tokens
@@ -467,7 +473,7 @@ ntGenOptions[OptionsPattern[mkGenerateKernel]] :=
        "RegulatorTemplate", "RegulatorAlias", "Components", "SymbolDefs", "MatsubaraVar",
        "DecayingRegulators", "MatsubaraFiniteExtent", "HoistLoopConstLookups", "Hoist", "PointArguments",
        "ShareInterpolatorIndex", "SharedGrids", "RealProbe", "PruneRealTraces", "ComplexRuntimeProjection",
-       "ComplexEndProjection", "RealOutput", "Constant"},
+       "ComplexEndProjection", "RealOutput", "Constant", "TraceTables", "CoordinateArgNames"},
       <|"Name" -> name,
         "Namespace" -> ns,
         "KernelNamespace" -> kernelNs,
@@ -532,7 +538,9 @@ ntGenOptions[OptionsPattern[mkGenerateKernel]] :=
         "ComplexRuntimeProjection" -> (TrueQ[OptionValue["ComplexRuntimeProjection"]] || endProject),
         "ComplexEndProjection" -> endProject,
         "RealOutput" -> TrueQ[OptionValue["RealOutput"]],
-        "Constant" -> OptionValue["Constant"]|>]];
+        "Constant" -> OptionValue["Constant"],
+        "TraceTables" -> ntTraceTableOption[OptionValue["TraceTables"]],
+        "CoordinateArgNames" -> OptionValue["CoordinateArgs"]|>]];
 
 ntResolveIncludeDir[dir_] := dir /. Automatic :> resolveIncludeDir[];
 
@@ -1413,13 +1421,17 @@ ntKernelHeader[o_, members_List, complexQ_, headerFile_] :=
 
 (* The integrand -> C++ lowering (FunKit). Timed as one block: it is the one heavy stage between the
    net-build and the generator emit, so without this the [prof] trail has a blind spot. *)
-ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, mVarIdx_, symDefs_, headerFile_] :=
+ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, mVarIdx_, symDefs_, headerFile_,
+              tables_ : None] :=
   Module[{bodyFor, kernelFn, hoistTrait, splitFns, constFn, mEvenBody, header},
     With[{ntT =
       First @
         AbsoluteTiming[
           bodyFor = ntKernelBody[#1, #2, o, sig["KernelParams"], preamble, complexQ]&;
           {kernelFn, hoistTrait} = ntHoistedKernelFn[bodyFor["kernel", integrand], o, part["Split"], matsubaraSym];
+(* trace tables: kernel_tab()/post_tab() next to kernel()/post(), after the hoist made post() *)
+          If[tables =!= None,
+            kernelFn = ntTableKernelText[kernelFn, o["NsHome"], $ntRealT, tables["FillArgNames"]]];
 (* The two halves are lowered from the SAME machinery as the full body, so a complex flow gets its
    #if ladder in each of them and the verdict macro keeps meaning one thing across all three. *)
           splitFns =
@@ -1449,6 +1461,7 @@ ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, 
                 {"static constexpr bool matsubara_finite_extent = true;"},
                 {}],
               hoistTrait,
+              If[tables =!= None, ntTraceTableTraits[tables, o["NsHome"]], {}],
 (* MIXED flow: two entry points instead of one. `kernel` stays and is still the whole thing -- it is
    what a consumer without the split machinery calls, and what the split is checked against. *)
               If[part["Split"],
@@ -1464,9 +1477,9 @@ ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, 
    Split generator: a main TU + N net-builder unit TUs + a decl header, so the net builders compile
    in parallel (see emitNumericGenerator). The main `#include`s the decl. *)
 ntEmitGeneratorSources[coreNets_, restScalars_, colourNets_, groups_, ncomp_, fillArgSig_, complexQ_,
-                       realOnlyG_, mVarIdx_, o_, genFile_] :=
+                       realOnlyG_, mVarIdx_, o_, genFile_, tables_ : None] :=
   Module[{genPre, genUnits, genDecl, genMain, nSub, declFile, pchFile, unitFiles},
-    With[{ntT = First @ AbsoluteTiming[{genPre, genUnits, genDecl, genMain, nSub} = emitNumericGenerator[coreNets, restScalars, colourNets, groups, ncomp, o["Namespace"], fillArgSig, o["KernelNamespace"], complexQ, realOnlyG, mVarIdx, FileNameTake[genFile]];]},
+    With[{ntT = First @ AbsoluteTiming[{genPre, genUnits, genDecl, genMain, nSub} = emitNumericGenerator[coreNets, restScalars, colourNets, groups, ncomp, o["Namespace"], fillArgSig, o["KernelNamespace"], complexQ, realOnlyG, mVarIdx, FileNameTake[genFile], tables];]},
       ntLog["[prof] emitNumericGenerator: ", ntT, " s"]];
     declFile = StringReplace[genFile, ".cpp" -> "_nets.hh"];
 (* Precompiled-header source for the -O0 net-builder units. Deliberately a SUPERSET of what any
@@ -1622,10 +1635,10 @@ ntRunGenerator[bin_, o_, headerFile_] :=
    stops after writing: the `numtrace` CMake target compiles and runs the sources as a build step,
    and the committed traces header is left untouched until then. *)
 ntGenPass[coreNets_, restScalars_, colourNets_, groups_, ncomp_, fillArgSig_, complexQ_, realOnlyG_,
-          mVarIdx_, o_, incDir_, genFile_, headerFile_] :=
+          mVarIdx_, o_, incDir_, genFile_, headerFile_, tables_ : None] :=
   Module[{src, bin = None},
     src = ntEmitGeneratorSources[coreNets, restScalars, colourNets, groups, ncomp, fillArgSig, complexQ,
-            realOnlyG, mVarIdx, o, genFile];
+            realOnlyG, mVarIdx, o, genFile, tables];
     If[o["RunOnline"],
       bin = ntCompileGenerator[genFile, src, o, incDir]["Binary"];
 (* Free the codegen memo caches before launching the generator subprocess; they are only needed to
@@ -1690,7 +1703,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
          $ntComplexRuntimeProjection = $ntComplexRuntimeProjection,
          $diagDrIntern = $diagDrIntern, $drIntern = $drIntern,
          $ctCache = <||>, $dsCache = <||>, $odCache = <||>, $dslCache = <||>},
-  Module[{o, fr, ms, complexQ, nets, incDir, dd, grp, hoist, integrand, prune, nGrp,
+  Module[{o, fr, ms, complexQ, nets, incDir, dd, grp, hoist, integrand, prune, nGrp, tables,
           hasDr, lookups, pre, sig, part, header, ncomp, gen, probe},
     Needs["FunKit`"];
 (* The integrand Sum and COEN's lowering recurse ~linearly in the number of trace groups (>1000 on
@@ -1746,18 +1759,24 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
     ntAssertNumericIntegrand[integrand];
     part = ntFiniteExtentPartition[integrand, ms["MatsubaraSym"], o["DecayingRegulators"],
              o["MatsubaraFiniteExtent"]];
+    tables =
+      With[{t = ntTraceTableSpec[o, fr["NComp"], fr["Args"], o["CoordinateArgNames"], ms["MatsubaraSym"]]},
+        If[t === None, None,
+          (* the table fill takes the kinematic fill arguments only, never the dressings *)
+          Join[t, <|"FillArgNames" -> (SymbolName /@ fr["FillArgs"]),
+                    "FillArgSigDouble" -> StringRiffle[("[[maybe_unused]] double " <> SymbolName[#])& /@ fr["FillArgs"], ", "]|>]]];
     header = ntLowerKernel[o, integrand, part, sig, pre["Preamble"], complexQ, ms["MatsubaraSym"],
-               ms["MVarIdx"], fr["SymDefs"], headerFile]["Header"];
+               ms["MVarIdx"], fr["SymDefs"], headerFile, tables]["Header"];
     (* the generator also needs which dressing atoms are complex (see ntDrSplit) *)
     ncomp = Append[fr["NComp"], "drComplex" -> (ntDrComplexQ /@ nets["DrAtoms"])];
     gen = ntGenPass[nets["CoreNets"], nets["RestScalars"], dd["ColourNets"], grp["Groups"], ncomp,
-            sig["FillArgSig"], complexQ, prune["realOnlyG"], ms["MVarIdx"], o, incDir, genFile, headerFile];
+            sig["FillArgSig"], complexQ, prune["realOnlyG"], ms["MVarIdx"], o, incDir, genFile, headerFile, tables];
     probe = ntProbeAndReprune[o, integrand, fr["Args"], fr["FillArgs"], pre["AngleDecls"],
               nets["DrAtoms"], prune["pruneG"], complexQ, genFile, headerFile];
 (* the deferred PruneRealTraces pass: re-emit with the pruned groups *)
     If[probe["Reprune"],
       gen = ntGenPass[nets["CoreNets"], nets["RestScalars"], dd["ColourNets"], grp["Groups"], ncomp,
-              sig["FillArgSig"], complexQ, prune["pruneG"], ms["MVarIdx"], o, incDir, genFile, headerFile]];
+              sig["FillArgSig"], complexQ, prune["pruneG"], ms["MVarIdx"], o, incDir, genFile, headerFile, tables]];
     ntWriteKernelAndManifest[o, header, kernelFile, genFile, headerFile, gen["UnitFiles"], complexQ,
       probe["ProbeFile"]];
 (* "Front": what a kernel group (MakeNTKernelGroupDiFfRG) needs to lower this flow together with others *)

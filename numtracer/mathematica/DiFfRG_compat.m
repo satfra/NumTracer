@@ -143,6 +143,9 @@ Options[MakeNTKernelDiFfRG] =
    pre() reads it and uses the plain kernel. *)
     "Hoist" -> Automatic,
     "PointArguments" -> Automatic,
+(* Trace tables (see MakeNTKernel's "TraceTables"): the kernel also gets has_tab, tab() and
+   kernel_tab()/post_tab(), which a DiFfRG integrator with table support evaluates instead. *)
+    "TraceTables" -> False,
     "IntegrationVariables" -> Automatic, (* REQUIRED, e.g. {"l1","cos1"} *)
     "Parameters" -> Automatic, (* REQUIRED kernelParameterList; also the source of Dressings *)
     "ParameterOrder" -> Automatic, (* positional runtime ABI; Automatic follows Parameters order *)
@@ -470,6 +473,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
       "SharedGrids" -> OptionValue["SharedGrids"],
       "HoistLoopConstLookups" -> hoistOpt,
       "Hoist" -> (OptionValue["Hoist"] /. Automatic -> True),
+      "TraceTables" -> OptionValue["TraceTables"],
       "PointArguments" -> ntPointArguments[OptionValue["PointArguments"], OptionValue["MapPoints"], params],
       "RealOutput" -> OptionValue["RealOutput"],
       "ComplexRuntimeProjection" -> OptionValue["ComplexRuntimeProjection"],

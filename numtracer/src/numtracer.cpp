@@ -16,6 +16,7 @@
 #include "numtracer/engine/contract_dressed.hpp"
 #include "numtracer/codegen/lower_poly.hpp"
 #include "numtracer/codegen/poly_cpp.hpp"
+#include "numtracer/codegen/trace_table.hpp"
 #include "numtracer/network/sun_net.hpp"
 #include "numtracer/codegen/gen.hpp"
 

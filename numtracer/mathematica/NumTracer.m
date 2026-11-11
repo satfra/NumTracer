@@ -186,6 +186,8 @@ ntLoadPart["CodegenGenerator.m"];
 
 ntLoadPart["CodegenKernel.m"];
 
+ntLoadPart["CodegenTables.m"];
+
 ntLoadPart["CodegenGroup.m"];
 
 ntLoadPart["FunKitAdapter.m"];
