@@ -322,3 +322,35 @@ verdict RePart). Regenerated with `"TraceTables" -> Automatic`:
   7.6 min / 6.4 GB. With the runtime switches (all four paths in one binary) it was 35 min / 12.7 GB.
 - Not measured: the flow's share of the full Nf2 RHS, and physics with the full app.
 
+
+## 12. A100 / H100 (bwHPC, 2026-11-12)
+
+Same sources as the 4070 runs, built for sm_80;90, two binaries per case (tables vs inline), alternating runs on
+one GPU per job (jobs 8583061 H100, 8583062 A100 80GB PCIe). Runs repeated twice; spread < 1%.
+
+**Nf2 ZA4tadpole `map()`** (harness of §11, median of 9):
+
+| GPU | k | inline | tables | speedup |
+|---|---|--:|--:|--:|
+| H100 | 200 | 278 ms | 43.2 ms | 6.4x |
+| H100 | 0.7 | 278 | 40.5 | 6.9x |
+| A100 | 200 | 397 | 80.8 | 4.9x |
+| A100 | 0.7 | 397 | 76.8 | 5.2x |
+| 4070 | 200 / 0.7 | 681 | 85 | 8.0x |
+
+First `map()` (table build) +40 ms. Max |tab − inline| / max |inline|: 3.4e-7 (k = 200), 4.2e-6 (k = 0.7), as on
+the 4070.
+
+**YangMills `full_AAcbc_sigma_split`**, flow to t = 1.25 (k = 286.5; the run then stops with "Diverging result",
+exit code 1, because it has not reached the IR — expected for a truncated flow), average time per RHS:
+
+| GPU | inline | tables | speedup |
+|---|--:|--:|--:|
+| H100 | 204 ms | 130 ms | 1.57x |
+| A100 | 293 | 200 | 1.46x |
+| 4070 | 575 | 382 | 1.50x |
+
+Results at t = 1.25: m2A −489.93677 vs −489.93723 (9e-7 relative), Zc(0) 0.96155681 vs 0.96155629 (5e-7);
+the tabulated run needs 288 instead of 306 RHS evaluations (different adaptive step sequence).
+
+Both flows use float kernels; the tables win on all three GPUs. The gain is smallest on the A100, but far from break-even.
