@@ -1,7 +1,7 @@
 #!/usr/bin/env wolframscript
-(* Unit gate for the colour zero-pruning in the net build: ntSingleGeneratorLoopQ, which drops a
-   vanishing branch in compileColourSum and splitColourGroups and a vanishing diagram in
-   ntDiagramRecords, all before the Dirac/Lorentz net build.
+(* Unit gate for the zero-pruning in the net build: ntSingleGeneratorLoopQ, which drops a vanishing
+   colour branch in compileColourSum and splitColourGroups and a vanishing diagram in ntDiagramRecords,
+   and the drop of a diagram with a zero coefficient, all before the Dirac/Lorentz net build.
 
    tr T^a = 0. A closed fundamental index loop that runs through generators and plain Kronecker
    deltas only, and holds exactly ONE generator, makes its whole colour product vanish. Four-quark
@@ -20,7 +20,7 @@ Get[FileNameJoin[{$repo, "numtracer", "mathematica", "NumTracer.m"}]];
 
 Begin["NumTracer`Private`"];
 
-$nExpected = 16;
+$nExpected = 17;
 $fail = 0; nRan = 0;
 check[label_, cond_] := (
   nRan++;
@@ -63,6 +63,12 @@ With[{br = compileColourSum[T[a, i, j] dF[j, i] T[a, k, l] dF[l, k] + 2 T[a, i, 
   check["... and it is the nonvanishing one, with its scalar", Length[br] === 1 && br[[1, 2]] === 2]];
 check["an entirely vanishing sum leaves no branch",
   compileColourSum[T[a, i, j] dF[j, i] T[a, k, l] dF[l, k], ids] === {}];
+
+(* A diagram whose coefficient vanishes (a truncation that sets a dressing to zero) is dropped too: its nets
+   would only fill a trace group that the integrand multiplies by zero. *)
+check["a diagram with coefficient 0 has no nets",
+  ntDiagramRecords[<|"Ids" -> ids, "Coeff" -> 0, "Components" -> {<|"Constant" -> True, "Factors" -> {2 T[a, i, j] T[a, j, i]}|>}|>,
+    0, 0, <||>, None, <||>] === {}];
 
 Print[""];
 If[nRan =!= $nExpected,

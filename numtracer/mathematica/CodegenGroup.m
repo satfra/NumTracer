@@ -38,7 +38,7 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
   Block[{$ntComplexRuntimeProjection = fronts[[1, "Options"]]["ComplexRuntimeProjection"]},
   Module[{o = fronts[[1, "Options"]], n = Length[fronts], sig = fronts[[1, "Signature"]], groupName, macros,
           complexQ, evens, parts, lookups, dr, ints, traceDecls, nenv, preamble, body, kernelFn, hoistTrait, constFn,
-          traits, tracesIncludes, verdictIncludes, header},
+          tables, traits, tracesIncludes, verdictIncludes, header},
     groupName = StringReplace[className, "_kernel" ~~ EndOfString -> ""];
     (* -- the members must agree in everything but their projection -- *)
     Scan[
@@ -128,6 +128,11 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
             "#error \"NumTracer: kernel group '" <> groupName <> "' mixes genuinely complex (verdict 0) and real members; generate them as separate flows.\"",
             "#endif"}, "\n"]];
     {kernelFn, hoistTrait} = ntHoistedKernelFn[kernelFn, o, parts[[1, "Split"]], fronts[[1, "MatsubaraSym"]]];
+    (* trace tables: one table holding the entries of every tabulated member, in member order *)
+    tables = ntGroupTableSpec[Lookup[fronts, "Tables", None], Map[#["Options"]["NsHome"]&, fronts], groupName,
+      AnyTrue[Lookup[fronts, "Tables", None], AssociationQ[#] && TrueQ[#["Explicit"]]&]];
+    If[tables =!= None,
+      kernelFn = ntTableKernelText[kernelFn, tables["Members"], $ntRealT, tables["FillArgNames"]]];
     constFn = FunKit`MakeCppFunction[consts, "Name" -> "constant", "Prefix" -> o["Decorator"], "Return" -> "auto",
       "CodeParser" -> "Cpp", "Parameters" -> sig["ConstParams"], "MultiReturn" -> multiReturn,
       "Body" -> If[AllTrue[consts, MatchQ[#, 0 | 0.]&], "", StringRiffle[ntSupportUsings[o["SupportNamespace"]], "\n"]]];
@@ -138,7 +143,8 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
           StringRiffle[Map[If[#["MVarIdx"] >= 0, #["Options"]["NsHome"] <> "::matsubara_even", "true"]&, fronts], " && "] <> ";"},
         {}],
       If[parts[[1, "FiniteExtent"]], {"static constexpr bool matsubara_finite_extent = true;"}, {}],
-      hoistTrait];
+      hoistTrait,
+      If[tables =!= None, ntTraceTableTraits[tables, tables["Members"]], {}]];
 
     tracesIncludes = Map[ntRelativePath[groupDir, #["TracesFile"]]&, fronts];
     verdictIncludes =

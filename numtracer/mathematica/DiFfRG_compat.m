@@ -144,8 +144,9 @@ Options[MakeNTKernelDiFfRG] =
     "Hoist" -> Automatic,
     "PointArguments" -> Automatic,
 (* Trace tables (see MakeNTKernel's "TraceTables"): the kernel also gets has_tab, tab() and
-   kernel_tab()/post_tab(), which a DiFfRG integrator with table support evaluates instead. *)
-    "TraceTables" -> False,
+   kernel_tab()/post_tab(), which a DiFfRG integrator with table support evaluates instead.
+   Automatic tabulates where it pays and falls back to the inline kernel where a flow cannot be. *)
+    "TraceTables" -> Automatic,
     "IntegrationVariables" -> Automatic, (* REQUIRED, e.g. {"l1","cos1"} *)
     "Parameters" -> Automatic, (* REQUIRED kernelParameterList; also the source of Dressings *)
     "ParameterOrder" -> Automatic, (* positional runtime ABI; Automatic follows Parameters order *)
@@ -578,6 +579,7 @@ MakeNTKernelGroupDiFfRG[ntks : {__NTKernel}, opts : OptionsPattern[]] :=
       "DeviceTarget" -> (OptionValue["Device"] === "GPU"), "Dressings" -> dressParams[[All, "Name"]],
       "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False,
       "Hoist" -> (OptionValue["Hoist"] /. Automatic -> True),
+      "TraceTables" -> OptionValue["TraceTables"],
       "PointArguments" -> ntPointArguments[OptionValue["PointArguments"], OptionValue["MapPoints"], params],
       "RealOutput" -> OptionValue["RealOutput"], "ComplexRuntimeProjection" -> OptionValue["ComplexRuntimeProjection"],
       "ComplexEndProjection" -> OptionValue["ComplexEndProjection"],

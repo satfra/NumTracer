@@ -95,6 +95,13 @@ ntTraceTableSpec[o_, ncomp_, args_List, coordNames_, matsubaraSym_] :=
         TrueQ[ncomp["complex"]], "its frame is complex",
         matsubaraSym =!= None, "it is a finite-temperature flow",
         True, None];
+    (* DiFfRG reads the external coordinates as the arguments right after the integration variables *)
+    If[why === None,
+      With[{names = SymbolName /@ args},
+        With[{box = TakeWhile[names, !MemberQ[cands, #]&]},
+          If[Take[names, UpTo[Length[box] + Count[names, _?(MemberQ[cands, #]&)]]] =!=
+               Join[box, Select[names, MemberQ[cands, #]&]],
+            why = "its coordinate arguments do not directly follow the integration variables"]]]];
     If[why === None,
       sc = ntTraceTableScales[ncomp, SymbolName[First[args]], cands, tt["Scales"]];
       If[FailureQ[sc], why = sc["Message"]]];
@@ -111,12 +118,14 @@ ntTraceTableSpec[o_, ncomp_, args_List, coordNames_, matsubaraSym_] :=
 (* ---- kernel.hh: traits and the table entry points --------------------------------------------- *)
 
 (* The class traits: has_tab, tab_size, and which box variables / external coordinates the table
-   depends on (all but the scales). *)
-ntTraceTableTraits[spec_, nsHome_String] :=
+   depends on (all but the scales). `members` as for ntTableKernelText: tab_size is the sum of the
+   members' entries. *)
+ntTraceTableTraits[spec_, members_List] :=
   With[{mask = Function[names, "{" <> StringRiffle[
-          If[# === spec["RadialName"] || # === spec["ExternalName"], "false", "true"]& /@ names, ", "] <> "}"]},
-    {"static constexpr bool has_tab = " <> nsHome <> "::tab_size > 0;",
-     "static constexpr std::size_t tab_size = " <> nsHome <> "::tab_size;",
+          If[# === spec["RadialName"] || # === spec["ExternalName"], "false", "true"]& /@ names, ", "] <> "}"],
+        size = StringRiffle[(#["Ns"] <> "::tab_size")& /@ members, " + "]},
+    {"static constexpr bool has_tab = " <> size <> " > 0;",
+     "static constexpr std::size_t tab_size = " <> size <> ";",
      "static constexpr std::array<bool, " <> ToString[Length[spec["BoxNames"]]] <> "> tab_box_mask" <> mask[spec["BoxNames"]] <> ";",
      "static constexpr std::array<bool, " <> ToString[Length[spec["ExtNames"]]] <> "> tab_ext_mask" <> mask[spec["ExtNames"]] <> ";"}];
 
@@ -134,32 +143,43 @@ ntDefinitionSpan[text_String, chars_List, st_Integer, head_String] :=
               chars[[#]] === "{" &, 1]];
     {lineStart, ntMatchingBracket[chars, bOpen, {"{", "}"}]}];
 
+(* The entries of member `m` within a table row: the row pointer, offset by the entries of the members
+   before it. *)
+ntTableRowOf[m_, base_String] :=
+  If[m["Offset"] === "0", base, base <> " + (" <> m["Offset"] <> ") * stride_"];
+
 (* A definition of kernel() or post() turned into its table form: the entries pointer and stride after
-   the leading parameters, and every trace call reading the table. *)
-ntTableDefinition[fn_String, nsHome_String, realT_String] :=
+   the leading parameters, and every trace call of a tabulated member reading that member's entries. *)
+ntTableDefinition[fn_String, members_List, realT_String] :=
   Module[{entry = "const " <> realT <> " *row_, const std::size_t stride_, ", out},
     out = StringReplace[fn, {
         "auto kernel(" -> "auto kernel_tab(" <> entry,
         "auto post(const TP_ &P_, " -> "auto post_tab(const TP_ &P_, " <> entry}, 1];
-    StringReplace[out,
-      RegularExpression[StringReplace[nsHome, "::" -> "\\:\\:"] <> "\\:\\:tr(\\d+)\\(fenv\\)"] :>
-        nsHome <> "::ttr$1(row_, stride_, fenv)"]];
+    Fold[
+      Function[{t, m},
+        StringReplace[t,
+          RegularExpression[StringReplace[m["Ns"], "::" -> "\\:\\:"] <> "\\:\\:tr(\\d+)\\(fenv\\)"] :>
+            m["Ns"] <> "::ttr$1(" <> ntTableRowOf[m, "row_"] <> ", stride_, fenv)"]],
+      out, members]];
 
 (* tab(out, stride, <kernel parameters>) from a kernel() definition: the same template header and
-   parameters, filling the entries of one table node from the fill arguments. *)
-ntTableFillFn[fn_String, nsHome_String, fillArgNames_List] :=
+   parameters, filling each tabulated member's entries of one table node from the fill arguments. *)
+ntTableFillFn[fn_String, members_List, fillArgNames_List] :=
   Module[{kpos = First[First[StringPosition[fn, "auto kernel(", 1]]], chars = Characters[fn], open, close, prefix,
           params},
     open = kpos + StringLength["auto kernel"];
     close = ntMatchingBracket[chars, open, {"(", ")"}];
     prefix = StringTake[fn, kpos - 1];
     params = StringTake[fn, {open + 1, close - 1}];
-    prefix <> "void tab(double *out_, const std::size_t stride_, " <> params <> ")\n    {\n      " <>
-      nsHome <> "::tab_fill(out_, stride_, " <> StringRiffle[fillArgNames, ", "] <> ");\n    }"];
+    prefix <> "void tab(double *out_, const std::size_t stride_, " <> params <> ")\n    {\n" <>
+      StringJoin[("      " <> #["Ns"] <> "::tab_fill(" <> ntTableRowOf[#, "out_"] <> ", stride_, " <>
+        StringRiffle[fillArgNames, ", "] <> ");\n")& /@ members] <> "    }"];
 
 (* The kernel text with the kernel_tab()/post_tab() copies inserted after the originals, and tab()
-   after each kernel() (one per preprocessor branch of a complex kernel's verdict). *)
-ntTableKernelText[text_String, nsHome_String, realT_String, fillArgNames_List] :=
+   after each kernel() (one per preprocessor branch of a complex kernel's verdict). `members` lists the
+   tabulated trace namespaces in table order, each <|"Ns" -> namespace, "Offset" -> C++ expression for
+   the entries before it|> ("0" for the first); trace calls of other namespaces stay inline. *)
+ntTableKernelText[text_String, members_List, realT_String, fillArgNames_List] :=
   Module[{chars = Characters[text], spans, out = text, shift = 0},
     spans =
       SortBy[
@@ -170,9 +190,28 @@ ntTableKernelText[text_String, nsHome_String, realT_String, fillArgNames_List] :
     Do[
       Module[{span = ntDefinitionSpan[text, chars, s[[1]], s[[2]]], fn, add},
         fn = StringTake[text, span];
-        add = "\n" <> ntTableDefinition[fn, nsHome, realT];
-        If[s[[2]] === "auto kernel(", add = add <> "\n" <> ntTableFillFn[fn, nsHome, fillArgNames]];
+        add = "\n" <> ntTableDefinition[fn, members, realT];
+        If[s[[2]] === "auto kernel(", add = add <> "\n" <> ntTableFillFn[fn, members, fillArgNames]];
         out = StringInsert[out, add, span[[2]] + 1 + shift];
         shift += StringLength[add]],
       {s, spans}];
     out];
+
+(* ---- kernel groups ---------------------------------------------------------------------------- *)
+
+(* The table spec of a kernel group from its members' specs (`specs`, None for a member without a
+   table) and trace namespaces `nss`, or None. The tabulated members must agree in their scales and
+   table axes; the result carries them in table order as "Members" (see ntTableKernelText). *)
+ntGroupTableSpec[specs_List, nss_List, groupName_String, explicit_] :=
+  Module[{tab = Select[Range[Length[specs]], specs[[#]] =!= None &], keys = {"RadialName", "ExternalName", "BoxNames", "ExtNames"}},
+    If[tab === {}, Return[None, Module]];
+    If[!SameQ @@ (KeyTake[specs[[#]], keys]& /@ tab),
+      If[TrueQ[explicit],
+        Message[MakeNTKernelGroupDiFfRG::differ, groupName, "their trace-table scales"]; Abort[],
+        ntLog["[tables] group ", groupName, " off: the members differ in their trace-table scales"];
+        Return[None, Module]]];
+    Append[specs[[First[tab]]],
+      "Members" -> MapIndexed[
+        <|"Ns" -> nss[[#1]], "Offset" ->
+          If[First[#2] === 1, "0", StringRiffle[(nss[[#]] <> "::tab_size")& /@ Take[tab, First[#2] - 1], " + "]]|>&,
+        tab]]];

@@ -69,7 +69,7 @@ Module[{l1, S0, S1, c1, s1, c2, s2, x, y, usyms, comp, nc},
 Print["=== 3. traits ==="];
 Module[{spec = <|"RadialName" -> "l1", "ExternalName" -> "S0", "BoxNames" -> {"l1", "cos1", "cos2"},
                  "ExtNames" -> {"S0", "S1", "SPhi"}|>, tr},
-  tr = ntTraceTableTraits[spec, "DiFfRG::za3_ymf"];
+  tr = ntTraceTableTraits[spec, {<|"Ns" -> "DiFfRG::za3_ymf"|>}];
   check["has_tab and tab_size from the traces header",
     MemberQ[tr, "static constexpr bool has_tab = DiFfRG::za3_ymf::tab_size > 0;"] &&
     MemberQ[tr, "static constexpr std::size_t tab_size = DiFfRG::za3_ymf::tab_size;"]];
@@ -97,7 +97,8 @@ kernelText = "    template<typename T8, typename T9>
       DiFfRG::ns::fill(fenv, l1, cos1, S0);
       return _a * DiFfRG::ns::tr0(fenv) + Zc(k) * DiFfRG::ns::tr12(fenv);
     }";
-res = ntTableKernelText[kernelText, "DiFfRG::ns", "float", {"l1", "cos1", "S0"}];
+one = {<|"Ns" -> "DiFfRG::ns", "Offset" -> "0"|>};
+res = ntTableKernelText[kernelText, one, "float", {"l1", "cos1", "S0"}];
 kTab = StringCases[res, Shortest["auto kernel_tab(" ~~ __ ~~ "\n    }"]];
 pTab = StringCases[res, Shortest["auto post_tab(" ~~ __ ~~ "\n    }"]];
 tab = StringCases[res, Shortest["void tab(" ~~ __ ~~ "\n    }"]];
@@ -119,10 +120,61 @@ check["tab(): kernel()'s parameters, fill arguments forwarded",
 check["pre_reads stays between kernel and post", StringCount[res, "pre_reads"] === 1];
 (* a complex kernel defines kernel() once per verdict branch: each branch needs its own tab() *)
 With[{k2 = "    #if NT_X_VERDICT == 2\n" <> kernelText <> "\n    #else\n" <> kernelText <> "\n    #endif"},
-  With[{r2 = ntTableKernelText[k2, "DiFfRG::ns", "float", {"l1", "cos1", "S0"}]},
+  With[{r2 = ntTableKernelText[k2, one, "float", {"l1", "cos1", "S0"}]},
     check["verdict branches: one tab() and one kernel_tab() per branch",
       StringCount[r2, "void tab("] === 2 && StringCount[r2, "auto kernel_tab("] === 2 &&
       StringPosition[r2, "void tab("][[1, 1]] < StringPosition[r2, "#else"][[1, 1]] < StringPosition[r2, "void tab("][[2, 1]]]]];
+
+Print["=== 5. kernel groups ==="];
+(* a group kernel: members a and b tabulated, c inline, each member's traces copied out after its fill *)
+groupText = "    template<typename T8>
+    static KOKKOS_INLINE_FUNCTION auto kernel(const float& l1, const float& cos1, const float& S0, const T8& ZA)
+    {
+      float fenv[ntnenv3];
+      DiFfRG::ns_a::fill(fenv, l1, cos1, S0);
+      [[maybe_unused]] const auto ntt0_0 = DiFfRG::ns_a::tr0(fenv);
+      DiFfRG::ns_b::fill(fenv, l1, cos1, S0);
+      [[maybe_unused]] const auto ntt1_0 = DiFfRG::ns_b::tr4(fenv);
+      DiFfRG::ns_c::fill(fenv, l1, cos1, S0);
+      [[maybe_unused]] const auto ntt2_0 = DiFfRG::ns_c::tr1(fenv);
+      return DiFfRG::MultiValue<float, 3>{ZA(l1) * ntt0_0, ntt1_0, ntt2_0};
+    }";
+Module[{spec = <|"RadialName" -> "l1", "ExternalName" -> "S0", "BoxNames" -> {"l1", "cos1"}, "ExtNames" -> {"S0"},
+                 "FillArgNames" -> {"l1", "cos1", "S0"}, "Explicit" -> False|>, g, r, kt, tb, tr},
+  g = ntGroupTableSpec[{spec, spec, None}, {"DiFfRG::ns_a", "DiFfRG::ns_b", "DiFfRG::ns_c"}, "G", False];
+  check["group spec: the tabulated members in order, offsets summing the entries before",
+    g["Members"] === {<|"Ns" -> "DiFfRG::ns_a", "Offset" -> "0"|>, <|"Ns" -> "DiFfRG::ns_b", "Offset" -> "DiFfRG::ns_a::tab_size"|>}];
+  r = ntTableKernelText[groupText, g["Members"], "float", g["FillArgNames"]];
+  kt = First @ StringCases[r, Shortest["auto kernel_tab(" ~~ __ ~~ "\n    }"]];
+  tb = First @ StringCases[r, Shortest["void tab(" ~~ __ ~~ "\n    }"]];
+  check["group kernel_tab: each tabulated member reads its own entries",
+    StringContainsQ[kt, "DiFfRG::ns_a::ttr0(row_, stride_, fenv)"] &&
+    StringContainsQ[kt, "DiFfRG::ns_b::ttr4(row_ + (DiFfRG::ns_a::tab_size) * stride_, stride_, fenv)"]];
+  check["group kernel_tab: an untabulated member stays inline",
+    StringContainsQ[kt, "DiFfRG::ns_c::tr1(fenv)"] && StringFreeQ[kt, "ns_c::ttr"]];
+  check["group tab(): one fill per tabulated member at its offset",
+    StringContainsQ[tb, "DiFfRG::ns_a::tab_fill(out_, stride_, l1, cos1, S0);"] &&
+    StringContainsQ[tb, "DiFfRG::ns_b::tab_fill(out_ + (DiFfRG::ns_a::tab_size) * stride_, stride_, l1, cos1, S0);"] &&
+    StringFreeQ[tb, "ns_c"]];
+  tr = ntTraceTableTraits[g, g["Members"]];
+  check["group traits: tab_size sums the members",
+    MemberQ[tr, "static constexpr std::size_t tab_size = DiFfRG::ns_a::tab_size + DiFfRG::ns_b::tab_size;"] &&
+    MemberQ[tr, "static constexpr bool has_tab = DiFfRG::ns_a::tab_size + DiFfRG::ns_b::tab_size > 0;"]];
+  check["group spec: no tabulated member gives no table",
+    ntGroupTableSpec[{None, None}, {"DiFfRG::ns_a", "DiFfRG::ns_b"}, "G", False] === None];
+  With[{other = Append[spec, "ExternalName" -> None]},
+    check["group spec: members with different scales are off under Automatic",
+      ntGroupTableSpec[{spec, other}, {"DiFfRG::ns_a", "DiFfRG::ns_b"}, "G", False] === None];
+    check["group spec: ... and an error when requested",
+      abortsQ[Hold[ntGroupTableSpec[{spec, other}, {"DiFfRG::ns_a", "DiFfRG::ns_b"}, "G", True]], MakeNTKernelGroupDiFfRG::differ]]];
+];
+
+Print["=== 6. argument order ==="];
+Module[{o = <|"TraceTables" -> <|"Balance" -> 1., "Scales" -> Automatic, "Explicit" -> False|>|>,
+        nc = <|"complex" -> False|>},
+  check["coordinates not directly after the integration variables: no table",
+    ntTraceTableSpec[o, nc, {Symbol["l1"], Symbol["cos1"], Symbol["k"], Symbol["S0"], Symbol["kk"], Symbol["S1"]},
+      {"S0", "S1"}, None] === None]];
 
 Print[""];
 Print[If[$fail === 0, "ALL " <> ToString[nRan] <> " PASSED", ToString[$fail] <> " of " <> ToString[nRan] <> " FAILED"]];

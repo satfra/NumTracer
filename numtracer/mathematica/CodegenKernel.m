@@ -699,6 +699,9 @@ ntDiagramRecords[diag_, d_, base_, env_, mask_, frame_] :=
     $ntCanonIdsSrc = diag["Ids"];
     $ntCanonRules = Dispatch[Normal[KeyDrop[diag["Ids"], Keys[env]]]];
     coeff = ntResolveFrame[diag["Coeff"], frame];
+(* A diagram with a vanishing coefficient (e.g. a truncation that sets a dressing to zero) contributes
+   nothing: its nets would only form a trace group that the integrand multiplies by zero. *)
+    If[MatchQ[coeff, 0 | 0.], Return[{}]];
 (* A constant colour part in which every term vanishes (tr T^a = 0, ntSingleGeneratorLoopQ) zeroes
    the whole diagram: compileColourSum would return no branch and nothing would be emitted. Decide it
    here, before the Dirac and Lorentz net build pays for the components. *)
@@ -1461,7 +1464,7 @@ ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, 
           {kernelFn, hoistTrait} = ntHoistedKernelFn[bodyFor["kernel", integrand], o, part["Split"], matsubaraSym];
 (* trace tables: kernel_tab()/post_tab() next to kernel()/post(), after the hoist made post() *)
           If[tables =!= None,
-            kernelFn = ntTableKernelText[kernelFn, o["NsHome"], $ntRealT, tables["FillArgNames"]]];
+            kernelFn = ntTableKernelText[kernelFn, {<|"Ns" -> o["NsHome"], "Offset" -> "0"|>}, $ntRealT, tables["FillArgNames"]]];
 (* The two halves are lowered from the SAME machinery as the full body, so a complex flow gets its
    #if ladder in each of them and the verdict macro keeps meaning one thing across all three. *)
           splitFns =
@@ -1491,7 +1494,7 @@ ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, 
                 {"static constexpr bool matsubara_finite_extent = true;"},
                 {}],
               hoistTrait,
-              If[tables =!= None, ntTraceTableTraits[tables, o["NsHome"]], {}],
+              If[tables =!= None, ntTraceTableTraits[tables, {<|"Ns" -> o["NsHome"]|>}], {}],
 (* MIXED flow: two entry points instead of one. `kernel` stays and is still the whole thing -- it is
    what a consumer without the split machinery calls, and what the split is checked against. *)
               If[part["Split"],
@@ -1811,7 +1814,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
       "Front" -> <|"Options" -> o, "Integrand" -> integrand, "DrAtoms" -> nets["DrAtoms"], "HasDr" -> hasDr,
         "Args" -> fr["Args"], "FillArgs" -> fr["FillArgs"], "SymDefs" -> fr["SymDefs"], "Signature" -> sig,
         "Partition" -> part, "MatsubaraSym" -> ms["MatsubaraSym"], "MVarIdx" -> ms["MVarIdx"],
-        "ComplexQ" -> complexQ, "TracesFile" -> headerFile|>|>]];
+        "ComplexQ" -> complexQ, "TracesFile" -> headerFile, "Tables" -> tables|>|>]];
 
 (* ---- MakeNTKernel: the public kernel emitter. --------------------------------------
    MakeNTKernel[ntk, genFile, kernelFile, tracesFile] emits the numeric matrix-product kernel:
