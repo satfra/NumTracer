@@ -32,6 +32,29 @@ namespace numtracer::codegen
   /// The emitted real type.
   inline const char *emit_real_type() { return emit_single() ? "float" : "double"; }
 
+  /// The emitted fused multiply-add of the real type, a macro from @ref emit_fma_macros.
+  inline const char *emit_fma() { return emit_single() ? "NT_FMAF" : "NT_FMAD"; }
+
+  /**
+   * @brief Print the definitions of `NT_FMAF(a, b, c)` (float) and `NT_FMAD(a, b, c)` (double).
+   *
+   * nvcc's device pass gets the NVVM intrinsics: they compile to the same `fma.rn` instruction as
+   * `fma()`, but cicc spends far less time on them in large functions. Everywhere else they are `fma()`.
+   * The guard lets several emitted headers share a translation unit.
+   */
+  inline void emit_fma_macros(std::ostream &out)
+  {
+    out << "#ifndef NT_FMAF\n"
+           "#if defined(__NVCC__) && defined(__CUDA_ARCH__)\n"
+           "#define NT_FMAF(a, b, c) __nvvm_fma_rn_f(a, b, c)\n"
+           "#define NT_FMAD(a, b, c) __nvvm_fma_rn_d(a, b, c)\n"
+           "#else\n"
+           "#define NT_FMAF(a, b, c) fma(a, b, c)\n"
+           "#define NT_FMAD(a, b, c) fma(a, b, c)\n"
+           "#endif\n"
+           "#endif\n";
+  }
+
   /// A float literal of @p v: rounded to float, printed with enough digits to round-trip it.
   inline std::string float_literal(double v)
   {

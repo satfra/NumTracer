@@ -386,12 +386,13 @@ namespace numtracer::inline network
       if (pl.fmaFold[i] || pl.negFold[i] || pl.cInline[i]) return;
       const RInstr &in = ins[i];
       auto opnd = [&](int r) { emit_operand(out, ins, pl, r); };
-      // Emit `fma(a, b, c)` for a folded MUL (`mul` = a*b) and its addend. The SSA has no subtract
-      // opcode — a difference is an RADD against an RNEG — so when that RNEG is single-use the minus
-      // is spelled here, as `fma(a, b, -c)`, instead of taking a line of its own.
+      // Emit `NT_FMAD(a, b, c)` (`NT_FMAF` in float) for a folded MUL (`mul` = a*b) and its addend.
+      // The SSA has no subtract opcode — a difference is an RADD against an RNEG — so when that RNEG
+      // is single-use the minus is spelled here, as `NT_FMAD(a, b, -c)`, instead of taking a line of
+      // its own.
       auto fma3 = [&](int mul, int addend) {
         const bool neg = addend >= 0 && pl.negFold[static_cast<std::size_t>(addend)];
-        out << "fma(";
+        out << codegen::emit_fma() << "(";
         opnd(ins[static_cast<std::size_t>(mul)].a);
         out << ", ";
         opnd(ins[static_cast<std::size_t>(mul)].b);

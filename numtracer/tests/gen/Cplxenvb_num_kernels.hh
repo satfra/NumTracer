@@ -2,6 +2,15 @@
 #pragma once
 #include <cmath>
 #include <complex>
+#ifndef NT_FMAF
+#if defined(__NVCC__) && defined(__CUDA_ARCH__)
+#define NT_FMAF(a, b, c) __nvvm_fma_rn_f(a, b, c)
+#define NT_FMAD(a, b, c) __nvvm_fma_rn_d(a, b, c)
+#else
+#define NT_FMAF(a, b, c) fma(a, b, c)
+#define NT_FMAD(a, b, c) fma(a, b, c)
+#endif
+#endif
 namespace numtracer_kernels { namespace cplxenvb_num {
 #ifndef NT_TRACE_COMPLEX
 #define NT_TRACE_COMPLEX std::complex<double>
@@ -37,16 +46,16 @@ static inline nt_complex_t tr0([[maybe_unused]] const double *f) {
   const double s5 = f[3];
   const double s6 = s3*s5;
   const double s7 = 0.5;
-  const double s9 = fma(s6, s7, s4);
+  const double s9 = NT_FMAD(s6, s7, s4);
   const double s10 = f[0];
   const double s11 = s0*s10;
-  const double s13 = fma(s7, s11, s9);
+  const double s13 = NT_FMAD(s7, s11, s9);
   const double s14 = 8;
   const double s15 = s13*s14;
   const double s16 = f[2];
   const double s17 = f[7];
   const double s18 = s10*s16;
-  const double s21 = fma(s18, (-0.5), s17);
+  const double s21 = NT_FMAD(s18, (-0.5), s17);
   const double s22 = s14*s21;
   return nt_complex_t{s15, s22};
 }

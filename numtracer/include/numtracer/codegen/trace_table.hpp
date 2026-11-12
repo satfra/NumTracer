@@ -449,11 +449,11 @@ namespace numtracer::inline network
         out << "    " << T << " h_;\n";
         out << "    if (le_) {\n      h_ = " << entry(t.n1) << ";\n";
         for (int n = t.n1 - 1; n >= t.n0; --n)
-          out << "      h_ = fma(h_, r_, " << entry(n) << ");\n";
+          out << "      h_ = " << codegen::emit_fma() << "(h_, r_, " << entry(n) << ");\n";
         if (t.n0) out << "      h_ *= powr<" << t.n0 << ">(r_);\n";
         out << "    } else {\n      h_ = " << entry(t.n0) << ";\n";
         for (int n = t.n0 + 1; n <= t.n1; ++n)
-          out << "      h_ = fma(h_, r_, " << entry(n) << ");\n";
+          out << "      h_ = " << codegen::emit_fma() << "(h_, r_, " << entry(n) << ");\n";
         if (t.D - t.n1) out << "      h_ *= powr<" << t.D - t.n1 << ">(r_);\n";
         out << "    }\n";
       }

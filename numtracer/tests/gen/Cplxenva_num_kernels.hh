@@ -2,6 +2,15 @@
 #pragma once
 #include <cmath>
 #include <complex>
+#ifndef NT_FMAF
+#if defined(__NVCC__) && defined(__CUDA_ARCH__)
+#define NT_FMAF(a, b, c) __nvvm_fma_rn_f(a, b, c)
+#define NT_FMAD(a, b, c) __nvvm_fma_rn_d(a, b, c)
+#else
+#define NT_FMAF(a, b, c) fma(a, b, c)
+#define NT_FMAD(a, b, c) fma(a, b, c)
+#endif
+#endif
 namespace numtracer_kernels { namespace cplxenva_num {
 #ifndef NT_TRACE_COMPLEX
 #define NT_TRACE_COMPLEX std::complex<double>
@@ -40,12 +49,12 @@ static inline nt_complex_t tr0([[maybe_unused]] const double *f) {
   const double s6 = f[0];
   const double s7 = s5*s6;
   const double s8 = f[5];
-  const double s10 = fma(s2, s7, s8);
+  const double s10 = NT_FMAD(s2, s7, s8);
   const double s11 = f[6];
   const double s12 = s11*s11;
   [[maybe_unused]] const double s14 = -1;
   const double s15 = -s12;
-  const double s16 = fma(s8, s10, s15);
+  const double s16 = NT_FMAD(s8, s10, s15);
   const double s17 = s1*s4;
   [[maybe_unused]] const double s18 = 1;
   const double s19 = s16+s17;
@@ -54,60 +63,60 @@ static inline nt_complex_t tr0([[maybe_unused]] const double *f) {
   const double s22 = s8*s21;
   const double s23 = s6*s22;
   const double s25 = s2*s23;
-  const double s26 = fma(s5, s19, s25);
+  const double s26 = NT_FMAD(s5, s19, s25);
   const double s27 = s8*s8;
   const double s28 = s15+s27;
   const double s29 = s17+s28;
   const double s31 = s5*s26;
-  const double s32 = fma(s21, s29, s31);
+  const double s32 = NT_FMAD(s21, s29, s31);
   const double s33 = s0*s0;
   const double s35 = s12-s33;
   const double s37 = s27-s35;
-  const double s39 = fma(s1, s1, s37);
+  const double s39 = NT_FMAD(s1, s1, s37);
   const double s40 = s5*s39;
   const double s41 = s8*s40;
   const double s43 = s2*s41;
-  const double s44 = fma(s6, s32, s43);
-  const double s46 = fma(s1, s2, s0);
+  const double s44 = NT_FMAD(s6, s32, s43);
+  const double s46 = NT_FMAD(s1, s2, s0);
   const double s47 = -0.33333333333333331;
-  const double s49 = fma(s33, s47, s12);
-  const double s51 = fma(s27, s47, s49);
+  const double s49 = NT_FMAD(s33, s47, s12);
+  const double s51 = NT_FMAD(s27, s47, s49);
   const double s52 = s1*s46;
   const double s53 = 0.66666666666666663;
-  const double s55 = fma(s52, s53, s51);
+  const double s55 = NT_FMAD(s52, s53, s51);
   const double s56 = s0*s28;
   const double s58 = s53*s56;
-  const double s59 = fma(s1, s55, s58);
+  const double s59 = NT_FMAD(s1, s55, s58);
   const double s61 = s6*s44;
   const double s62 = s53*s61;
-  const double s63 = fma(s0, s59, s62);
+  const double s63 = NT_FMAD(s0, s59, s62);
   const double s64 = -0.75;
-  const double s66 = fma(s1, s64, s0);
-  const double s68 = fma(s5, s5, s21);
+  const double s66 = NT_FMAD(s1, s64, s0);
+  const double s68 = NT_FMAD(s5, s5, s21);
   const double s69 = s6*s6;
-  const double s71 = fma(s68, s69, s37);
+  const double s71 = NT_FMAD(s68, s69, s37);
   const double s74 = s71*(-0.25);
-  const double s75 = fma(s1, s66, s74);
+  const double s75 = NT_FMAD(s1, s66, s74);
   const double s76 = s5*s8;
   const double s78 = s2*s76;
-  const double s79 = fma(s6, s68, s78);
+  const double s79 = NT_FMAD(s6, s68, s78);
   const double s80 = s1*s79;
   const double s82 = s0*s75;
-  const double s83 = fma(s6, s80, s82);
+  const double s83 = NT_FMAD(s6, s80, s82);
   const double s84 = s11*s83;
   const double s86 = s0*s1;
-  const double s87 = fma(s6, s76, s86);
+  const double s87 = NT_FMAD(s6, s76, s86);
   const double s88 = f[4];
   const double s90 = s2*s87;
-  const double s91 = fma(s84, s88, s90);
+  const double s91 = NT_FMAD(s84, s88, s90);
   const double s92 = f[3];
   const double s93 = s63*s92;
-  const double s96 = fma(s93, (0.75), s91);
+  const double s96 = NT_FMAD(s93, (0.75), s91);
   const double s98 = s96*(16);
-  const double s100 = fma(s83, s92, s3);
+  const double s100 = NT_FMAD(s83, s92, s3);
   const double s102 = s63*s88;
   const double s103 = s64*s102;
-  const double s104 = fma(s11, s100, s103);
+  const double s104 = NT_FMAD(s11, s100, s103);
   const double s106 = s104*(-16);
   return nt_complex_t{s98, s106};
 }

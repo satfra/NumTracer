@@ -876,7 +876,9 @@ ntGenMainEmission[ncomp_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDresse
           If[complexQ,
             "#include <complex>\\n",
             ""
-          ] <> "namespace " <> kernelNs <> " { namespace \" << hns << \" {\\n\";\n",
+          ] <> "\";\n",
+        "  numtracer::codegen::emit_fma_macros(std::cout);\n",
+        "  std::cout << \"namespace " <> kernelNs <> " { namespace \" << hns << \" {\\n\";\n",
         If[complexQ,
           "  std::cout << \"#ifndef NT_TRACE_COMPLEX\\n#define NT_TRACE_COMPLEX std::complex<" <> $ntRealT <> ">\\n#endif\\nusing nt_complex_t = NT_TRACE_COMPLEX;\\n\";\n",
           ""],

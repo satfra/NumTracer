@@ -2,6 +2,15 @@
 #pragma once
 #include <cmath>
 #include <complex>
+#ifndef NT_FMAF
+#if defined(__NVCC__) && defined(__CUDA_ARCH__)
+#define NT_FMAF(a, b, c) __nvvm_fma_rn_f(a, b, c)
+#define NT_FMAD(a, b, c) __nvvm_fma_rn_d(a, b, c)
+#else
+#define NT_FMAF(a, b, c) fma(a, b, c)
+#define NT_FMAD(a, b, c) fma(a, b, c)
+#endif
+#endif
 namespace DiFfRG { namespace etapil_num {
 #ifndef NT_TRACE_COMPLEX
 #define NT_TRACE_COMPLEX std::complex<double>
@@ -48,12 +57,12 @@ static inline double tr0([[maybe_unused]] const double *f) {
   const double s6 = f[8];
   const double s7 = s6*s6;
   const double s10 = s5*(0.5);
-  const double s11 = fma(s1, s7, s10);
+  const double s11 = NT_FMAD(s1, s7, s10);
   const double s12 = f[7];
   const double s13 = s11*s12;
   const double s14 = f[6];
   const double s17 = s13*(-0.001);
-  const double s18 = fma(s11, s14, s17);
+  const double s18 = NT_FMAD(s11, s14, s17);
   const double s19 = f[5];
   const double s20 = s18*s19;
   const double s21 = f[11];
@@ -65,7 +74,7 @@ static inline double tr0([[maybe_unused]] const double *f) {
   const double s27 = f[4];
   const double s28 = s27*s27;
   [[maybe_unused]] const double s30 = -1;
-  const double s32 = fma(s20, s28, -s26);
+  const double s32 = NT_FMAD(s20, s28, -s26);
   const double s33 = s1*s19;
   const double s34 = s28*s33;
   const double s35 = s4*s34;
@@ -75,18 +84,18 @@ static inline double tr0([[maybe_unused]] const double *f) {
   const double s39 = f[0];
   const double s40 = s39*s39;
   const double s41 = s38*s40;
-  const double s44 = fma(s14, s32, -s41);
+  const double s44 = NT_FMAD(s14, s32, -s41);
   const double s45 = s3*s24;
   const double s46 = s36*s45;
   const double s47 = f[12];
   const double s48 = s39*s46;
   const double s49 = -0.5;
-  const double s51 = fma(s48, s49, s47);
+  const double s51 = NT_FMAD(s48, s49, s47);
   const double s52 = s3*s51;
   const double s53 = s36*s52;
   const double s55 = s6*s44;
   const double s56 = s49*s55;
-  const double s57 = fma(s39, s53, s56);
+  const double s57 = NT_FMAD(s39, s53, s56);
   const double s58 = s19*s28;
   const double s59 = s2*s58;
   const double s60 = s3*s4;
@@ -95,14 +104,14 @@ static inline double tr0([[maybe_unused]] const double *f) {
   const double s63 = s37*s62;
   const double s64 = s40*s63;
   const double s67 = s64*(0.25);
-  const double s68 = fma(s6, s57, s67);
+  const double s68 = NT_FMAD(s6, s57, s67);
   const double s69 = s13*s19;
   const double s70 = s28*s69;
   const double s71 = s4*s70;
   const double s72 = s37*s71;
   const double s73 = s40*s72;
   const double s76 = s73*(-0.00050000000000000001);
-  const double s77 = fma(s14, s68, s76);
+  const double s77 = NT_FMAD(s14, s68, s76);
   const double s78 = s14*s77;
   const double s80 = s78*(72);
   return s80;

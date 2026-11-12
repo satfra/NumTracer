@@ -2,6 +2,15 @@
 #pragma once
 #include <cmath>
 #include <complex>
+#ifndef NT_FMAF
+#if defined(__NVCC__) && defined(__CUDA_ARCH__)
+#define NT_FMAF(a, b, c) __nvvm_fma_rn_f(a, b, c)
+#define NT_FMAD(a, b, c) __nvvm_fma_rn_d(a, b, c)
+#else
+#define NT_FMAF(a, b, c) fma(a, b, c)
+#define NT_FMAD(a, b, c) fma(a, b, c)
+#endif
+#endif
 namespace DiFfRG { namespace zq_num {
 #ifndef NT_TRACE_COMPLEX
 #define NT_TRACE_COMPLEX std::complex<double>
@@ -38,19 +47,19 @@ static inline double tr0([[maybe_unused]] const double *f) {
   const double s8 = f[5];
   const double s9 = s8*s8;
   [[maybe_unused]] const double s11 = -1;
-  const double s13 = fma(s5, s9, -s7);
+  const double s13 = NT_FMAD(s5, s9, -s7);
   const double s14 = s3*s7;
-  const double s17 = fma(s1, s13, -s14);
+  const double s17 = NT_FMAD(s1, s13, -s14);
   const double s18 = s1*s9;
   const double s20 = s7-s18;
   const double s21 = f[4];
   const double s22 = s17*s21;
-  const double s25 = fma(s22, (-0.5), s20);
+  const double s25 = NT_FMAD(s22, (-0.5), s20);
   const double s26 = s20*s21;
   const double s27 = s2*s26;
   const double s28 = s0*s27;
   const double s29 = f[2];
-  const double s32 = fma(s25, s29, -s28);
+  const double s32 = NT_FMAD(s25, s29, -s28);
   const double s33 = s2*s32;
   const double s34 = s0*s33;
   const double s36 = s34*(-32);
@@ -61,10 +70,10 @@ static inline nt_complex_t tr1([[maybe_unused]] const double *f) {
   const double s1 = f[2];
   const double s2 = f[1];
   const double s3 = f[6];
-  const double s6 = fma(s1, s1, (0.5));
+  const double s6 = NT_FMAD(s1, s1, (0.5));
   const double s8 = s0*s6;
   const double s10 = s8*(-0.66666666666666663);
-  const double s11 = fma(s1, s2, s10);
+  const double s11 = NT_FMAD(s1, s2, s10);
   const double s12 = s3*s11;
   const double s13 = s0*s12;
   const double s15 = s13*(48);

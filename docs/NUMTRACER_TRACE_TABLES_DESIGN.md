@@ -95,7 +95,7 @@ From the prototype patch (`gpubench/tools/tracetab/diffrg_tab.patch`), cleaned u
 
 | question | decision |
 |---|---|
-| Q1 option | `"TraceTables" -> False \| True \| Automatic \| <\|"Balance" -> B, "Scales" -> {...}\|>`. The default stays `False` until measured on A100/H100. |
+| Q1 option | `"TraceTables" -> False \| True \| Automatic \| <\|"Balance" -> B, "Scales" -> {...}\|>`. Default `Automatic` in `MakeNTKernelDiFfRG` since the A100/H100 measurement (§12); `MakeNTKernelGroupDiFfRG` likewise; `MakeNTKernel` alone: `False`. |
 | Q2 scales | The radial variable comes from `"IntegrationVariables"`. Dimensionful external coordinates are inferred from frame homogeneity; `"Scales"` overrides; an ambiguous or failed inference is a hard error. |
 | Q3 balance | **Generation time only.** The generator decides per trace (inline flop vs B · bytes per node) and emits only that path for `map()`. Retuning needs a regeneration. |
 | Q4 DiFfRG | A new branch of `/mnt/data/Documents/Uni/Code/DiFfRG`, in a worktree so the uncommitted work stays untouched, installed to a separate prefix until merged. |
@@ -177,7 +177,7 @@ Each stage closes with its gate.
 ## 9. Stage 2 — done (2026-11-12)
 
 **Option.** `"TraceTables"` on `MakeNTKernel` (normalised by `ntTraceTableOption`) and on `MakeNTKernelDiFfRG`, where
-it is forwarded in the single-flow path; the kernel-group path does not have it yet.
+it is forwarded in the single-flow path; kernel groups: §13.
 
 | value | behaviour |
 |---|---|
@@ -268,8 +268,8 @@ it is forwarded in the single-flow path; the kernel-group path does not have it 
   are wrong.
 - **Full-run time to t = 1.25:** 176 s → 110 s.
 
-**Not done.** `map_points()`, the finite-T integrators, the kernel-group path (`MakeNTKernelGroupDiFfRG`), dressed and
-complex traces (done in Stage 4), and measurements on A100/H100.
+**Not done here.** `get()` / `map_points()` and kernel groups (§13), the finite-T integrators, dressed and complex traces
+(§11), measurements on A100/H100 (§12).
 
 ## 11. Stage 4 — dressed and complex traces (2026-11-12)
 
@@ -354,3 +354,36 @@ Results at t = 1.25: m2A −489.93677 vs −489.93723 (9e-7 relative), Zc(0) 0.9
 the tabulated run needs 288 instead of 306 RHS evaluations (different adaptive step sequence).
 
 Both flows use float kernels; the tables win on all three GPUs. The gain is smallest on the A100, but far from break-even.
+
+## 13. Kernel groups, get() and map_points()
+
+**Groups** (`MakeNTKernelGroupDiFfRG`, NumTracer only). Every member is generated with the group's `"TraceTables"`.
+The group kernel holds one table: the entries of the tabulated members one after the other (`ntGroupTableSpec`,
+CodegenTables.m), so `tab_size` is the sum of the members' and a member's `ttrN` reads `row_ + (offset) * stride_`.
+A member without a table keeps its inline traces. The tabulated members must agree in their scales and table axes;
+otherwise the group is untabulated (Automatic) or generation stops (explicit request). The single-flow emission is
+byte-identical (YM ZA, Zc, ZAcbc regenerated before/after).
+
+Nf2 `with_mesons` ZAqbq 1/4/7 group (double kernels; members tabulate 49/205, 104/411, 37/205 traces), `map()` on a
+64-point grid, RTX 4070, alternating: inline 15.8 ms, tables 11.7–12.9 ms (1.25–1.35×); max |Δ| / max |inline|
+≤ 1.2e-12.
+
+**map_points() and get()** (DiFfRG branch `trace-tables-points`): each keeps its own table, laid out box-node fastest
+(`data[(s·E + e)·NB + b]`), since there a team walks the nodes of one point. A shape is the masked external values of a
+point, i.e. of the first `tab_ext_mask.size()` arguments after the integration variables. map_points() deduplicates
+the shapes of its points on the host and rebuilds only when they change. get() reads a table only when it does not
+depend on the external point (`can_tab_get`: `tab_ext_mask` all false), built once; otherwise get() stays inline,
+because a get() per new shape would rebuild the table on every call (measured 0.76× on YM ZA3: the fill is a small
+latency-bound fp64 launch).
+
+RTX 4070, alternating, two binaries per case (tables vs `has_tab` hidden):
+
+| flow | call | inline | tables |
+|---|---|--:|--:|
+| Nf2 ZAqbq group (double, no shape axis) | 32 × get() | 32.6 ms | 24.4 ms (1.34×) |
+| Nf2 ZAqbq group | map_points, 64 points | 17.7 ms | 12.8 ms (1.38×) |
+| YM ZA3 (float, S1/SPhi masked) | map_points, 384 points, 8 shapes | 14.8 ms | 13.1 ms (1.13×) |
+| YM ZA3 | get() | 9.5 ms | 9.5 ms (inline by `can_tab_get`) |
+
+Max |Δ| / max |inline|: 1e-15 (ZAqbq), 7.5e-7 (ZA3, float). Not measured: map_points() whose point set changes on every
+call (a rebuild per call, as for get()).

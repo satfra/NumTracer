@@ -215,7 +215,7 @@ int main()
     check(has("void tab_fill0(double *out, const std::size_t stride,") &&
               has("tab_fill0(out + 0 * stride, stride, cos_chi, cos_theta, cos_phi);") && !has("tab_fill2("),
           "one fill per distinct tabulated trace, called from tab_fill");
-    check(has("nt_complex_t ttr0(") && has("return nt_complex_t{re_, im_};") && has("fma(h_, r_,") &&
+    check(has("nt_complex_t ttr0(") && has("return nt_complex_t{re_, im_};") && has("NT_FMAD(h_, r_,") &&
               has("h_ *= f[") && has("h_ = tab_scale<"),
           "ttr0: complex, Horner in r, dressing factors, s^d applied last");
     check(has("ttr1([[maybe_unused]] const double *row, [[maybe_unused]] const std::size_t st, const double *f) { return tr1(f); }"),
