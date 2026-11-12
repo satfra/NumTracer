@@ -184,6 +184,9 @@ Options[MakeNTKernelDiFfRG] =
     (* Forwarded to DiFfRG's MakeKernel: also emit map_points(dest, args...), the integral at many points in one
        launch, for a model's batched evaluate_batch. *)
     "MapPoints" -> False,
+    (* Forwarded to DiFfRG's MakeKernel: False for a flow that is only ever mapped. get() is a translation unit of
+       its own with its own copy of every trace, so on a large flow it costs as much device compile as map(). *)
+    "Get" -> True,
     "Decorator" -> Automatic, (* Automatic -> derived from Device *)
     "FlowDirectory" -> Automatic, (* Automatic -> DiFfRG`CodeTools`flowDir *)
     "GenDirectory" -> Automatic, (* Automatic -> a "gen" sibling of the flow directory *)
@@ -333,6 +336,9 @@ ntShareableDressings[params_List] :=
    set, so that a DiFfRG without the option keeps working. *)
 ntSharedGridsOpt[groups_] := If[groups === {}, {}, {"SharedGrids" -> groups}];
 
+(* "Get" for DiFfRG's MakeKernel/MakeKernelGroup, passed only when False for the same reason. *)
+ntGetOpt[get_] := If[TrueQ[get], {}, {"Get" -> False}];
+
 (* Positional second argument: the constant, mirroring DiFfRG's MakeKernel[kernelExpr, constExpr, ...].
    `constExpr` is a plain expression in p/k and the dressing names (e.g. ZA[p]), NOT an NTKernel.
    If it is also given as "Constant", the positional argument wins (it is spliced ahead of opts). *)
@@ -450,6 +456,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
       "Regulator" -> OptionValue["Regulator"],
       "RegulatorOpts" -> OptionValue["RegulatorOpts"],
       "MapPoints" -> OptionValue["MapPoints"],
+      Sequence @@ ntGetOpt[OptionValue["Get"]],
       Sequence @@ ntSharedGridsOpt[OptionValue["SharedGrids"]]};
     Internal`InheritedBlock[{DiFfRG`CodeTools`Directory`flowDir},
       DiFfRG`CodeTools`Directory`flowDir = flowDir;
@@ -555,7 +562,8 @@ MakeNTKernelGroupDiFfRG[ntks : {__NTKernel}, opts : OptionsPattern[]] :=
           "Parameters" -> params, "IntegrationVariables" -> OptionValue["IntegrationVariables"],
           "Coordinates" -> OptionValue["Coordinates"], "CoordinateArguments" -> OptionValue["CoordinateArguments"],
           "Regulator" -> OptionValue["Regulator"], "RegulatorOpts" -> OptionValue["RegulatorOpts"],
-          "MapPoints" -> OptionValue["MapPoints"], Sequence @@ ntSharedGridsOpt[OptionValue["SharedGrids"]]]]]];
+          "MapPoints" -> OptionValue["MapPoints"], Sequence @@ ntGetOpt[OptionValue["Get"]],
+          Sequence @@ ntSharedGridsOpt[OptionValue["SharedGrids"]]]]]];
 
     (* (2) every member as an ordinary flow under flows/<name>/<output>/: traces, generator, probe and manifest.
        Lookups are shared, and k-only lookups never hoisted, at the group level. *)
