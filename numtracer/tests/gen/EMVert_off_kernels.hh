@@ -6,6 +6,8 @@ template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i
 // fundamental-symbol env layout (fill f[i] per call):
 static inline constexpr int nenv = 0;
 static inline void fill(double *f, [[maybe_unused]] double p01, [[maybe_unused]] double p02, [[maybe_unused]] double p03, [[maybe_unused]] double p, [[maybe_unused]] double f0, [[maybe_unused]] double l1, [[maybe_unused]] double cos1, [[maybe_unused]] double phi) {
+  [[maybe_unused]] const auto ntkt0 = cos(phi);
+  [[maybe_unused]] const auto ntkt1 = sin(phi);
 }
 static inline double tr0([[maybe_unused]] const double *f) {
   return 0.0;

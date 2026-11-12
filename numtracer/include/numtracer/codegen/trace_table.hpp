@@ -473,6 +473,7 @@ namespace numtracer::inline network
     out << decor << " void " << name << "(double *out, const std::size_t stride, " << argSig << ") {\n";
     out << std::setprecision(17);
     if (!p.env.syms.empty()) {
+      out << fm.prologue;
       out << "  double f[" << p.env.syms.size() << "];\n";
       for (std::size_t i = 0; i < p.env.syms.size(); ++i)
         out << "  f[" << i << "] = " << fm.var(std::get<1>(p.env.syms[i])) << ";\n";

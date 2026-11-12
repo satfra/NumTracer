@@ -60,9 +60,12 @@ ntGridOf[d_, groups_List] :=
   With[{nm = ntParamName[d]},
     Replace[FirstPosition[groups, g_List /; MemberQ[ntParamName /@ g, nm], None, {1}], None -> nm]];
 
-ntShareGridLookups[drAtoms_List, integrand_, dress_List, groups_List] :=
-  Module[{dressPat, calls, uses, keys, sharedKeys, gix = <||>, glk = <||>, idxDecls = {}, valDecls = {}, nIdx = 0, nVal = 0},
+ntShareGridLookups[drAtoms_List, integrand_, dress_List, groups_List, argRules_List : {}] :=
+  Module[{dressPat, calls, uses, keys, sharedKeys, gix = <||>, glk = <||>, idxDecls = {}, valDecls = {}, nIdx = 0, nVal = 0,
+          renderArgs},
     If[dress === {}, Return[<|"Decls" -> {}, "Rules" -> {}|>]];
+    (* argRules: the temporaries of ntShareTranscendentals, declared before these lookups *)
+    renderArgs[c_] := StringRiffle[cppFlat /@ ((List @@ c) /. argRules), ", "];
     dressPat = Alternatives @@ (If[StringQ[#], Symbol["Global`" <> #], #]& /@ dress);
     calls = DeleteDuplicates @ Cases[{drAtoms, integrand}, (_?(MatchQ[#, dressPat]&))[__], {0, Infinity}];
 (* a dressing atom is rendered on its own, so every occurrence in the atoms is a separate lookup; COEN
@@ -76,19 +79,46 @@ ntShareGridLookups[drAtoms_List, integrand_, dress_List, groups_List] :=
           If[KeyExistsQ[sharedKeys, key] && !KeyExistsQ[gix, key],
             gix[key] = "ntgix" <> ToString[nIdx++];
             AppendTo[idxDecls, "[[maybe_unused]] const auto " <> gix[key] <> " = " <> d <> ".index(" <>
-              StringRiffle[cppFlat /@ (List @@ c), ", "] <> ");"]];
+              renderArgs[c] <> ");"]];
           If[KeyExistsQ[gix, key] || uses[c] > 1,
             glk[c] = "ntglk" <> ToString[nVal++];
             AppendTo[valDecls, "[[maybe_unused]] const auto " <> glk[c] <> " = " <>
               If[KeyExistsQ[gix, key],
                 d <> ".at(" <> gix[key] <> ")",
-                d <> "(" <> StringRiffle[cppFlat /@ (List @@ c), ", "] <> ")"] <> ";"]]]],
+                d <> "(" <> renderArgs[c] <> ")"] <> ";"]]]],
       calls];
     ntLog["[interp] ", Length[calls], " distinct lookups: ", nIdx, " shared coordinate transform(s), ",
       nVal, " shared value(s)"];
     (* the index declarations first: the values read them *)
     <|"Decls" -> Join[idxDecls, valDecls],
-      "Rules" -> Dispatch @ KeyValueMap[#1 -> Symbol["Global`" <> #2]&, glk]|>];
+      "Rules" -> KeyValueMap[#1 -> Symbol["Global`" <> #2]&, glk]|>];
+
+(* ---- kinematic transcendentals --------------------------------------------------------------
+   sin(SPhi), cos(SPhi), ... of the kernel's own scalars recur all over one body: in the lookup
+   arguments above, in the dressing atoms dr_<id>, and in every lookup COEN hoists. A device compiler
+   does not merge the repeats -- nvcc inlines a range reduction with local-memory stores per textual
+   sinf -- so each one costs code: on Nf2 ZA4tadpole, 1052 of them were ~90% of post()'s PTX, and
+   computing them once cut ptxas time 1.8x. Each is computed once, before the lookups that may read it:
+
+     [[maybe_unused]] const auto ntkt0 = sin(SPhi);
+
+   Like the lookups, only where code is rendered (ntKernelPreamble, ntKernelFn); the probe, the
+   evenness proof and the finite-extent classification keep reading the calls. *)
+$ntKinematicTranscendental = Sin | Cos | Tan | Sinh | Cosh | Tanh | ArcTan | Log;
+
+ntShareTranscendentals[exprs_List] :=
+  Module[{calls, names},
+    calls = DeleteDuplicates @ Cases[exprs, $ntKinematicTranscendental[_Symbol], {0, Infinity}];
+    names = Table["ntkt" <> ToString[i - 1], {i, Length[calls]}];
+    <|"Decls" -> MapThread["[[maybe_unused]] const auto " <> #2 <> " = " <> cppFlat[#1] <> ";"&, {calls, names}],
+      "Rules" -> MapThread[#1 -> Symbol["Global`" <> #2]&, {calls, names}]|>];
+
+(* What a kernel body declares up front -- the transcendentals, then the shared lookups, which may
+   read them -- and the rules that render the body against those declarations. *)
+ntBodyLookups[drAtoms_List, integrands_, dress_List, groups_List] :=
+  Module[{trig = ntShareTranscendentals[{drAtoms, integrands}], lk},
+    lk = ntShareGridLookups[drAtoms, integrands, dress, groups, trig["Rules"]];
+    <|"Decls" -> Join[trig["Decls"], lk["Decls"]], "Rules" -> Dispatch[Join[lk["Rules"], trig["Rules"]]]|>];
 
 (* FINITE MATSUBARA EXTENT. Each term of a finite-T kernel carries one dR/dt insertion. Where the
    insertion's ARGUMENT is coercive in the Matsubara symbol, the term dies super-polynomially in it,
@@ -1747,10 +1777,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
       Message[mkGenerateKernel::emptynets, o["Name"], Length[nets["CoreNets"]], nGrp];
       Abort[]];
     hasDr = !FreeQ[nets["CoreNets"], _ntDressedCore];
-    lookups =
-      If[o["ShareInterpolatorIndex"] =!= {},
-        ntShareGridLookups[If[hasDr, nets["DrAtoms"], {}], integrand, o["ShareInterpolatorIndex"], o["SharedGrids"]],
-        <|"Decls" -> {}, "Rules" -> {}|>];
+    lookups = ntBodyLookups[If[hasDr, nets["DrAtoms"], {}], integrand, o["ShareInterpolatorIndex"], o["SharedGrids"]];
     o["LookupRules"] = lookups["Rules"];
     pre = ntKernelPreamble[o["AngleDefs"], fr["FillArgs"], nets["DrAtoms"], hasDr, o["NsHome"],
             o["SupportNamespace"], lookups];

@@ -616,6 +616,9 @@ namespace numtracer::inline network
     /// flagged a leaf complex.
     std::function<std::string(int /*invId*/)> invIm;
     std::function<std::string(int /*drId*/)> dressIm;
+    /// Statements printed at the top of every fill function, before the formulas: the temporaries
+    /// the formulas share (e.g. `const auto ntkt0 = sin(SPhi);`), each line ending in a newline.
+    std::string prologue;
   };
 
   NUMTRACER_FUNC void emit_fill(std::ostream &out, const GlobalEnv &g, const std::string &name,
@@ -633,6 +636,7 @@ namespace numtracer::inline network
   {
     out << std::setprecision(17);
     out << decor << " void " << name << "(" << codegen::emit_real_type() << " *f, " << argSig << ") {\n";
+    out << fm.prologue;
     for (std::size_t i = 0; i < g.syms.size(); ++i) {
       auto [kind, a, b] = g.syms[i];
       out << "  f[" << i << "] = "

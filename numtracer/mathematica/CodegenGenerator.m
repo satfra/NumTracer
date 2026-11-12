@@ -845,6 +845,8 @@ ntGenMainEmission[ncomp_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDresse
         "  fm.var = [](int id)->std::string {\n",
         Table["    if(id==" <> ToString[i - 1] <> ") return \"" <> ncomp["varFill"][[i]] <> "\";\n", {i, 1, Length[ncomp["varFill"]]}],
         "    return \"" <> ntZeroLit[] <> "\"; };\n",
+        If[Lookup[ncomp, "fillPrologue", {}] === {}, "",
+          "  fm.prologue = \"" <> StringJoin[("  " <> # <> "\\n")& /@ ncomp["fillPrologue"]] <> "\";\n"],
 (* an atom the traces read but no projector registered has an empty denominator: fail, not 1/0 *)
         "  auto ntDen = [&](int id)->const Poly& {\n",
         "    const auto &d = frame.denominators();\n",

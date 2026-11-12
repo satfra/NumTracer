@@ -17,6 +17,8 @@ template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i
 //   f[10] = var(0)
 static inline constexpr int nenv = 11;
 static inline void fill(double *f, [[maybe_unused]] double p01, [[maybe_unused]] double p02, [[maybe_unused]] double p03, [[maybe_unused]] double p, [[maybe_unused]] double f0, [[maybe_unused]] double l1, [[maybe_unused]] double cos1, [[maybe_unused]] double phi) {
+  [[maybe_unused]] const auto ntkt0 = cos(phi);
+  [[maybe_unused]] const auto ntkt1 = sin(phi);
   f[0] = p03;
   f[1] = p02;
   f[2] = 1.0/((1.00000000000000000e+00)*(p02)*(p02) + (9.99999999999999889e-01)*(p)*(p));
@@ -25,8 +27,8 @@ static inline void fill(double *f, [[maybe_unused]] double p01, [[maybe_unused]]
   f[5] = 1.0/((1.00000000000000000e+00)*(p01)*(p01) + (1.00000000000000000e+00)*(p)*(p));
   f[6] = p;
   f[7] = l1;
-  f[8] = sqrt(1. - powr<2>(cos1)) * sin(phi);
-  f[9] = sqrt(1. - powr<2>(cos1)) * cos(phi);
+  f[8] = sqrt(1. - powr<2>(cos1)) * ntkt1;
+  f[9] = sqrt(1. - powr<2>(cos1)) * ntkt0;
   f[10] = f0;
 }
 static inline double tr0([[maybe_unused]] const double *f) {

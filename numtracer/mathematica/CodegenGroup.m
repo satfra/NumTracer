@@ -60,10 +60,8 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
 
     (* -- the shared lookups, over the dressing atoms and integrands of all members -- *)
     lookups =
-      If[shareDress =!= {},
-        ntShareGridLookups[DeleteDuplicates[Join @@ Map[If[#["HasDr"], #["DrAtoms"], {}]&, fronts]], fronts[[All, "Integrand"]],
-          shareDress, sharedGrids],
-        <|"Decls" -> {}, "Rules" -> {}|>];
+      ntBodyLookups[DeleteDuplicates[Join @@ Map[If[#["HasDr"], #["DrAtoms"], {}]&, fronts]], fronts[[All, "Integrand"]],
+        shareDress, sharedGrids];
     dr = ntGroupDrAtoms[fronts, cppFlat[# /. lookups["Rules"]]&];
 
     (* -- each member's integrand reads its trace values from scalars taken right after its fill -- *)

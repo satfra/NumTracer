@@ -210,7 +210,7 @@ unitLoopOkQ[frame_, pSym_, magSym_] := !ntEnvFlag["NT_NO_UNIT_GROUPS"] && AllTru
 numericComponents::nonpoly = "Non-polynomial momentum components (a fractional power of a symbol remains): `1`";
 
 numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
-    {compExpr, usyms, nsym, mpcpp, compCpp, varFill, vfill, idx, units},
+    {compExpr, usyms, nsym, mpcpp, compCpp, trig, varFill, vfill, idx, units},
     (* 4 components per momentum Base (polynomial in the user symbols). *)
     compExpr = Association @ KeyValueMap[#2["Base"] -> resolveComponents[#1, frame]&, env];
     (* reject only fractional powers of NON-numeric bases (e.g. Sqrt[1-cos1^2] not rewritten to a
@@ -230,8 +230,12 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
           "(" <> StringRiffle[("frame.mono({" <> StringRiffle[ToString /@ #[[1]], ","] <> "},Cx{" <> cppNum[Re[#[[2]]]] <> "," <> cppNum[Im[#[[2]]]] <> "})")& /@ rules, " + "] <> ")"
         ]];
     compCpp = Association @ KeyValueMap[#1 -> (mpcpp /@ #2)&, compExpr];
+    (* sin(SPhi) etc. recur across the symbol formulas, and the frame's denominators repeat those
+       formulas again (the frame symbols are NAMED by them): computed once at the top of fill() and
+       of every table fill instead, see ntShareTranscendentals *)
+    trig = ntShareTranscendentals[Lookup[symDefs, usyms, Nothing]];
     vfill[s_] := If[KeyExistsQ[symDefs, s],
-        cppFlat[symDefs[s]],
+        cppFlat[symDefs[s] /. trig["Rules"]],
         SymbolName[s]];
     (* indexed by Poly var id (0-based) *)
     varFill = vfill /@ usyms;
@@ -253,6 +257,8 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
       "compExpr" -> compExpr,
       "compCpp" -> compCpp,
       "varFill" -> varFill,
+      (* the declarations varFill (and so symNamesCpp) reads: printed first in every fill function *)
+      "fillPrologue" -> trig["Decls"],
       "symNamesCpp" -> (("(" <> # <> ")")& /@ varFill),
       (* default -1 (comp size 0) for a purely scalar integrand with an empty component env:
          Max[{}] is -Infinity, which would leak into the C++ as the comp() vector size *)
