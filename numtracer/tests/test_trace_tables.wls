@@ -176,6 +176,21 @@ Module[{o = <|"TraceTables" -> <|"Balance" -> 1., "Scales" -> Automatic, "Explic
     ntTraceTableSpec[o, nc, {Symbol["l1"], Symbol["cos1"], Symbol["k"], Symbol["S0"], Symbol["kk"], Symbol["S1"]},
       {"S0", "S1"}, None] === None]];
 
+Print["=== 7. the reason a flow cannot be tabulated ==="];
+(* the text of the messages `expr` issues *)
+SetAttributes[messagesOf, HoldFirst];
+messagesOf[expr_] := Module[{s = OpenWrite[]},
+  Block[{$Messages = {s}}, CheckAbort[expr, Null]];
+  ReadString[Close[s]]];
+Module[{o = <|"TraceTables" -> <|"Balance" -> 0., "Scales" -> Automatic, "Explicit" -> True|>|>, l1, p, c1, s1, nc},
+  nc = <|"complex" -> False, "usyms" -> {l1, p, c1, s1},
+         "compExpr" -> <|0 -> {p, 0, 0, 0}, 1 -> {l1 c1, l1 s1, 0, 0}|>,
+         "varFill" -> {"l1", "p", "cos1", "sqrt(1. - powr<2>(cos1))"}|>;
+  (* cos1 first: it is taken as the radial variable, and no external scale is homogeneous with it *)
+  check["an explicit request that cannot be met says why",
+    StringContainsQ[messagesOf[ntTraceTableSpec[o, nc, {Symbol["cos1"], Symbol["l1"], Symbol["p"]}, Automatic, None]],
+      "no choice of external scale"]]];
+
 Print[""];
 Print[If[$fail === 0, "ALL " <> ToString[nRan] <> " PASSED", ToString[$fail] <> " of " <> ToString[nRan] <> " FAILED"]];
 End[];

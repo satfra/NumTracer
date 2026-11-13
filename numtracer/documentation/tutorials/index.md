@@ -95,6 +95,7 @@ digraph tutorials {
     s20 [label="20 · making it generate", URL="../tutorials/step-20.html"];
     s21 [label="21 · GPU & complex",      URL="../tutorials/step-21.html"];
     s22 [label="22 · validate & debug",   URL="../tutorials/step-22.html"];
+    s23 [label="23 · trace tables",       URL="../tutorials/step-23.html"];
   }
 
   s01 -> s02; s01 -> s03; s01 -> s04;
@@ -109,6 +110,7 @@ digraph tutorials {
   s12 -> s13; s13 -> s14;
   s14 -> s15; s14 -> s19;
   s15 -> s20; s15 -> s22; s20 -> s22;
+  s09 -> s23; s15 -> s23;
 }
 ```
 
@@ -138,6 +140,7 @@ digraph tutorials {
 | 20 | [Making a hard flow generate](step-20.md) | Phase A/B, thread caps, RAM, chunking, dedup, offline generation. | `performance` `build` |
 | 21 | [GPU kernels and complex traces](step-21.md) | Device decorators, the two-phase integrator, the real-probe verdict. | `gpu` `cuda` `complex` |
 | 22 | [Validating and debugging a kernel](step-22.md) | Oracles, the codegen blind spot in `ctest`, and how to read a failure. | `testing` `debugging` |
+| 23 | [Trace tables](step-23.md) | Fill each trace's coefficients once per run and rebuild it at any scale: the option, the emitted code, the DiFfRG side. | `codegen` `performance` `diffrg` |
 
 ## By topic
 
@@ -162,6 +165,10 @@ Steps [10](step-10.md), [11](step-11.md), [12](step-12.md), [13](step-13.md),
 Step [20](step-20.md) first; then [21](step-21.md) if you are targeting a GPU.
 :::
 
+:::{grid-item-card} My flow runs too slowly
+Step [23](step-23.md): tabulate the traces; then [21](step-21.md) for the GPU side.
+:::
+
 :::{grid-item-card} My kernel gives the wrong number
 Step [22](step-22.md), then [11](step-11.md) — most "engine bugs" turn out to be
 projector conventions.
@@ -182,7 +189,7 @@ compiler**. Every step states its tier at the top.
 | Tier | Requirements | Steps |
 |---|---|---|
 | **A** | A C++20 compiler and CMake. Nothing else. | 1–5, 16, 17, 18 |
-| **B** | …plus a Wolfram kernel and [FunKit](https://github.com/satfra/FunKit). The scripts build their networks *by hand*, so no TensorBases, no FORM, no DiFfRG. | 6, 7, 8, 9, 19, 21 |
+| **B** | …plus a Wolfram kernel and [FunKit](https://github.com/satfra/FunKit). The scripts build their networks *by hand*, so no TensorBases, no FORM, no DiFfRG. | 6, 7, 8, 9, 19, 21, 23 |
 | **C** | …plus TensorBases and DiFfRG — the rest of the fRG toolchain. | 10–15, 20, 22 |
 
 ```{admonition} Why tier B needs FunKit
@@ -254,4 +261,5 @@ step-19
 step-20
 step-21
 step-22
+step-23
 ```

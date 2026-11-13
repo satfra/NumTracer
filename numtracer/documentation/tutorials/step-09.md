@@ -1,6 +1,7 @@
 # step-09: Codegen options — what each one changes
 
-*Builds on: [step-06](step-06.md) · Built on by: [step-20](step-20.md), [step-21](step-21.md) ·
+*Builds on: [step-06](step-06.md) · Built on by: [step-20](step-20.md), [step-21](step-21.md),
+[step-23](step-23.md) ·
 Tags: `codegen`, `options` · **Tier B** (a Wolfram kernel and FunKit)*
 
 ## Introduction
@@ -26,7 +27,7 @@ From `CodegenKernel.m`:
 "DressingType","ShareInterpolatorIndex","HoistLoopConstLookups","RegulatorTemplate",
 "RegulatorAlias","RealProbe","PruneRealTraces","ComplexRuntimeProjection","ComplexEndProjection",
 "RealOutput","Constant","Offline","CoordinateArgs","MatsubaraVar","DecayingRegulators",
-"MatsubaraFiniteExtent"
+"MatsubaraFiniteExtent","TraceTables"
 ```
 
 They fall into seven groups:
@@ -36,7 +37,7 @@ They fall into seven groups:
 | **Identity** — what the kernel is called and where it lives | `Name`, `Namespace`, `KernelNamespace`, `SupportNamespace`, `Decorator`, `DeviceTarget` | here, and [step-21](step-21.md) for the device decorator |
 | **Interface** — what it takes and returns | `Dressings`, `DressingType`, `ScalarParams`, `ADParams`, `Constant`, `CoordinateArgs`, `AngleDefs` | here, [step-13](step-13.md), [step-14](step-14.md) |
 | **Target** — what it compiles against | `RuntimeInclude`, `ExtraIncludes`, `IncludeDir`, `RegulatorTemplate`, `RegulatorAlias` | [step-15](step-15.md) |
-| **Emission strategy** — how it is spelled | `Components`, `SymbolDefs`, `ShareInterpolatorIndex`, `HoistLoopConstLookups` | here, [step-20](step-20.md), [step-21](step-21.md) |
+| **Emission strategy** — how it is spelled | `Components`, `SymbolDefs`, `ShareInterpolatorIndex`, `HoistLoopConstLookups`, `TraceTables` | here, [step-20](step-20.md), [step-21](step-21.md), [step-23](step-23.md) |
 | **Build orchestration & correctness probes** | `Offline`, `RunGenerator`, `RealProbe`, `PruneRealTraces` | [step-20](step-20.md), [step-21](step-21.md) |
 | **Complex flows** — how a complex integrand becomes a real kernel | `ComplexRuntimeProjection`, `ComplexEndProjection`, `RealOutput` | below |
 | **Finite temperature & precision** | `MatsubaraVar`, `DecayingRegulators`, `MatsubaraFiniteExtent`, `ComputeType` | below |

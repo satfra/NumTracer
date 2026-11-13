@@ -248,3 +248,13 @@ nt_tutorial_wls(fixed_components
                 Fx_4_kernel.hh Fx_4_kernels.hh
                 Fx_4ref_kernel.hh Fx_4ref_kernels.hh
                 Fx_g_kernel.hh Fx_g_kernels.hh)
+
+# ===========================================================================
+# V. Scale and trust — tier B
+# ===========================================================================
+# step-23 — trace tables: fill the coefficients once per run, rebuild every trace from them
+nt_tutorial_wls(trace_tables
+                step-23-trace-tables/trace_tables.wls
+                step-23-trace-tables/check_trace_tables.cpp
+                Tab_kernel.hh Tab_kernels.hh
+                Tab_auto_kernel.hh Tab_auto_kernels.hh)

@@ -104,7 +104,8 @@ ntTraceTableSpec[o_, ncomp_, args_List, coordNames_, matsubaraSym_] :=
             why = "its coordinate arguments do not directly follow the integration variables"]]]];
     If[why === None,
       sc = ntTraceTableScales[ncomp, SymbolName[First[args]], cands, tt["Scales"]];
-      If[FailureQ[sc], why = sc["Message"]]];
+      (* the reason sits in the Failure's association: its "Message" property reads only a "MessageTemplate" *)
+      If[FailureQ[sc], why = sc[[2]]["Message"]]];
     If[why =!= None,
       If[tt["Explicit"],
         Message[MakeNTKernel::ttoff, why]; Abort[],
