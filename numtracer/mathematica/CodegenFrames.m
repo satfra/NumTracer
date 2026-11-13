@@ -105,6 +105,16 @@ unitLoopSpatialQ[comps_, magSym_] := Module[{cc = PowerExpand[comps]},
   AllTrue[Range[2, 4], magPropQ[cc[[#]], magSym]&] &&
   AnyTrue[Range[2, 4], (Coefficient[cc[[#]], magSym] =!= 0)&]];
 
+(* {magnitude, direction} of a momentum that is a magnitude symbol times a unit direction that is not
+   constant, e.g. lm (Sqrt[1-uu] Cos[psi], Sqrt[1-uu] Sin[psi], Sqrt[uu], 0); None otherwise. *)
+magnitudeAndUnitDir[comps_] := Module[{cc = PowerExpand[comps]},
+  SelectFirst[
+    Function[m, {m, Coefficient[#, m] & /@ cc}] /@ Select[Variables[cc], Symbol === Head[#] &],
+    Function[md, With[{m = md[[1]], dir = md[[2]]},
+      AllTrue[cc, magPropQ[#, m] &] && FreeQ[dir, m] && !AllTrue[dir, NumericQ] &&
+        Simplify[dir . dir] === 1]],
+    None]];
+
 unitLoopMixedOkQ[frame_, magSym_] :=
   !ntEnvFlag["NT_NO_UNIT_GROUPS"] &&
     (* at least one momentum is a magSym-proportional loop — either FULLY (all four components,
@@ -115,17 +125,19 @@ unitLoopMixedOkQ[frame_, magSym_] :=
       AllTrue[cc, (fullLoopQ[#, magSym] || unitLoopSpatialQ[#, magSym] || FreeQ[#, magSym])&]];
 
 (* MIXED unit-loop spec: loop momenta as magnitude × unit-direction, externals (which may carry shape
-   coordinates, e.g. the (S0,S1,SPhi) frames) through polyFrameSpec's radical-minting. The loop is
-   frame-independent (∝ l1 in every frame), so it keeps the unit-direction treatment regardless of
-   the externals; sending the whole frame through polyFrameSpec makes the traces far larger. Keeping
-   polyFrameSpec's cos/sin symbols with {cos, ntSin$cos} pair groups instead is WORSE still (sin² →
+   coordinates, e.g. the (S0,S1,SPhi) frames) through polyFrameSpec's radical-minting, except an external
+   that is itself a magnitude times a unit direction (magnitudeAndUnitDir), which is treated like the
+   loop. The loop is frame-independent (∝ l1 in every frame), so it keeps the unit-direction treatment
+   regardless of the externals; sending the whole frame through polyFrameSpec makes the traces far larger.
+   Keeping polyFrameSpec's cos/sin symbols with {cos, ntSin$cos} pair groups instead is WORSE still (sin² →
    1 − cos² expands monomials binomially); the gain comes from the loop entering at degree 1.
    Loop tags with the same direction coefficients (e.g. l1 and its fermionic partner lf1 = l1 +
    (pi T, 0, 0, 0)) share one ntU$ set and one unit group, so their monomials merge and reduce
    against the same Σ U² = 1; `dirSyms` memoises by (kind, directions).
    NT_NO_UNIT_GROUPS sends the whole frame through polyFrameSpec (grading control and rollback). *)
 unitLoopMixedFrameSpec[frame_, magSym_] := Module[
-    {svKeys, loopKeys, spatKeys, extFrame, pf, defs, groups = {}, n = 0, nf, nfS, dirSeen = <||>, dirSyms},
+    {svKeys, loopKeys, spatKeys, extUnit, extFrame, pf, defs, groups = {}, n = 0, nf, nfS, nfE, dirSeen = <||>,
+     dirSyms},
     (* direction list -> list of ntU$ symbols (0 where the direction vanishes); one unit group per
        DISTINCT direction list, minted on first sight and reused by every later key that matches *)
     dirSyms[kind_, dirs_List] :=
@@ -151,11 +163,17 @@ unitLoopMixedFrameSpec[frame_, magSym_] := Module[
     loopKeys = Select[Keys[frame], !MemberQ[svKeys, #] && fullLoopQ[PowerExpand[frame[#]], magSym]&];
     spatKeys = Select[Keys[frame],
       (!MemberQ[svKeys, #] && !MemberQ[loopKeys, #] && unitLoopSpatialQ[frame[#], magSym])&];
+    (* externals that are a magnitude times a unit direction ride ntU$ symbols with a unit group, as the
+       loop does, so that their square reduces to the magnitude squared: key -> {magnitude, direction} *)
+    extUnit = DeleteCases[
+      Association @ Map[# -> magnitudeAndUnitDir[frame[#]] &,
+        Select[Keys[frame], !MemberQ[Join[svKeys, loopKeys, spatKeys], #] &]],
+      None];
     (* externals — AND the spatial loops' temporal components — go through polyFrameSpec's
        sin/cos/radical minting, verbatim: a spatial loop is handed in as {l0, 0, 0, 0} so its
        temporal coordinate gets exactly the same treatment an external's would. *)
     extFrame = Join[
-      KeyDrop[frame, Join[loopKeys, spatKeys, svKeys]],
+      KeyDrop[frame, Join[loopKeys, spatKeys, svKeys, Keys[extUnit]]],
       Association @ Map[# -> {PowerExpand[frame[#]][[1]], 0, 0, 0}&, spatKeys]];
     {pf, defs} = polyFrameSpec[extFrame];
     (* full loops: comp_μ = magSym · ntU$n, one unit group per loop — unitLoopFrameSpec's treatment *)
@@ -180,11 +198,12 @@ unitLoopMixedFrameSpec[frame_, magSym_] := Module[
                 syms = dirSyms["spatial", Table[Coefficient[cc[[mu]], magSym], {mu, 2, 4}]];
                 Join[{pf[q][[1]]}, magSym syms]]],
           spatKeys];
+    nfE = Association @ KeyValueMap[#1 -> #2[[1]] dirSyms["ext", #2[[2]]] &, extUnit];
     (* spatial vectors LAST, off the finished components: whatever treatment the parent got — a
        polyFrameSpec external, a full unit loop, or a spatial unit loop — the spatial vector is that
        same component list with the temporal slot zeroed, sharing the parent's ntU$ symbols and its
        unit group. No new symbol, no new group. *)
-    With[{done = Join[KeyDrop[pf, spatKeys], nf, nfS]},
+    With[{done = Join[KeyDrop[pf, spatKeys], nf, nfS, nfE]},
       {Join[done, Association[(# -> ReplacePart[done[First[#]], 1 -> 0]) & /@ svKeys]],
        defs, groups}]];
 

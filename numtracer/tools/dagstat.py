@@ -56,7 +56,7 @@ DECOR_RE = (
     r"|__attribute__\(\(noinline\)\)|KOKKOS_[A-Z_]+)"
 )
 FUN_RE = re.compile(
-    r"^static\s+(?:" + DECOR_RE + r"\s+)*"
+    r"^(?:template <int = 0> )?static\s+(?:" + DECOR_RE + r"\s+)*"
     r"(void|double|float|nt_complex_t|std::complex<double>|auto)\s+(\w+)\("
 )
 RET_RE = re.compile(r"^\s*return\s+(.*);\s*$")

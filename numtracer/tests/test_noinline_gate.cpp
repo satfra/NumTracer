@@ -85,6 +85,7 @@ int main(int argc, char **argv)
     ok("host: large function stays inline", !outOfLined(big));
     ok("host: small function stays inline", !outOfLined(small));
     ok("host: keeps the Kokkos INLINE spelling", big.find("KOKKOS_INLINE_FUNCTION") != std::string::npos);
+    ok("host: a trace is a template (compiled only where called)", big.rfind(kLazyPrefix, 0) == 0);
 
   } else if (mode == "fires") {
     // NT_GEN_DEVICE=1, default threshold. THE regression this file exists for: if the gate ever

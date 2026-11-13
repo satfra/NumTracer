@@ -767,6 +767,32 @@ canonicalizeMomentumSigns[net_] :=
         ntSigma[legA, {"slash", canonSlashPairs[vlcB]}, d1, d2]
     }];
 
+(* Momenta that are equal as frame vectors, e.g. l1 - p1 and l1 + p2 + p3 when p1 + p2 + p3 = 0, would still
+   get separate Bases and Inv slots after the sign canonicalisation. Each is rewritten to the first momentum
+   met with the same vector, or with its negative (taking the head's sign), so that they share one. Momenta
+   the frame does not resolve are left alone. *)
+canonicalizeEqualMomenta[net_, frame_] := Module[{moms, first = <||>, rep = <||>, rules, slashLeg},
+  moms = DeleteDuplicates @ Join[
+    DeleteCases[momentumOf /@ DeleteDuplicates @ Cases[net, _?tensorQ, {0, Infinity}], None],
+    Flatten @ Cases[net, ntSigma[a_, b_, __] :> Cases[{a, b}, {"slash", vlc_List} :> vlc[[All, 2]]], {0, Infinity}]];
+  Do[With[{v = Expand[q /. Normal[frame]]},
+      If[VectorQ[v] && Length[v] == 4,
+        Which[
+          KeyExistsQ[first, v], rep[q] = {first[v], 1},
+          KeyExistsQ[first, Expand[-v]], rep[q] = {first[Expand[-v]], -1},
+          True, first[v] = q]]],
+    {q, moms}];
+  If[rep === <||>, Return[net, Module]];
+  rules = Function[rec,
+      With[{h = ntHeadSym[rec], s = rec["Momentum"],
+            k = Replace[Extract[rec, Key["Form"], Hold], Hold[_[args___]] :> Length[Hold[args]]] - 1},
+        h[q_, rest : Repeated[_, {k}]] /; KeyExistsQ[rep, q] :> If[rep[q][[2]] === 1, 1, s] h[rep[q][[1]], rest]]] /@
+    Select[$ntHeads, KeyExistsQ[#, "Momentum"] &];
+  (* sigma slash legs carry {coeff, q} pairs directly *)
+  slashLeg = Replace[#, {"slash", vlc_List} :>
+      {"slash", Replace[vlc, {c_, q_} /; KeyExistsQ[rep, q] :> {rep[q][[2]] c, rep[q][[1]]}, {1}]}] &;
+  net /. Append[rules, ntSigma[a_, b_, d1_, d2_] :> ntSigma[slashLeg[a], slashLeg[b], d1, d2]]];
+
 (* ---- env-id layout ---------------------------------------------------------- *)
 
 (* Assign each distinct momentum a Base (4 consecutive Var ids) and, where a
@@ -840,6 +866,7 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
      vectors — a spatial vector's components are read off its parent's, so the parent must already
      resolve. See expandSpatialVecs / spatialVecFrame. *)
   frame = Join[frame, spatialVecFrame[net2, frame]];
+  net2 = ntProfTimed["canonicalizeEqualMomenta", canonicalizeEqualMomenta[net2, frame]];
 
   (* the top-level sum is the (linear) sum of DIAGRAMS; single-sector vertex sums stay eager, while
      colour<->Lorentz-bridging sums are distributed (see sectorBridgeQ). *)

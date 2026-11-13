@@ -13,6 +13,7 @@
 #include <functional>
 #include <optional>
 #include <random>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -144,6 +145,37 @@ int main()
               os.str().find("out[" + std::to_string(nEntries - 1) + " * stride]") != std::string::npos,
           "emit_table_fill: signature and every entry written");
     check(os.str().find("float") == std::string::npos, "emit_table_fill: fp64 throughout");
+
+    // Chunks: consecutive entries, each chunk closed under its operands, and every emitted line of a chunk
+    // a line of the whole fill (same statements, same folds, hence the same rounding).
+    const auto chunks = nt::fill_chunks(prog, prog.ins.size() / 3);
+    bool consecutive = chunks.front().first == 0 && chunks.back().last == nEntries, closed = true, same = true;
+    std::istringstream whole(os.str());
+    std::set<std::string> wholeLines;
+    for (std::string l; std::getline(whole, l);)
+      wholeLines.insert(l);
+    for (std::size_t k = 0; k < chunks.size(); ++k) {
+      const auto &keep = chunks[k].keep;
+      if (k > 0) consecutive = consecutive && chunks[k].first == chunks[k - 1].last;
+      for (std::size_t i = 0; i < prog.ins.size(); ++i) {
+        const nt::RInstr &in = prog.ins[i];
+        if (!keep[i]) continue;
+        if (in.op == nt::RADD || in.op == nt::RMUL) closed = closed && keep[in.a] && keep[in.b];
+        if (in.op == nt::RNEG) closed = closed && keep[in.a];
+      }
+      for (std::size_t e = chunks[k].first; e < chunks[k].last; ++e)
+        closed = closed && (prog.roots[e] < 0 || keep[prog.roots[e]]);
+      std::ostringstream oc;
+      nt::emit_table_fill(oc, prog, fm, "tab_fill", "double cos_chi, double cos_theta, double cos_phi", "inline",
+                          &chunks[k]);
+      std::istringstream part(oc.str());
+      for (std::string l; std::getline(part, l);)
+        same = same && wholeLines.count(l) == 1;
+    }
+    check(chunks.size() > 1 && consecutive && closed,
+          "fill_chunks: " + std::to_string(chunks.size()) + " runs of consecutive entries, each operand-closed");
+    check(same, "fill_chunks: every chunk line is a line of the whole fill");
+    check(nt::fill_chunks(prog, prog.ins.size()).size() == 1, "fill_chunks: one chunk within the budget");
   }
 
   std::printf("== dressed and complex traces ==\n");
@@ -223,6 +255,10 @@ int main()
     check(has("ttr2(const double *row, const std::size_t st, const double *f) { return ttr0(row, st, f); }"),
           "ttr2: duplicate of trace 0, forwarded");
     check(has("tab_size = " + std::to_string(dt->entries()) + ";"), "tab_size counts the distinct table once");
+    const std::string lazy = std::string(nt::kLazyPrefix) + "static inline ";
+    check(has(lazy + "void tab_fill0(") && has(lazy + "void tab_fill(") && has(lazy + "nt_complex_t ttr0(") &&
+              has(lazy + "auto ttr1(") && has(lazy + "auto ttr2("),
+          "fills, reads and forwarders are templates: compiled only where called");
   }
 
   std::printf("== guards ==\n");

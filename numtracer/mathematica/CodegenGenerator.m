@@ -931,7 +931,7 @@ ntGenMainEmission[ncomp_, nsInner_, kernelNs_, fillArgSig_, complexQ_, hasDresse
           If[ttSpec === None, "", "        ttCanon[(size_t)i] = std::stoi(it->second.substr(2));\n"],
           "        const std::string sig = s.substr(0, s.find(\" \" + nm + \"(\"));\n",
           "        const std::string rt = sig.substr(sig.rfind(' ') + 1);\n",
-          "        std::cout << decor << \" \" << rt << \" \" << nm << \"(const " <> $ntRealT <> " *f) { return \" << it->second << \"(f); }\\n\";\n",
+          "        std::cout << kLazyPrefix << decor << \" \" << rt << \" \" << nm << \"(const " <> $ntRealT <> " *f) { return \" << it->second << \"(f); }\\n\";\n",
           "      }\n",
           "    }\n",
           "  }\n",

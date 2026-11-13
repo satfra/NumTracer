@@ -602,7 +602,8 @@ ntFrameSpec[k_, components_, userSymDefs_] :=
                               denominator collapses to `l0² + l1²` instead of an angle polynomial.
      unitLoopMixedFrameSpec   the loop rides unit directions but the externals are NUMERIC vectors
                               (a general external configuration, or finite T where the heat bath
-                              picks out slot 0). Far more compact than the fallback.
+                              picks out slot 0); an external that is a magnitude times a unit
+                              direction rides one too. Far more compact than the fallback.
      polyFrameSpec[frame]     the general fallback: every component a polynomial in the frame's
                               scalars, no unit constraint. Always correct, never compact.
 

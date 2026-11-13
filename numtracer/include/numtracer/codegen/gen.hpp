@@ -255,6 +255,11 @@ namespace numtracer::inline network
   } // namespace gdetail
 #endif // NUMTRACER_DEFINE_BODIES
 
+  /// @brief Printed before every emitted function that holds trace-sized code: the traces, the table fills
+  ///        and reads, and their forwarders. As function templates they are compiled only in a translation
+  ///        unit that calls them; nvcc compiles every non-template function it sees, called or not.
+  inline constexpr const char *kLazyPrefix = "template <int = 0> ";
+
   // Code-printing entry points, ODR-used by the generator TU: declared always, defined once
   // (library TU / header-only build). See core/export.hpp.
   NUMTRACER_FUNC void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name,
@@ -548,8 +553,8 @@ namespace numtracer::inline network
     // return std::complex<double>{re, im}. The kernel multiplies it by the (complex) dressing
     // coefficient and the consumer takes std::real — so the imaginary part reaches the kernel.
     if (p.rootIm != kRealProgram) {
-      out << effDecor << " nt_complex_t " << name << "([[maybe_unused]] const " << codegen::emit_real_type()
-          << " *f) {\n";
+      out << kLazyPrefix << effDecor << " nt_complex_t " << name << "([[maybe_unused]] const "
+          << codegen::emit_real_type() << " *f) {\n";
       out << std::setprecision(17);
       for (std::size_t i = 0; i < p.ins.size(); ++i)
         edetail::emit_stmt(out, p.ins, i, pl);
@@ -561,7 +566,7 @@ namespace numtracer::inline network
       return;
     }
     const char *realT = codegen::emit_real_type();
-    out << effDecor << " " << realT << " " << name << "([[maybe_unused]] const " << realT << " *f) {\n";
+    out << kLazyPrefix << effDecor << " " << realT << " " << name << "([[maybe_unused]] const " << realT << " *f) {\n";
     if (p.root < 0) {
       out << "  return " << edetail::zero_literal() << ";\n}\n";
       return;

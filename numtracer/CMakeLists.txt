@@ -664,6 +664,13 @@ if(NUMTRACER_BUILD_TESTS)
                      -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_orientation_guard.wls")
     set_tests_properties(wolfram_orientation_guard PROPERTIES LABELS wolfram TIMEOUT 300)
 
+    # Momenta equal as frame vectors (l1 - p1 and l1 + p2 + p3 at p1 + p2 + p3 = 0) share one spelling, so
+    # one env Base and Inv slot (canonicalizeEqualMomenta).
+    add_test(NAME wolfram_equal_momenta
+             COMMAND "${NT_WOLFRAM_EXE}" -noprompt
+                     -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_equal_momenta.wls")
+    set_tests_properties(wolfram_equal_momenta PROPERTIES LABELS wolfram TIMEOUT 300)
+
     # Collected Dirac slots: diracSlotDecompose must be an exact re-grouping of the vertex sum
     # (expanding the slot back gives the sum), and the collection gate must turn a dressed k=1 and
     # k=2 vertex into an ntDiracSlot under vertex collection.

@@ -150,13 +150,30 @@ namespace numtracer::inline network
   };
   NUMTRACER_FUNC TableFillProg lower_table_fill(const std::vector<const TableTrace *> &traces);
 
+  /// @brief Largest fill emitted as one function, in SSA instructions. nvcc's time per function grows faster
+  ///        than its size, while the entries of a fill share little code, so a larger fill is split into
+  ///        several functions at the cost of a few percent more work.
+  inline constexpr std::size_t kFillChunkInstr = 10000;
+
+  /// @brief Entries [first, last) of a fill, computed by one emitted function from the instructions in keep.
+  struct FillChunk {
+    std::size_t first = 0, last = 0;
+    std::size_t size = 0;   ///< number of instructions kept
+    std::vector<char> keep; ///< keep[i]: instruction i is needed by an entry of the chunk
+  };
+
+  /// @brief Split @p p into runs of consecutive entries of at most @p budget instructions each (an entry that
+  ///        alone needs more is a chunk of its own). Instructions shared between chunks are repeated.
+  NUMTRACER_FUNC std::vector<FillChunk> fill_chunks(const TableFillProg &p, std::size_t budget);
+
   /// @brief Print `decor void name(double *out, const std::size_t stride, <argSig>)`, writing entry e to
   ///        `out[e * stride]`. Always double precision: the fill runs once per run and its result is what
   ///        the reconstruction's accuracy rests on. @p fm supplies the C++ of each frame symbol in terms of
   ///        @p argSig's parameters (a float kernel needs @ref emit_trace_tables' double `powr` for them).
+  ///        With @p chunk, only its entries, each from the same statements as in the whole fill.
   NUMTRACER_FUNC void emit_table_fill(std::ostream &out, const TableFillProg &p, const FillFormulas &fm,
-                                      const std::string &name, const std::string &argSig,
-                                      const std::string &decor);
+                                      const std::string &name, const std::string &argSig, const std::string &decor,
+                                      const FillChunk *chunk = nullptr);
 
   /// @brief Print the reconstruction `decor T name(const T *row, const std::size_t stride, const T *f)` in the
   ///        emitted precision (`nt_complex_t` for a complex trace): `row[e * stride]` is entry `offset + e` of
@@ -465,12 +482,52 @@ namespace numtracer::inline network
     }
   } // namespace tdetail
 
+  NUMTRACER_FUNC std::vector<FillChunk> fill_chunks(const TableFillProg &p, std::size_t budget)
+  {
+    const std::size_t n = p.ins.size();
+    std::vector<FillChunk> chunks;
+    FillChunk cur{0, 0, 0, std::vector<char>(n, 0)};
+    std::vector<unsigned> seen(n, 0); // seen[i] == pass: instruction i already collected in this pass
+    unsigned pass = 0;
+    std::vector<int> stack, fresh;
+    // fresh = the instructions entry e needs that the current chunk does not hold yet
+    auto collect = [&](std::size_t e) {
+      fresh.clear();
+      ++pass;
+      if (p.roots[e] >= 0) stack.push_back(p.roots[e]);
+      while (!stack.empty()) {
+        const int i = stack.back();
+        stack.pop_back();
+        if (cur.keep[i] || seen[i] == pass) continue;
+        seen[i] = pass;
+        fresh.push_back(i);
+        const RInstr &in = p.ins[i];
+        if (in.op == RADD || in.op == RMUL) stack.insert(stack.end(), {in.a, in.b});
+        if (in.op == RNEG) stack.push_back(in.a);
+      }
+    };
+    for (std::size_t e = 0; e < p.roots.size(); ++e) {
+      collect(e);
+      if (cur.last > cur.first && cur.size + fresh.size() > budget) {
+        chunks.push_back(std::move(cur));
+        cur = FillChunk{e, e, 0, std::vector<char>(n, 0)};
+        collect(e);
+      }
+      for (const int i : fresh)
+        cur.keep[i] = 1;
+      cur.size += fresh.size();
+      cur.last = e + 1;
+    }
+    chunks.push_back(std::move(cur));
+    return chunks;
+  }
+
   NUMTRACER_FUNC void emit_table_fill(std::ostream &out, const TableFillProg &p, const FillFormulas &fm,
-                                      const std::string &name, const std::string &argSig,
-                                      const std::string &decor)
+                                      const std::string &name, const std::string &argSig, const std::string &decor,
+                                      const FillChunk *chunk)
   {
     tdetail::DoubleEmission guard;
-    out << decor << " void " << name << "(double *out, const std::size_t stride, " << argSig << ") {\n";
+    out << kLazyPrefix << decor << " void " << name << "(double *out, const std::size_t stride, " << argSig << ") {\n";
     out << std::setprecision(17);
     if (!p.env.syms.empty()) {
       out << fm.prologue;
@@ -478,10 +535,12 @@ namespace numtracer::inline network
       for (std::size_t i = 0; i < p.env.syms.size(); ++i)
         out << "  f[" << i << "] = " << fm.var(std::get<1>(p.env.syms[i])) << ";\n";
     }
+    // The EmitPlan of the whole fill, also for a chunk: its fma folds depend on use counts, and a chunk's own
+    // counts would fold differently.
     const edetail::EmitPlan pl = edetail::make_plan(p.ins, p.roots.data(), p.roots.size());
     for (std::size_t i = 0; i < p.ins.size(); ++i)
-      edetail::emit_stmt(out, p.ins, i, pl);
-    for (std::size_t e = 0; e < p.roots.size(); ++e) {
+      if (!chunk || chunk->keep[i]) edetail::emit_stmt(out, p.ins, i, pl);
+    for (std::size_t e = chunk ? chunk->first : 0; e < (chunk ? chunk->last : p.roots.size()); ++e) {
       out << "  out[" << e << " * stride] = ";
       if (p.roots[e] < 0)
         out << "0.";
@@ -497,8 +556,9 @@ namespace numtracer::inline network
   {
     const std::string T = codegen::emit_real_type();
     const std::string zero = edetail::zero_literal();
-    out << decor << " " << (t.complex ? std::string("nt_complex_t") : T) << " " << name << "([[maybe_unused]] const "
-        << T << " *row, [[maybe_unused]] const std::size_t st, [[maybe_unused]] const " << T << " *f) {\n";
+    out << kLazyPrefix << decor << " " << (t.complex ? std::string("nt_complex_t") : T) << " " << name
+        << "([[maybe_unused]] const " << T << " *row, [[maybe_unused]] const std::size_t st, [[maybe_unused]] const "
+        << T << " *f) {\n";
     const bool scaled = sc.external >= 0;
     bool part[2] = {false, false};
     for (const auto &p : t.pieces)
@@ -569,25 +629,38 @@ namespace numtracer::inline network
         parts.push_back(&p.t);
       const TableFillProg prog = lower_table_fill(parts);
       const std::string nm = "tab_fill" + std::to_string(i);
-      emit_table_fill(out, prog, fm, nm, argSig, edetail::eff_decor(decor, prog.ins.size()));
+      const std::vector<FillChunk> chunks = fill_chunks(prog, kFillChunkInstr);
+      if (chunks.size() == 1)
+        emit_table_fill(out, prog, fm, nm, argSig, edetail::eff_decor(decor, prog.ins.size()));
+      else {
+        for (std::size_t k = 0; k < chunks.size(); ++k)
+          emit_table_fill(out, prog, fm, nm + "_c" + std::to_string(k), argSig,
+                          edetail::eff_decor(decor, chunks[k].size), &chunks[k]);
+        out << kLazyPrefix << decor << " void " << nm << "(double *out, const std::size_t stride, " << argSig
+            << ") {\n";
+        for (std::size_t k = 0; k < chunks.size(); ++k)
+          out << "  " << nm << "_c" << k << "(out, stride" << args << ");\n";
+        out << "}\n";
+      }
       calls << "  " << nm << "(out + " << nEntries << " * stride, stride" << args << ");\n";
       off[i] = nEntries;
       nEntries += tabs[i]->entries();
       ++nTab;
     }
-    out << decor << " void tab_fill([[maybe_unused]] double *out, [[maybe_unused]] const std::size_t stride, " << argSig
+    out << kLazyPrefix << decor
+        << " void tab_fill([[maybe_unused]] double *out, [[maybe_unused]] const std::size_t stride, " << argSig
         << ") {\n"
         << calls.str() << "}\n";
     for (std::size_t i = 0; i < tabs.size(); ++i) {
       const std::string nm = "ttr" + std::to_string(i);
       if (canon[i] != static_cast<int>(i))
-        out << decor << " auto " << nm << "(const " << T << " *row, const std::size_t st, const " << T
+        out << kLazyPrefix << decor << " auto " << nm << "(const " << T << " *row, const std::size_t st, const " << T
             << " *f) { return ttr" << canon[i] << "(row, st, f); }\n";
       else if (off[i] >= 0 || (tabs[i] && tabs[i]->entries() == 0))
         emit_table_trace(out, *tabs[i], std::max(off[i], 0), nm, sc, g, decor);
       else
-        out << decor << " auto " << nm << "([[maybe_unused]] const " << T << " *row, [[maybe_unused]] const std::size_t st, const "
-            << T << " *f) { return tr" << i << "(f); }\n";
+        out << kLazyPrefix << decor << " auto " << nm << "([[maybe_unused]] const " << T
+            << " *row, [[maybe_unused]] const std::size_t st, const " << T << " *f) { return tr" << i << "(f); }\n";
     }
     out << "static inline constexpr int tab_size = " << nEntries << ";\n";
     std::fprintf(stderr, "[tables] %d of %zu traces tabulated, %d entries per table node\n", nTab, tabs.size(),
