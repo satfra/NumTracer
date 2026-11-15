@@ -640,6 +640,22 @@ if(NUMTRACER_BUILD_TESTS)
                      -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_colour_zero_prune.wls")
     set_tests_properties(wolfram_colour_zero_prune PROPERTIES LABELS wolfram TIMEOUT 300)
 
+    # Pinned colour components: an integer in an SU(N) LABEL slot is a fixed component, which the
+    # label machinery would read as a contraction and sum over -- the colour-split propagator of a
+    # Polyakov background, silently averaged. The negatives pin that the rank, a dressing spec and
+    # ntSUNTPinnable's output stay legal.
+    add_test(NAME wolfram_pinned_colour_index
+             COMMAND "${NT_WOLFRAM_EXE}" -noprompt
+                     -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_pinned_colour_index.wls")
+    set_tests_properties(wolfram_pinned_colour_index PROPERTIES LABELS wolfram TIMEOUT 300)
+
+    # A momentum that cancels identically in the chosen kinematics resolves to the zero four-vector
+    # instead of aborting the generation; a momentum the frame does not describe still aborts.
+    add_test(NAME wolfram_zero_momentum
+             COMMAND "${NT_WOLFRAM_EXE}" -noprompt
+                     -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_zero_momentum.wls")
+    set_tests_properties(wolfram_zero_momentum PROPERTIES LABELS wolfram TIMEOUT 300)
+
     # k-only lookup hoisting: ntPatchHoistWrappers must patch DiFfRG's CT_get.cc for ANY coordinate
     # list (none, p0, p0 p, ...) and abort on a wrapper it cannot recognise; an unpatched wrapper only
     # fails much later, when the model is compiled.
