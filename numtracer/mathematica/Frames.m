@@ -11,17 +11,32 @@
    q1 - ql is handled automatically. *)
 
 resolveComponents::zeroMomentum = "A momentum in the frame resolved to `1` instead of a list of four \
-components. This means a tensor leaf carries the ZERO four-vector -- almost always because a \
-kinematic substitution (p -> 0 for a p^2-coefficient extraction, a soft-meson slice, ...) was \
-applied to an expression that still contained a momentum-dependent PROJECTOR. transProj[0,mu,nu] is \
-0/0, so there is nothing sensible to resolve. Keep the projector out of the substitution (subtract \
-inside the diagram only) or pick a frame in which the leg is nonzero.";
+components, and it is not the number 0 (which resolves to the zero four-vector). The frame maps each \
+momentum symbol to four components, so this is a leaf carrying something the frame does not describe \
+-- a symbol that was never put in the frame, or a composite built from one. Add it to the frame, or \
+check the substitution that produced it.";
 
-(* Four components of a (possibly composite) momentum in the frame. *)
+(* Four components of a (possibly composite) momentum in the frame.
+
+   A momentum combination can cancel identically in the chosen kinematics -- the t = (p1 + p4)^2
+   channel of a four-point function at a density-channel configuration, any symmetric point with
+   cancelling legs -- and Simplify then gives the NUMBER 0, not a list. That is the zero four-vector
+   and every caller handles it: ntSP[0, y] and ntSPS are 0, ntVec[0, i] is 0, and a frame entry of
+   zero components is a legitimate (if trivial) momentum.
+
+   It used to abort here, on the grounds that a zero momentum is almost always a kinematic
+   substitution applied to an expression that still held a momentum-dependent PROJECTOR, and
+   transProj[0,mu,nu] is 0/0. That case is real but it is not this one: projectors are expanded into
+   vectors and deltas before anything reaches resolveComponents, so a genuine 0/0 shows up as a
+   division by zero, and Indeterminate / DirectedInfinity / ComplexInfinity in the emitted code are
+   caught by the leak scan in ntExportCpp. Refusing every zero momentum to catch that case costs the
+   legitimate ones, which could not be generated at all. *)
 resolveComponents[q_, frame_] :=
   Module[{c = Simplify[q /. Normal[frame]]},
-    (* Fail here, where the cause is visible: a bare 0 travelling on becomes `mpcpp /@ 0`, an integer
-       where a C++ string is expected, and surfaces much later as an unreadable StringJoin failure. *)
+    If[MatchQ[c, 0 | 0.], Return[{0, 0, 0, 0}]];
+    (* Anything else that is not four components fails here, where the cause is visible: a bare
+       symbol travelling on becomes `mpcpp /@ q`, which surfaces much later as an unreadable
+       StringJoin failure. *)
     If[! (ListQ[c] && Length[c] === 4),
       Message[resolveComponents::zeroMomentum, c];
       Abort[]];
