@@ -822,12 +822,20 @@ Options[NumTrace] = {"Frame" -> <||>, "Args" -> {}, "Dressings" -> {}, "Dressing
 $ntFromFunKitDressCollect = None;
 NumTrace::sunrank = "every SU(N) head must carry an integer rank N >= 1 as its first argument (got `1`). Set Nc (SetNc[3]) before tracing colour heads, and pass \"FlavourGroup\" -> n to FromFunKit for the isospin group.";
 NumTrace::nfsym = "the flavour count Nf is not a defined integer (a symbolic Nf is present in the network). Call SetNf[2] (TensorBases) before generating.";
+NumTrace::suncomponent = "an SU(N) head carries the fixed component index (indices) `1` in a LABEL slot. \
+Labels are contracted, not pinned: a component index occurring twice -- the usual way to write one block \
+of a colour-split propagator, delta[cA, c] delta[c, cB] with an integer c -- is read here as a summed \
+index, so the blocks are averaged into one colour-blind line and the trace comes out wrong with no \
+other sign. Write a per-component object instead: ntSUNDiagFund[N, cA, cB, {c -> coefficient, ...}] \
+carries one dressing per colour component and folds correctly (ntSUNDiagAdj in the adjoint sector). \
+Coming from FunKit, regroup the colour-split propagator into that form before FromFunKit, grouping the \
+blocks of one Dirac structure into one object.";
 NumTrace::dresscollect = "NumTrace runs with \"DressingCollection\" -> `1`, but the most recent FromFunKit \
 call used `2`. FromFunKit already kept (or distributed) the dressed Dirac numerators according to its \
 own setting; pass the same value to both.";
 
 NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose], $ntProf = <||>, $ntPlusMemo = <||>}, Module[
-  {frame, args, dress, badRanks, net2, diagrams, allMom, invMom, invSMom, env, nenv, diags, ntT0},
+  {frame, args, dress, badRanks, pinnedLabels, net2, diagrams, allMom, invMom, invSMom, env, nenv, diags, ntT0},
   (* whole-NumTrace wall clock, so a gap between the total and the [prof] parts is visible *)
   ntT0   = AbsoluteTime[];
   frame  = OptionValue["Frame"];
@@ -847,6 +855,18 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
     ! (IntegerQ[#] && # >= 1) &];
   If[badRanks =!= {},
     Message[NumTrace::sunrank, badRanks]; Abort[]];
+  (* The same up-front check for group LABELS, which must stay symbolic. An integer in a label slot
+     is a fixed colour component, and the label machinery below has no concept of one: labelsOf sees
+     an ordinary label, and a component index that occurs twice is counted as a contraction and
+     summed over -- silently turning the blocks of a colour-split propagator into their sum. Integer
+     LORENTZ slots are rewritten before the label machinery for the same reason (see
+     expandFixedComponents); the group sectors have no such step, so refuse them here. The pinned
+     ADJOINT path is unaffected: ntSUNTPinnable substitutes a fresh label for the integer and carries
+     the component in an ntSUNDiagAdj spec, and a spec is not a label slot. *)
+  pinnedLabels = DeleteDuplicates @ Flatten @
+    Cases[net, h : $ntSUNHeadPat :> Cases[Flatten[{labelsOf[h]}], _Integer], {0, Infinity}];
+  If[pinnedLabels =!= {},
+    Message[NumTrace::suncomponent, pinnedLabels]; Abort[]];
   (* A closed quark flavour loop folds to Global`Nf; it is undefined only if Nf is still a symbol
      AND appears in the network. *)
   If[! IntegerQ[Global`Nf] && ! FreeQ[net, Global`Nf],
