@@ -37,7 +37,7 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
               groupDir_String, kernelFile_String] :=
   Block[{$ntComplexRuntimeProjection = fronts[[1, "Options"]]["ComplexRuntimeProjection"]},
   Module[{o = fronts[[1, "Options"]], n = Length[fronts], sig = fronts[[1, "Signature"]], groupName, macros,
-          complexQ, evens, parts, lookups, dr, ints, traceDecls, nenv, preamble, body, kernelFn, hoistTrait, constFn,
+          complexQ, evens, parts, lookups, dr, ints, traceDecls, nenv, preamble, body, kernelFn, hoistTrait, splitTrait, constFn,
           tables, traits, tracesIncludes, verdictIncludes, header},
     groupName = StringReplace[className, "_kernel" ~~ EndOfString -> ""];
     (* -- the members must agree in everything but their projection -- *)
@@ -133,6 +133,8 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
       AnyTrue[Lookup[fronts, "Tables", None], AssociationQ[#] && TrueQ[#["Explicit"]]&]];
     If[tables =!= None,
       kernelFn = ntTableKernelText[kernelFn, tables["Members"], $ntRealT, tables["FillArgNames"]]];
+    {kernelFn, splitTrait} = ntSplitKernelText[kernelFn, o["InnerSplitVar"], ntSplitHeavy[o]];
+    kernelFn = ntShareAxisIndices[kernelFn, o["IndexShareKinds"], o["SharedGrids"]];
     constFn = FunKit`MakeCppFunction[consts, "Name" -> "constant", "Prefix" -> o["Decorator"], "Return" -> "auto",
       "CodeParser" -> "Cpp", "Parameters" -> sig["ConstParams"], "MultiReturn" -> multiReturn,
       "Body" -> If[AllTrue[consts, MatchQ[#, 0 | 0.]&], "", StringRiffle[ntSupportUsings[o["SupportNamespace"]], "\n"]]];
@@ -143,7 +145,10 @@ ntGroupKernel[fronts_List, className_String, consts_List, multiReturn_String, sh
           StringRiffle[Map[If[#["MVarIdx"] >= 0, #["Options"]["NsHome"] <> "::matsubara_even", "true"]&, fronts], " && "] <> ";"},
         {}],
       If[parts[[1, "FiniteExtent"]], {"static constexpr bool matsubara_finite_extent = true;"}, {}],
+      (* one phi rule for the whole group: folded only if every member is even *)
+      If[AllTrue[fronts, TrueQ[#["Options"]["PhiEven"]]&], {"static constexpr bool phi_even = true;"}, {}],
       hoistTrait,
+      splitTrait,
       If[tables =!= None, ntTraceTableTraits[tables, tables["Members"]], {}]];
 
     tracesIncludes = Map[ntRelativePath[groupDir, #["TracesFile"]]&, fronts];

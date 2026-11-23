@@ -120,6 +120,63 @@ ntBodyLookups[drAtoms_List, integrands_, dress_List, groups_List] :=
     lk = ntShareGridLookups[drAtoms, integrands, dress, groups, trig["Rules"]];
     <|"Decls" -> Join[trig["Decls"], lk["Decls"]], "Rules" -> Dispatch[Join[lk["Rules"], trig["Rules"]]]|>];
 
+(* ---- per-axis sharing of coordinate transforms, on the lowered text ------------------------------
+   Runs last, on the finished functions, where every dressing lookup is its own line `const T x = D(args);`. A
+   coordinate transform belongs to one AXIS (the S0 of a triangle is shared by triangles whose S1, SPhi differ, and
+   ZA3 and ZAcbc read the same triangles), so within each function every distinct (grid, axis, argument) of the
+   "SharedGrids" dressings is transformed once and the lookups read through at():
+
+     const auto ntsax0 = ZA3.template index_axis<0>(<S0>);     per distinct axis argument (2-D, 3-D),
+     const auto ntsix1 = ZA.index(<q>);                         per distinct argument (1-D),
+     const auto _interp14 = ZA3.at({{ntsax0, ntsax2, ntsax5}});
+
+   Equal to D(args) up to rounding (index_axis<a> is index(...)[a]); DiFfRG checks at run time that a group shares one
+   grid. A line whose call is not the whole right-hand side, or does not split (at top-level commas, <> counting as
+   brackets) into one argument per axis, passes unchanged. Measured on an RTX 4070: the dressed double YM five-point
+   kernels gain 18-23%, the float ZA3 of the YM apps loses 25-50%. *)
+ntShareAxisIndices[text_String, None, _] := text;
+ntShareAxisIndices[text_String, kinds_Association, groups_List] :=
+  Module[{dims = <||>, grpOf, seen = <||>, n = 0, nIdx = 0, nLk = 0,
+          fnRx = RegularExpression["\\bauto\\s+\\w+\\s*\\("],
+          lkRx = RegularExpression["^(\\s*)(\\[\\[maybe_unused\\]\\]\\s*)?const (?:auto|double|float) (\\w+) = (\\w+)(\\(.*\\));\\s*$"],
+          rewrite, out},
+    KeyValueMap[Function[{kind, ds}, Scan[(dims[ntParamName[#]] = kind)&, ds]],
+      KeyMap[Replace[{"1D" -> 1, "2D" -> 2, "3D" -> 3}], kinds]];
+    dims = KeySelect[dims, MemberQ[ntParamName /@ Flatten[groups], #]&];
+    If[Length[dims] === 0, Return[text, Module]];
+    grpOf[d_] := Replace[FirstPosition[groups, g_List /; MemberQ[ntParamName /@ g, d], None, {1}],
+      {None -> d, {i_} :> "SharedGrids#" <> ToString[i]}];
+    (* one line -> {new transform declarations..., the line} *)
+    rewrite[line_String] :=
+      Module[{m, ind, mu, var, nm, call, chars, args, key, decls = {}, names},
+        If[StringContainsQ[line, fnRx] && !StringContainsQ[line, "="], seen = <||>];
+        m = StringCases[line, lkRx :> {"$1", "$2", "$3", "$4", "$5"}];
+        If[m === {}, Return[{line}, Module]];
+        {ind, mu, var, nm, call} = First[m];
+        If[!KeyExistsQ[dims, nm], Return[{line}, Module]];
+        chars = Characters[call];
+        If[ntMatchingBracket[chars, 1, {"(", ")"}] =!= Length[chars], Return[{line}, Module]];
+        args = ntSplitTopLevel[StringTake[call, {2, -2}]];
+        If[Length[args] =!= dims[nm], Return[{line}, Module]];
+        nLk++;
+        If[dims[nm] === 1,
+          key = {grpOf[nm], 1, 0, First[args]};
+          If[!KeyExistsQ[seen, key],
+            seen[key] = "ntsix" <> ToString[n++]; nIdx++;
+            AppendTo[decls, ind <> "const auto " <> seen[key] <> " = " <> nm <> ".index(" <> First[args] <> ");"]];
+          Append[decls, ind <> mu <> "const auto " <> var <> " = " <> nm <> ".at(" <> seen[key] <> ");"],
+          names = Table[
+            key = {grpOf[nm], dims[nm], k - 1, args[[k]]};
+            If[!KeyExistsQ[seen, key],
+              seen[key] = "ntsax" <> ToString[n++]; nIdx++;
+              AppendTo[decls, ind <> "const auto " <> seen[key] <> " = " <> nm <> ".template index_axis<" <>
+                ToString[k - 1] <> ">(" <> args[[k]] <> ");"]];
+            seen[key], {k, Length[args]}];
+          Append[decls, ind <> mu <> "const auto " <> var <> " = " <> nm <> ".at({{" <> StringRiffle[names, ", "] <> "}});"]]];
+    out = Flatten[rewrite /@ StringSplit[text, "\n", All]];
+    If[nLk > 0, ntLog["[interp] per-axis sharing: ", nLk, " lookups read ", nIdx, " coordinate transforms"]];
+    StringRiffle[out, "\n"]];
+
 (* FINITE MATSUBARA EXTENT. Each term of a finite-T kernel carries one dR/dt insertion. Where the
    insertion's ARGUMENT is coercive in the Matsubara symbol, the term dies super-polynomially in it,
    so `T Sum_n f(w_n)` is a finite sum DiFfRG can enumerate exactly instead of using a Gaussian rule.
@@ -238,6 +295,18 @@ Options[mkGenerateKernel] =
    and, if so, emit DiFfRG's `matsubara_even` trait (one evaluation per mode instead of two).
    None = not a finite-T flow. *)
     "MatsubaraVar" -> None,
+(* The integrator's periodic azimuth symbol (DiFfRG's Integrator_p2_4D_3ang, Integrator_fT_p2_4D_2ang). Asks for a
+   PROOF that the integrand is even in it (ntPhiEvenQ) and, if so, emits DiFfRG's `phi_even` trait: the integrator
+   folds its phi rule onto [0, pi], half the evaluations. None = no such angle. *)
+    "PhiEvenVar" -> None,
+(* The integrator's innermost integration variable when it evaluates that variable in an inner loop (DiFfRG's
+   Integrator_p2_4D_3ang: the azimuth). Set by MakeNTKernelDiFfRG; the hoisted post() is then also emitted split at it
+   (split()/post_split(), see ntSplitKernelText) where that saves work. None = no split. *)
+    "InnerSplitVar" -> None,
+(* The dressings whose lookups may share coordinate transforms per argument (1-D) or per axis (2-D, 3-D), by
+   interpolator dimension: <|"1D" -> {...}, "2D" -> {...}, "3D" -> {...}|>, see ntShareAxisIndices (which acts on
+   the "SharedGrids" groups among them). Set by MakeNTKernelDiFfRG from the parameter types; None = no sharing. *)
+    "IndexShareKinds" -> None,
 (* Regulator heads that decay super-polynomially in their argument; see ntFiniteExtentQ. Automatic =
    all six DiFfRG wrappers, not just the `dot` pair: a dressed insertion dt(Z R) = Zdot R + Z Rdot
    carries RB itself in half its terms. Only a factor in a PRODUCT counts (RB in a denominator makes
@@ -500,8 +569,8 @@ ntGenOptions[OptionsPattern[mkGenerateKernel]] :=
        "Dressings", "ScalarParams", "ScalarParamNames", "ADNames", "ParameterOrder", "DressingType",
        "ConstArgQ", "AngleDefs", "Decorator", "DeviceTarget", "Offline",
        "RunGenerator", "RunOnline", "MainOpt", "IncludeDir", "RuntimeInclude", "ExtraIncludes",
-       "RegulatorTemplate", "RegulatorAlias", "Components", "SymbolDefs", "MatsubaraVar",
-       "DecayingRegulators", "MatsubaraFiniteExtent", "HoistLoopConstLookups", "Hoist", "PointArguments",
+       "RegulatorTemplate", "RegulatorAlias", "Components", "SymbolDefs", "MatsubaraVar", "PhiEvenVar", "InnerSplitVar",
+       "IndexShareKinds", "DecayingRegulators", "MatsubaraFiniteExtent", "HoistLoopConstLookups", "Hoist", "PointArguments",
        "ShareInterpolatorIndex", "SharedGrids", "RealProbe", "PruneRealTraces", "ComplexRuntimeProjection",
        "ComplexEndProjection", "RealOutput", "Constant", "TraceTables", "CoordinateArgNames"},
       <|"Name" -> name,
@@ -553,6 +622,9 @@ ntGenOptions[OptionsPattern[mkGenerateKernel]] :=
         "Components" -> OptionValue["Components"],
         "SymbolDefs" -> OptionValue["SymbolDefs"],
         "MatsubaraVar" -> OptionValue["MatsubaraVar"],
+        "PhiEvenVar" -> OptionValue["PhiEvenVar"],
+        "InnerSplitVar" -> OptionValue["InnerSplitVar"],
+        "IndexShareKinds" -> OptionValue["IndexShareKinds"],
         "DecayingRegulators" ->
           Replace[OptionValue["DecayingRegulators"], Automatic -> $ntDefaultDecayingRegulators],
         "MatsubaraFiniteExtent" -> OptionValue["MatsubaraFiniteExtent"],
@@ -1354,6 +1426,120 @@ ntHoistedKernelFn[kernelFn_String, o_, split_, matsubaraSym_] :=
       {kernelFn, {}},
       {res, {"static constexpr bool has_pre = true;"}}]];
 
+(* ---- INNER SPLIT (DiFfRG kernel_has_split) -------------------------------------------------------
+   For integrators that evaluate their innermost variable in an inner loop (Integrator_p2_4D_3ang: the azimuth phi;
+   kernel_has_split in DiFfRG/physics/integration/hoist.hh). Next to every hoisted post() / post_tab() this emits
+     split(P, ...)                        / split_tab(P, ...)
+       the post statements that read neither the innermost variable nor the table row, nor one another that does,
+       returned as a DiFfRG::device::tuple S (bitwise the values post() computes);
+     post_split(P, S, ...)                / post_split_tab(P, S, row, stride, ...)
+       the remaining statements, with those names bound from S; returns post().
+   Like the hoist it works on the lowered text (one `const T name = expr;` per line); the pre() bindings are copied
+   into both halves. Emitted only if split() takes a dressing lookup (`heavy`): otherwise the extra register state
+   costs more than it saves (tree-level W5 1.6x slower; dressed W5/WG5 1.5x faster, RTX 4070). split_reads flags, per
+   kernel() parameter, whether split() reads it. *)
+
+ntSplitHeavyRx[heavy_List] := RegularExpression["\\b(?:" <> StringRiffle[heavy, "|"] <> ")\\s*\\("];
+
+(* One post()/post_tab() definition `fn` (head "auto post(" or "auto post_tab(") -> {reads, split, post_split} as text,
+   or a Missing[...] *)
+ntSplitDefinition[fn_String, head_String, var_String, heavy_List] :=
+  Module[{chars = Characters[fn], kpos, open, close, prefix, sigStr, params, names, lead, rest, restNames, bOpen,
+          bClose, lines, tab = head === "auto post_tab(",
+          stmtRx = RegularExpression["^\\s*(?:\\[\\[maybe_unused\\]\\]\\s*)?const (?:auto|double|float) (\\w+) = (.*);\\s*$"],
+          bindRx = RegularExpression["^\\s*(?:\\[\\[maybe_unused\\]\\]\\s*)?const auto &\\w+ = DiFfRG::device::get<\\d+>\\(P_\\);\\s*$"],
+          declRx = RegularExpression["^\\s*[\\w:<>]+\\s+(\\w+)\\s*(?:\\[|=|;)"],
+          dirty, usings = {}, binds = {}, movedNames = {}, movedLines = {}, restLines = {}, exprOf, lineOf, deps,
+          restTokens, exported, needed, neededLines, tokens, reads, nm, splitName, postName, sPrefix},
+    kpos = First[First[StringPosition[fn, head, 1]]];
+    open = kpos + StringLength[head] - 1;
+    close = ntMatchingBracket[chars, open, {"(", ")"}];
+    prefix = StringTake[fn, kpos - 1];
+    sigStr = StringTake[fn, {open + 1, close - 1}];
+    params = ntSplitTopLevel[sigStr];
+    names = Last[ntIdentifiers[#]]& /@ params;
+(* the leading parameters: P_ (and row_, stride_ for post_tab); the rest are kernel()'s *)
+    lead = If[tab, 3, 1];
+    If[Length[names] <= lead || names[[1]] =!= "P_" || !MemberQ[names, var], Return[Missing["NoSplitVariable"], Module]];
+    rest = params[[lead + 1 ;;]]; restNames = names[[lead + 1 ;;]];
+    bOpen = First[Select[Range[close + 1, Length[chars]], chars[[#]] === "{" &, 1]];
+    bClose = ntMatchingBracket[chars, bOpen, {"{", "}"}];
+    lines = StringSplit[StringTake[fn, {bOpen + 1, bClose - 1}], "\n"];
+    dirty = Join[{var}, If[tab, {"row_", "stride_"}, {}]];
+    Do[
+      With[{m = StringCases[l, stmtRx -> {"$1", "$2"}]},
+        Which[
+          StringStartsQ[StringTrim[l], "using namespace"], AppendTo[usings, l],
+          StringMatchQ[l, bindRx], AppendTo[binds, l],
+          m =!= {} && !IntersectingQ[ntIdentifiers[m[[1, 2]]], dirty],
+            AppendTo[movedNames, m[[1, 1]]]; AppendTo[movedLines, l -> m[[1, 2]]],
+          m =!= {},
+            AppendTo[dirty, m[[1, 1]]]; AppendTo[restLines, l],
+          True,
+(* anything else a line declares (the fenv array) exists only in post_split() *)
+            dirty = Join[dirty, StringCases[l, declRx -> "$1"]]; AppendTo[restLines, l]]],
+      {l, lines}];
+    exprOf = AssociationThread[movedNames, Last /@ movedLines];
+    lineOf = AssociationThread[movedNames, First /@ movedLines];
+    deps[n_] := Select[ntIdentifiers[exprOf[n]], KeyExistsQ[exprOf, #]&];
+    restTokens = Union @@ Prepend[ntIdentifiers /@ restLines, {}];
+    exported = Select[movedNames, MemberQ[restTokens, #]&];
+    If[exported === {}, Return[Missing["NothingToSplit"], Module]];
+    needed = FixedPoint[Union[#, Flatten[deps /@ #]]&, exported];
+    neededLines = lineOf /@ Select[movedNames, MemberQ[needed, #]&];
+    If[!AnyTrue[neededLines, StringContainsQ[#, ntSplitHeavyRx[heavy]]&], Return[Missing["NotWorthSplitting"], Module]];
+    tokens = Union @@ Prepend[ntIdentifiers /@ neededLines, {}];
+    reads = MemberQ[tokens, #]& /@ restNames;
+    splitName = If[tab, "split_tab", "split"];
+    postName = If[tab, "post_split_tab", "post_split"];
+(* post_split's template header: post's (which already has TP_) with one more parameter for S *)
+    sPrefix = StringReplace[prefix, "template<" -> "template<typename TS_, ", 1];
+    {reads,
+     prefix <> "auto " <> splitName <> "(const TP_ &P_, " <> StringRiffle[rest, ", "] <> ")\n{\n" <>
+       StringRiffle[Join[usings, binds, neededLines], "\n"] <>
+       "\n  return DiFfRG::device::make_tuple(" <> StringRiffle[exported, ", "] <> ");\n}",
+     sPrefix <> "auto " <> postName <> "(const TP_ &P_, const TS_ &S_, " <>
+       StringRiffle[If[tab, Join[params[[2 ;; 3]], rest], rest], ", "] <> ")\n{\n" <>
+       StringRiffle[Join[usings, binds,
+         MapIndexed["  [[maybe_unused]] const auto &" <> #1 <> " = DiFfRG::device::get<" <> ToString[#2[[1]] - 1] <> ">(S_);"&,
+           exported],
+         restLines], "\n"] <> "\n}"}];
+
+(* The kernel text with split()/post_split() after every post() and split_tab()/post_split_tab() after every
+   post_tab(), and the traits; the text unchanged and no traits if a definition cannot be split. *)
+ntSplitKernelText[text_String, var_, heavy_List] :=
+  Module[{chars = Characters[text], spans, out = text, shift = 0, parts = {}, reads, failed = None},
+    If[!StringQ[var] || heavy === {}, Return[{text, {}}, Module]];
+    spans = SortBy[
+        Join[
+          ({#, "auto post("}& /@ (First /@ StringPosition[text, "auto post("])),
+          ({#, "auto post_tab("}& /@ (First /@ StringPosition[text, "auto post_tab("]))],
+        First];
+    If[spans === {}, Return[{text, {}}, Module]];
+    Do[
+      If[failed === None,
+        With[{span = ntDefinitionSpan[text, chars, s[[1]], s[[2]]]},
+          With[{r = ntSplitDefinition[StringTake[text, span], s[[2]], var, heavy]},
+            If[ListQ[r], AppendTo[parts, {span, r}], failed = {s[[2]], r}]]]],
+      {s, spans}];
+    If[failed =!= None,
+      ntLog["[split] not applied: ", failed[[1]], " ", failed[[2]]];
+      Return[{text, {}}, Module]];
+    Do[
+      With[{add = "\n" <> p[[2, 2]] <> "\n" <> p[[2, 3]]},
+        out = StringInsert[out, add, p[[1, 2]] + 1 + shift];
+        shift += StringLength[add]],
+      {p, parts}];
+    reads = Or @@@ Transpose[#[[2, 1]]& /@ parts];
+    ntLog["[split] ", Length[parts], " definition(s) split at ", var];
+    {out,
+     {"static constexpr bool has_split = true;",
+      "static constexpr std::array<bool, " <> ToString[Length[reads]] <> "> split_reads{" <>
+        StringRiffle[If[#, "true", "false"]& /@ reads, ", "] <> "};"}}];
+
+(* The calls that make split() worth its state: the kernel's dressing lookups. *)
+ntSplitHeavy[o_] := ntParamName /@ o["Dressings"];
+
 (* One kernel entry point, lowered by FunKit. Each body has its own MakeCppFunction so COEN's CSE
    spans it whole. Per-body timing: the aggregate [prof] line of ntLowerKernel also covers
    constant(), the class and the header, so the cost of one BODY (what "RealOutput" removes) is
@@ -1429,6 +1615,62 @@ ntMatsubaraEvenQ[integrand_, matsubaraSym_, mVarIdx_, symDefs_] :=
           " at an odd power (or inside a shifted dressing argument) — no matsubara_even trait"]];
       even]];
 
+(* PHI EVENNESS: is the integrand even in the integrator's periodic azimuth phi, K(phi) = K(-phi)? A proof, not a
+   probe: phi -> -phi must be a reflection R of the Euclidean frame, and the integrand R-invariant.
+   1. Frame: every frame vector that depends on phi maps to itself under phi -> -phi up to the signs sigma_c of its
+      components, with one common sigma (zero components fit either sign), i.e. v(-phi) = R v(phi), R = diag(sigma).
+      Every other frame vector is phi-free and vanishes in the flipped components, so R fixes it.
+   2. Diagrams: no Levi-Civita tensor, no gamma5 (whose traces produce one) and no fixed Cartesian axis (ntUnitVec, a
+      Lorentz index pinned to an integer). Every other Lorentz structure (metric, projectors, gamma strings and their
+      traces) is O(4) covariant, so a full contraction is invariant under R. Heads are matched by name, whatever the
+      context they were written in.
+   3. Scalar body (dressing and regulator arguments, denominators, coefficients, with the symbol defs substituted
+      back): phi only inside Cos[phi] and even powers of Sin[phi].
+   Then the integrand at -phi equals the one at phi; it is periodic, so it is even about 0 and about pi. A missed trait
+   costs time, a wrong one doubles the even part and drops the odd part of the integrand. *)
+(* a Lorentz index pinned to an integer that expandFixedComponents has not yet turned into ntUnitVec (hand-written
+   diagrams) *)
+ntPinnedIndexQ[diagrams_] :=
+  !FreeQ[diagrams, (h_Symbol)[_Integer, _, _] /; SymbolName[h] === "ntGamma"] ||
+  !FreeQ[diagrams, (h_Symbol)[___, _Integer, ___] /; SymbolName[h] === "ntMetric"] ||
+  !FreeQ[diagrams, {"free", _Integer}];
+ntPhiEvenQ[None, ___] := False;
+ntPhiEvenQ[name_, frame_, symDefs_, diagrams_, integrand_] :=
+  Module[{phi, vecs, dep, rest, sigma, bad = None, body},
+    phi = SelectFirst[DeleteDuplicates @ Cases[{Values[frame], integrand, Values[symDefs]}, _Symbol, Infinity],
+      SymbolName[#] === ToString[name]&, None];
+    If[phi === None,
+      ntLog["[phi_even] ", name, " is not a symbol of the flow — no phi_even trait"];
+      Return[False, Module]];
+    vecs = Select[Normal[frame], ListQ[Last[#]] && Length[Last[#]] === 4&];
+    {dep, rest} = {Select[vecs, !FreeQ[Last[#], phi]&], Select[vecs, FreeQ[Last[#], phi]&]};
+    (* sigma_c: +1 even, -1 odd, 0 neither; Missing for a component that is zero in every phi-dependent vector *)
+    sigma = Table[
+      With[{cs = DeleteCases[Map[Last[#][[c]]&, dep], 0]},
+        If[cs === {}, Missing[],
+          With[{each = Map[Which[
+                PossibleZeroQ[Simplify[(# /. phi -> -phi) - #]], 1,
+                PossibleZeroQ[Simplify[(# /. phi -> -phi) + #]], -1,
+                True, 0]&, cs]},
+            If[Length[DeleteDuplicates[each]] === 1 && First[each] =!= 0, First[each], 0]]]],
+      {c, 4}];
+    Which[
+      MemberQ[sigma, 0],
+        bad = "a frame component is neither even nor odd in " <> ToString[phi] <> " (or has mixed parity)",
+      AnyTrue[rest, Function[w, AnyTrue[Range[4], sigma[[#]] === -1 && !PossibleZeroQ[Simplify[Last[w][[#]]]]&]]],
+        bad = "a phi-free frame vector has a component in the reflected direction",
+      !FreeQ[diagrams, (h_Symbol)[___] /; MemberQ[{"ntEpsilon", "ntGamma5", "ntUnitVec"}, SymbolName[h]]] ||
+        ntPinnedIndexQ[diagrams],
+        bad = "the diagrams carry a Levi-Civita tensor, gamma5 or a fixed Cartesian axis",
+      True,
+        body = (integrand //. Normal[symDefs]) /. Power[Sin[phi], n_Integer /; EvenQ[n]] :> 1 /. Cos[phi] -> 1;
+        If[!FreeQ[body, phi], bad = "the scalar body has " <> ToString[phi] <> " outside Cos and even powers of Sin"]];
+    If[bad === None,
+      ntLog["[phi_even] proven: the integrand is even in ", phi, " — phi_even trait"];
+      True,
+      ntLog["[phi_even] not proven (", bad, ") — no phi_even trait"];
+      False]];
+
 (* The kernel class (traits + entry points) wrapped into the header. The numeric kernel is flat
    straight-line arithmetic: the generated trace functions (the traces header) plus the support
    runtime; no tensor-engine headers. A complex flow pulls the verdict header unless
@@ -1457,7 +1699,7 @@ ntKernelHeader[o_, members_List, complexQ_, headerFile_] :=
    net-build and the generator emit, so without this the [prof] trail has a blind spot. *)
 ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, mVarIdx_, symDefs_, headerFile_,
               tables_ : None] :=
-  Module[{bodyFor, kernelFn, hoistTrait, splitFns, constFn, mEvenBody, header},
+  Module[{bodyFor, kernelFn, hoistTrait, splitTrait, splitFns, constFn, mEvenBody, header},
     With[{ntT =
       First @
         AbsoluteTiming[
@@ -1466,12 +1708,17 @@ ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, 
 (* trace tables: kernel_tab()/post_tab() next to kernel()/post(), after the hoist made post() *)
           If[tables =!= None,
             kernelFn = ntTableKernelText[kernelFn, {<|"Ns" -> o["NsHome"], "Offset" -> "0"|>}, $ntRealT, tables["FillArgNames"]]];
+(* the split at the innermost variable, after the tables made post_tab() *)
+          {kernelFn, splitTrait} = ntSplitKernelText[kernelFn, o["InnerSplitVar"], ntSplitHeavy[o]];
+(* last, on the finished functions: one coordinate transform per axis argument of the SharedGrids groups *)
+          kernelFn = ntShareAxisIndices[kernelFn, o["IndexShareKinds"], o["SharedGrids"]];
 (* The two halves are lowered from the SAME machinery as the full body, so a complex flow gets its
    #if ladder in each of them and the verdict macro keeps meaning one thing across all three. *)
           splitFns =
             If[part["Split"],
-              {bodyFor["kernel_finite_extent", part["FiniteExtentExpr"]],
-               bodyFor["kernel_tail", part["TailExpr"]]},
+              ntShareAxisIndices[#, o["IndexShareKinds"], o["SharedGrids"]]& /@
+                {bodyFor["kernel_finite_extent", part["FiniteExtentExpr"]],
+                 bodyFor["kernel_tail", part["TailExpr"]]},
               {}];
           constFn = ntConstFn[o["Constant"], o["Decorator"], sig["ConstParams"], o["SupportNamespace"]];
           mEvenBody = ntMatsubaraEvenQ[integrand, matsubaraSym, mVarIdx, symDefs];
@@ -1494,7 +1741,9 @@ ntLowerKernel[o_, integrand_, part_, sig_, preamble_, complexQ_, matsubaraSym_, 
               If[part["FiniteExtent"],
                 {"static constexpr bool matsubara_finite_extent = true;"},
                 {}],
+              If[TrueQ[o["PhiEven"]], {"static constexpr bool phi_even = true;"}, {}],
               hoistTrait,
+              splitTrait,
               If[tables =!= None, ntTraceTableTraits[tables, {<|"Ns" -> o["NsHome"]|>}], {}],
 (* MIXED flow: two entry points instead of one. `kernel` stays and is still the whole thing -- it is
    what a consumer without the split machinery calls, and what the split is checked against. *)
@@ -1796,6 +2045,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, opts : Option
           (* the table fill takes the kinematic fill arguments only, never the dressings *)
           Join[t, <|"FillArgNames" -> (SymbolName /@ fr["FillArgs"]),
                     "FillArgSigDouble" -> StringRiffle[("[[maybe_unused]] double " <> SymbolName[#])& /@ fr["FillArgs"], ", "]|>]]];
+    o["PhiEven"] = ntPhiEvenQ[o["PhiEvenVar"], fr["Frame"], fr["SymDefs"], k["Diagrams"], integrand];
     header = ntLowerKernel[o, integrand, part, sig, pre["Preamble"], complexQ, ms["MatsubaraSym"],
                ms["MVarIdx"], fr["SymDefs"], headerFile, tables]["Header"];
     (* the generator also needs which dressing atoms are complex (see ntDrSplit) *)

@@ -20,19 +20,24 @@
 (* Default balance under Automatic, in flops of inline trace per byte of table entry read. *)
 $ntTraceTableBalance = 1.;
 
-MakeNTKernel::ttopt = "\"TraceTables\" -> `1` is not False, True, Automatic or an Association with keys \"Balance\" and/or \"Scales\".";
+MakeNTKernel::ttopt = "\"TraceTables\" -> `1` is not False, True, Automatic or an Association with keys \"Balance\", \"Scales\" and/or \"Precision\" (\"ctype\" or \"fp64\").";
 MakeNTKernel::ttoff = "\"TraceTables\" was requested, but this flow cannot be tabulated: `1`.";
 
-(* -> None (off) | <|"Balance" -> B, "Scales" -> Automatic | {name} | {}, "Explicit" -> bool|> *)
+(* -> None (off) | <|"Balance" -> B, "Scales" -> Automatic | {name} | {}, "Explicit" -> bool, "Fp64" -> bool|>.
+   "Precision" -> "fp64" keeps a float kernel's table in fp64 (float pairs, reconstruction in double, see
+   trace_table.hpp): exact to the double table where the cleared numerators cancel (five-point tadpoles at small
+   external momenta, docs/NUMTRACER_TABLE_PRECISION.md), at 2x the table bytes and double arithmetic in the
+   reconstruction. "ctype" (default): the kernel's own type. No effect on double kernels. *)
 ntTraceTableOption[v_] :=
   Which[
     v === False || v === None, None,
-    v === Automatic, <|"Balance" -> $ntTraceTableBalance, "Scales" -> Automatic, "Explicit" -> False|>,
-    v === True, <|"Balance" -> 0., "Scales" -> Automatic, "Explicit" -> True|>,
-    AssociationQ[v] && SubsetQ[{"Balance", "Scales"}, Keys[v]] &&
-      NumericQ[Lookup[v, "Balance", 0.]] && MatchQ[Lookup[v, "Scales", Automatic], Automatic | {___String}],
+    v === Automatic, <|"Balance" -> $ntTraceTableBalance, "Scales" -> Automatic, "Explicit" -> False, "Fp64" -> False|>,
+    v === True, <|"Balance" -> 0., "Scales" -> Automatic, "Explicit" -> True, "Fp64" -> False|>,
+    AssociationQ[v] && SubsetQ[{"Balance", "Scales", "Precision"}, Keys[v]] &&
+      NumericQ[Lookup[v, "Balance", 0.]] && MatchQ[Lookup[v, "Scales", Automatic], Automatic | {___String}] &&
+      MemberQ[{"ctype", "fp64"}, Lookup[v, "Precision", "ctype"]],
       <|"Balance" -> N @ Lookup[v, "Balance", $ntTraceTableBalance], "Scales" -> Lookup[v, "Scales", Automatic],
-        "Explicit" -> True|>,
+        "Explicit" -> True, "Fp64" -> Lookup[v, "Precision", "ctype"] === "fp64"|>,
     True, Message[MakeNTKernel::ttopt, v]; Abort[]];
 
 (* Is every frame vector homogeneous in the symbols `ids` (0-based Poly var ids), of degree 1 (a momentum)
@@ -112,7 +117,7 @@ ntTraceTableSpec[o_, ncomp_, args_List, coordNames_, matsubaraSym_] :=
         ntLog["[tables] off: ", why]; Return[None, Module]]];
     ntLog["[tables] scales: ", sc["RadialName"], " (radial)",
       If[sc["ExternalName"] === None, "", ", " <> sc["ExternalName"] <> " (external)"], ", balance ", tt["Balance"]];
-    Join[sc, <|"Balance" -> tt["Balance"], "Explicit" -> tt["Explicit"],
+    Join[sc, <|"Balance" -> tt["Balance"], "Explicit" -> tt["Explicit"], "Fp64" -> TrueQ[tt["Fp64"]],
       "BoxNames" -> TakeWhile[SymbolName /@ args, !MemberQ[cands, #]&],
       "ExtNames" -> Select[SymbolName /@ args, MemberQ[cands, #]&]|>]];
 

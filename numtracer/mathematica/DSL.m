@@ -793,6 +793,56 @@ canonicalizeEqualMomenta[net_, frame_] := Module[{moms, first = <||>, rep = <||>
       {"slash", Replace[vlc, {c_, q_} /; KeyExistsQ[rep, q] :> {rep[q][[2]] c, rep[q][[1]]}, {1}]}] &;
   net /. Append[rules, ntSigma[a_, b_, d1_, d2_] :> ntSigma[slashLeg[a], slashLeg[b], d1, d2]]];
 
+(* The scalar analogue for the atoms of the coefficients: regulator calls, dressing lookups, fractional powers and
+   denominators. After the frame substitution, atoms that are equal as functions of the frame variables can be spelt
+   differently (RB[k^2, l1^2 + 2 sp(l1, p1 + p2 + p3)] at p1 + p2 + p3 = 0; 1/(a - b) and -1/(b - a)) and would be
+   evaluated separately. Atoms are grouped by a canonical key (sums expanded; a denominator up to its sign) and every
+   member of a group gets ONE spelling: the shortest (LeafCount, then canonical order) among the spellings that occur
+   and the expanded form, so a compact factored spelling (S0^2 (1 - s)) is kept. Exact: only spellings of equal value,
+   exact signs. Inner atoms first; tensor-free subexpressions only (scalarQ). See docs/NUMTRACER_SCALAR_ATOM_CANON.md. *)
+$ntCanonSkipHeads = {Plus, Times, Power, List, Complex, Rational, Rule, RuleDelayed};
+(* denominators (an integer power of a product splits into powers of its factors), fractional powers of sums and
+   products, and calls with an argument that is more than a symbol or a number *)
+ntAtomPat = Power[_Plus, _Integer?Negative] | Power[_Plus | _Times, _Rational] |
+   (h_Symbol /; ! MemberQ[$ntCanonSkipHeads, h])[___, Except[_Symbol | _?NumericQ], ___];
+$ntCanonMemo = <||>;   (* Expand, memoised per NumTrace call *)
+ntExpand[e_] := Lookup[$ntCanonMemo, Key[e], $ntCanonMemo[e] = Expand[e]];
+(* the expanded form collected on its atoms: a dressing times a scalar product stays one product *)
+ntCollectAtoms[e_] := With[{at = DeleteDuplicates @ Cases[e, x : (h_Symbol /; ! MemberQ[$ntCanonSkipHeads, h])[___] :> x, {1, Infinity}]},
+  If[at === {}, e, Collect[e, at]]];
+(* the sign s with s e canonical for an expanded e: its leading monomial (canonical order of the coefficient-free
+   monomials, the same for e and -e) gets a positive coefficient; canonical order of {e, -e} if that is not real *)
+ntDenSign[e_] := Module[{terms, monos, c},
+  terms = If[Head[e] === Plus, List @@ e, {e}];
+  monos = Replace[terms, {Times[_?NumericQ, r__] :> Times[r], _?NumericQ -> 1}, {1}];
+  c = Replace[terms[[First@Ordering[monos, 1]]], {Times[x_?NumericQ, __] :> x, x_?NumericQ :> x, _ -> 1}];
+  If[Element[c, Reals], If[c > 0, 1, -1], If[OrderedQ[{e, Expand[-e]}], 1, -1]]];
+(* one atom a (inner atoms already rewritten): {class key, candidate spellings, the atom given its class spelling} *)
+ntAtomInfo[a_] := Switch[a,
+  Power[_, _Integer?Negative],
+    With[{n = Last[a], s = ntDenSign[ntExpand[First[a]]]}, With[{K = ntExpand[s First[a]]},
+      {{"den", K}, {s First[a], ntCollectAtoms[K]}, Function[r, s^n Power[r, n]]}]],
+  Power[_, _Rational],
+    With[{K = ntExpand[First[a]], r = Last[a]}, {{"pow", K}, {First[a], ntCollectAtoms[K]}, Function[b, Power[b, r]]}],
+  _,
+    With[{K = Head[a] @@ (ntExpand /@ List @@ a)},
+      {{"call", K}, {a, Head[a] @@ (ntCollectAtoms[ntExpand[#]] & /@ List @@ a)}, Identity}]];
+canonicalizeScalarAtoms[net_] := Module[{atoms, height, hs, repl = <||>, cands = <||>, spell = <||>, info},
+  atoms = DeleteDuplicates @ Cases[net, a : ntAtomPat /; scalarQ[a], {0, Infinity}];
+  If[atoms === {}, Return[net, Module]];
+  (* how many atom layers an atom contains: inner atoms are rewritten first *)
+  height[a_] := height[a] = 1 + Max[0, height /@ DeleteDuplicates@Cases[a, x : ntAtomPat /; scalarQ[x], {1, Infinity}]];
+  hs = AssociationMap[height, atoms];
+  Do[With[{level = Select[atoms, hs[#] == h &]},
+      info = AssociationMap[ntAtomInfo[# /. Normal[repl]] &, level];
+      Scan[(cands[#[[1]]] = Join[Lookup[cands, Key[#[[1]]], {}], #[[2]]]) &, Values[info]];
+      (* a class's spelling is fixed at the first level it appears on *)
+      Scan[If[! KeyExistsQ[spell, #], spell[#] = First@SortBy[DeleteDuplicates[cands[#]], {LeafCount, Identity}]] &,
+        DeleteDuplicates[First /@ Values[info]]];
+      Scan[(repl[#] = info[#][[3]][spell[info[#][[1]]]]) &, level]],
+    {h, Union[Values[hs]]}];
+  net /. Dispatch[Normal[repl]]];
+
 (* ---- env-id layout ---------------------------------------------------------- *)
 
 (* Assign each distinct momentum a Base (4 consecutive Var ids) and, where a
@@ -826,7 +876,7 @@ NumTrace::dresscollect = "NumTrace runs with \"DressingCollection\" -> `1`, but 
 call used `2`. FromFunKit already kept (or distributed) the dressed Dirac numerators according to its \
 own setting; pass the same value to both.";
 
-NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose], $ntProf = <||>, $ntPlusMemo = <||>}, Module[
+NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose], $ntProf = <||>, $ntPlusMemo = <||>, $ntCanonMemo = <||>}, Module[
   {frame, args, dress, badRanks, net2, diagrams, allMom, invMom, invSMom, env, nenv, diags, ntT0},
   (* whole-NumTrace wall clock, so a gap between the total and the [prof] parts is visible *)
   ntT0   = AbsoluteTime[];
@@ -867,6 +917,7 @@ NumTrace[net_, OptionsPattern[]] := Block[{$ntProfOn = TrueQ[$NumTracerVerbose],
      resolve. See expandSpatialVecs / spatialVecFrame. *)
   frame = Join[frame, spatialVecFrame[net2, frame]];
   net2 = ntProfTimed["canonicalizeEqualMomenta", canonicalizeEqualMomenta[net2, frame]];
+  net2 = ntProfTimed["canonicalizeScalarAtoms", canonicalizeScalarAtoms[net2]];
 
   (* the top-level sum is the (linear) sum of DIAGRAMS; single-sector vertex sums stay eager, while
      colour<->Lorentz-bridging sums are distributed (see sectorBridgeQ). *)

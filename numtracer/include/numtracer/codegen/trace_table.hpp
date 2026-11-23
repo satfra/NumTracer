@@ -14,9 +14,16 @@
 ///
 ///     T = s^d · ∏_j (s^{w_j} inv_j)^{m_j} · r^{n0 or D-n1} · Horner_r(a),     d = D − Σ_j w_j m_j,
 ///
-/// (`w_j` = mass dimension of `Q_j`, 2 or 0). Every factor but `s^d` is bounded and Horner in `r` has no
-/// cancellation; the kernel multiplies `s` in last, one factor at a time (`tab_scale`), so a piece overflows
-/// only if its value does — `s^d` alone exceeds the float range already at s ~ 1e3, d = 13.
+/// (`w_j` = mass dimension of `Q_j`, 2 or 0). The kernel multiplies `s^d` in last, one factor at a time
+/// (`tab_scale`), so a piece overflows only if its value does — `s^d` alone exceeds the float range already at
+/// s ~ 1e3, d = 13. `s^{w_j} inv_j` is not bounded by itself: for an atom of the external momenta only it grows
+/// like (l/Q_j)^2 at s = l, so for l > e two factors of `r = e/l` are taken into each such factor (`e^2 inv_j`),
+/// and the remaining atom factors are multiplied in one at a time as well. The Horner sum in `r` can cancel: where several cleared `Q_j`
+/// vanish together, N vanishes like `∏_j Q_j^{m_j}` while its terms stay O(1), so every rounding of the
+/// coefficients is amplified by `κ = ∏_j (s^{w_j}/Q_j)^{m_j}` (docs/NUMTRACER_TABLE_PRECISION.md; κ ~ 1e12 in the
+/// five-point tadpole kernels). A float kernel can therefore keep its table in fp64 ("TraceTables" ->
+/// <|"Precision" -> "fp64"|>, @ref codegen::table_fp64_entries): each entry is stored as an exact float pair (hi, lo),
+/// hi = (float)a, lo = a - hi, and the reconstruction runs in double (`ttrN` returns float).
 ///
 /// Everything here is exact polynomial algebra on the generator's own `Poly`: no fitting, and terms that
 /// cancel identically vanish (up to the lowering's round-off pruning), so the stored range n0..n1 is
@@ -398,7 +405,7 @@ namespace numtracer::inline network
                                           GlobalEnv &g)
   {
     if (tabs.size() != progs.size()) NT_THROW(std::invalid_argument, "select_table_traces: one table per trace");
-    const double bytes = codegen::emit_single() ? 4. : 8.;
+    const double bytes = codegen::emit_single() && !codegen::table_fp64_entries() ? 4. : 8.;
     for (std::size_t i = 0; i < tabs.size(); ++i)
       if (tabs[i] && balance > 0 &&
           !(static_cast<double>(progs[i].ins.size()) > tabs[i]->recon_ops() + balance * bytes * tabs[i]->entries()))
@@ -433,6 +440,10 @@ namespace numtracer::inline network
   namespace tdetail
   {
     /// The fill is fp64 whatever the kernel computes in; restored on every exit.
+    /// A float kernel with fp64 tables stores each entry as the float pair (hi, lo) and reconstructs in double; the
+    /// table then has two slots per entry (tab_size counts slots). Otherwise one entry of the kernel's type.
+    inline bool pair_entries() { return codegen::emit_single() && codegen::table_fp64_entries(); }
+
     struct DoubleEmission {
       codegen::EmitPrecision saved = codegen::emit_precision();
       DoubleEmission() { codegen::emit_precision() = codegen::EmitPrecision::Double; }
@@ -452,33 +463,59 @@ namespace numtracer::inline network
     /// entries `row[(off + e) * st]`: every factor printed here is bounded (see the file comment). With an
     /// external scale (@p scaled), `s = s_ = max(l_, e_)`; without one, `s = l_` and `T = a l^d ∏ (l^w inv)^m`.
     inline void emit_piece(std::ostream &out, const TableTrace &t, int off, const std::string &T, bool scaled,
-                           GlobalEnv &g)
+                           GlobalEnv &g, bool pairs)
     {
-      auto entry = [&](int n) { return "row[" + std::to_string(off + n - t.n0) + " * st]"; };
-      auto rpow = [](int n) { return n ? "powr<" + std::to_string(n) + ">(r_)" : std::string("1"); };
+      auto entry = [&](int n) {
+        const int e = off + n - t.n0;
+        if (!pairs) return "row[" + std::to_string(e) + " * st]";
+        return "(static_cast<double>(row[" + std::to_string(2 * e) + " * st]) + static_cast<double>(row[" +
+               std::to_string(2 * e + 1) + " * st]))";
+      };
+      const std::string fma = pairs ? "NT_FMAD" : codegen::emit_fma();
       const std::string s = scaled ? "s_" : "l_";
-      if (!scaled)
+      if (!scaled) {
         out << "    " << T << " h_ = " << entry(t.n0) << ";\n";
-      else if (t.n0 == t.n1)
-        out << "    " << T << " h_ = " << entry(t.n0) << " * (le_ ? " << rpow(t.n0) << " : " << rpow(t.D - t.n0)
-            << ");\n";
-      else {
-        out << "    " << T << " h_;\n";
-        out << "    if (le_) {\n      h_ = " << entry(t.n1) << ";\n";
-        for (int n = t.n1 - 1; n >= t.n0; --n)
-          out << "      h_ = " << codegen::emit_fma() << "(h_, r_, " << entry(n) << ");\n";
-        if (t.n0) out << "      h_ *= powr<" << t.n0 << ">(r_);\n";
-        out << "    } else {\n      h_ = " << entry(t.n0) << ";\n";
-        for (int n = t.n0 + 1; n <= t.n1; ++n)
-          out << "      h_ = " << codegen::emit_fma() << "(h_, r_, " << entry(n) << ");\n";
-        if (t.D - t.n1) out << "      h_ *= powr<" << t.D - t.n1 << ">(r_);\n";
-        out << "    }\n";
+        // s = l: the atom factors one at a time, so that no power of an atom is formed on its own
+        for (const auto &iv : t.inv) {
+          const std::string inv = "f[" + std::to_string(g.inv_id(iv.atom)) + "]";
+          const std::string base = iv.w == 2 ? "(" + s + " * " + s + " * " + inv + ")" : inv;
+          out << "    h_ = tab_scale<" << iv.m << ">(h_, " << base << ");\n";
+        }
+        return;
       }
-      for (const auto &iv : t.inv) {
-        const std::string inv = "f[" + std::to_string(g.inv_id(iv.atom)) + "]";
-        const std::string base = iv.w == 2 ? "(" + s + " * " + s + " * " + inv + ")" : inv;
-        out << "    h_ *= " << (iv.m == 1 ? base : "powr<" + std::to_string(iv.m) + ">(" + base + ")") << ";\n";
-      }
+      // With an external scale the two branches scale differently. le_ (l <= e): s = e, every atom factor
+      // e^2 inv is bounded by the external kinematics. Otherwise s = l and r = e/l: s^2 inv alone grows like l^2
+      // for an atom of the external momenta only (it overflowed float at l/|Q| ~ 1e6), so each of the first
+      // pairs of r factors goes into one atom factor, r^2 s^2 inv = e^2 inv; the rest of r and of the atoms
+      // follow one factor at a time.
+      auto atoms = [&](bool le) {
+        int rleft = le ? 0 : t.D - t.n1;
+        for (const auto &iv : t.inv) {
+          const std::string inv = "f[" + std::to_string(g.inv_id(iv.atom)) + "]";
+          int m = iv.m;
+          if (iv.w == 2)
+            for (; m > 0 && (le || rleft >= 2); --m) {
+              out << "      h_ *= e_ * e_ * " << inv << ";\n";
+              if (!le) rleft -= 2;
+            }
+          if (m) {
+            const std::string base = iv.w == 2 ? "(" + s + " * " + s + " * " + inv + ")" : inv;
+            out << "      h_ = tab_scale<" << m << ">(h_, " << base << ");\n";
+          }
+        }
+        return rleft;
+      };
+      out << "    " << T << " h_;\n";
+      out << "    if (le_) {\n      h_ = " << entry(t.n1) << ";\n";
+      for (int n = t.n1 - 1; n >= t.n0; --n)
+        out << "      h_ = " << fma << "(h_, r_, " << entry(n) << ");\n";
+      if (t.n0) out << "      h_ *= powr<" << t.n0 << ">(r_);\n";
+      atoms(true);
+      out << "    } else {\n      h_ = " << entry(t.n0) << ";\n";
+      for (int n = t.n0 + 1; n <= t.n1; ++n)
+        out << "      h_ = " << fma << "(h_, r_, " << entry(n) << ");\n";
+      if (const int rleft = atoms(false)) out << "      h_ *= powr<" << rleft << ">(r_);\n";
+      out << "    }\n";
     }
   } // namespace tdetail
 
@@ -526,6 +563,7 @@ namespace numtracer::inline network
                                       const std::string &name, const std::string &argSig, const std::string &decor,
                                       const FillChunk *chunk)
   {
+    const bool pairs = tdetail::pair_entries(); // before the guard: the kernel's precision, not the fill's
     tdetail::DoubleEmission guard;
     out << kLazyPrefix << decor << " void " << name << "(double *out, const std::size_t stride, " << argSig << ") {\n";
     out << std::setprecision(17);
@@ -541,12 +579,22 @@ namespace numtracer::inline network
     for (std::size_t i = 0; i < p.ins.size(); ++i)
       if (!chunk || chunk->keep[i]) edetail::emit_stmt(out, p.ins, i, pl);
     for (std::size_t e = chunk ? chunk->first : 0; e < (chunk ? chunk->last : p.roots.size()); ++e) {
-      out << "  out[" << e << " * stride] = ";
-      if (p.roots[e] < 0)
-        out << "0.";
-      else
+      if (!pairs) {
+        out << "  out[" << e << " * stride] = ";
+        if (p.roots[e] < 0)
+          out << "0.";
+        else
+          edetail::emit_operand(out, p.ins, pl, p.roots[e]);
+        out << ";\n";
+      } else if (p.roots[e] < 0)
+        out << "  out[" << 2 * e << " * stride] = 0.;\n  out[" << 2 * e + 1 << " * stride] = 0.;\n";
+      else {
+        // (hi, lo): hi survives the conversion to float exactly, lo carries the rest
+        out << "  { const double v_ = ";
         edetail::emit_operand(out, p.ins, pl, p.roots[e]);
-      out << ";\n";
+        out << "; const double h_ = static_cast<double>(static_cast<float>(v_)); out[" << 2 * e
+            << " * stride] = h_; out[" << 2 * e + 1 << " * stride] = v_ - h_; }\n";
+      }
     }
     out << "}\n";
   }
@@ -556,6 +604,9 @@ namespace numtracer::inline network
   {
     const std::string T = codegen::emit_real_type();
     const std::string zero = edetail::zero_literal();
+    // R: the type of the reconstruction (double for the fp64 pairs of a float kernel)
+    const bool pairs = tdetail::pair_entries();
+    const std::string R = pairs ? "double" : T;
     out << kLazyPrefix << decor << " " << (t.complex ? std::string("nt_complex_t") : T) << " " << name
         << "([[maybe_unused]] const " << T << " *row, [[maybe_unused]] const std::size_t st, [[maybe_unused]] const "
         << T << " *f) {\n";
@@ -567,21 +618,21 @@ namespace numtracer::inline network
       out << "  return " << (t.complex ? "nt_complex_t{" + zero + ", " + zero + "}" : zero) << ";\n}\n";
       return;
     }
-    out << "  const " << T << " l_ = f[" << g.var_id(sc.radial) << "];\n";
+    out << "  const " << R << " l_ = f[" << g.var_id(sc.radial) << "];\n";
     if (scaled) {
-      out << "  const " << T << " e_ = f[" << g.var_id(sc.external) << "];\n";
+      out << "  const " << R << " e_ = f[" << g.var_id(sc.external) << "];\n";
       out << "  const bool le_ = l_ <= e_;\n";
-      out << "  const " << T << " s_ = le_ ? e_ : l_;\n";
-      out << "  const " << T << " r_ = (le_ ? l_ : e_) / s_;\n";
+      out << "  const " << R << " s_ = le_ ? e_ : l_;\n";
+      out << "  const " << R << " r_ = (le_ ? l_ : e_) / s_;\n";
     }
     const char *acc[2] = {"re_", "im_"};
     for (int k = 0; k < 2; ++k)
-      if (part[k]) out << "  " << T << " " << acc[k] << ";\n";
+      if (part[k]) out << "  " << R << " " << acc[k] << ";\n";
     bool assigned[2] = {false, false};
     int off = offset;
     for (const auto &p : t.pieces) {
       out << "  {\n";
-      tdetail::emit_piece(out, p.t, off, T, scaled, g);
+      tdetail::emit_piece(out, p.t, off, R, scaled, g, pairs);
       // the dressings, then s^d one factor at a time: the running product moves monotonically to the
       // piece's value, so it overflows only if that value does (powr<d>(s) alone overflows float at s ~ 1e3)
       const std::string D = tdetail::dressing_product(p.dress, g);
@@ -592,11 +643,12 @@ namespace numtracer::inline network
       assigned[p.imag] = true;
       off += p.t.entries();
     }
+    const std::string re = pairs ? "static_cast<float>(re_)" : "re_", im = pairs ? "static_cast<float>(im_)" : "im_";
     out << "  return ";
     if (t.complex)
-      out << "nt_complex_t{" << (part[0] ? "re_" : zero) << ", " << (part[1] ? "im_" : zero) << "}";
+      out << "nt_complex_t{" << (part[0] ? re : zero) << ", " << (part[1] ? im : zero) << "}";
     else
-      out << "re_";
+      out << re;
     out << ";\n}\n";
   }
 
@@ -615,6 +667,11 @@ namespace numtracer::inline network
     // h * x^N as N successive factors (x or 1/x), never forming x^N on its own
     out << "template<int N> " << decor << " " << T << " tab_scale(" << T << " h, const " << T << " x){ const " << T
         << " y = N < 0 ? " << (codegen::emit_single() ? "1.f" : "1.") << " / x : x; for(int i=0;i<(N<0?-N:N);++i) h*=y; return h; }\n";
+    const bool pairs = tdetail::pair_entries();
+    const int slots = pairs ? 2 : 1; // table slots per entry
+    if (pairs)
+      out << "template<int N> " << decor
+          << " double tab_scale(double h, const double x){ const double y = N < 0 ? 1. / x : x; for(int i=0;i<(N<0?-N:N);++i) h*=y; return h; }\n";
     std::string args;
     for (const auto &a : argNames)
       args += ", " + a;
@@ -642,7 +699,7 @@ namespace numtracer::inline network
           out << "  " << nm << "_c" << k << "(out, stride" << args << ");\n";
         out << "}\n";
       }
-      calls << "  " << nm << "(out + " << nEntries << " * stride, stride" << args << ");\n";
+      calls << "  " << nm << "(out + " << slots * nEntries << " * stride, stride" << args << ");\n";
       off[i] = nEntries;
       nEntries += tabs[i]->entries();
       ++nTab;
@@ -662,9 +719,9 @@ namespace numtracer::inline network
         out << kLazyPrefix << decor << " auto " << nm << "([[maybe_unused]] const " << T
             << " *row, [[maybe_unused]] const std::size_t st, const " << T << " *f) { return tr" << i << "(f); }\n";
     }
-    out << "static inline constexpr int tab_size = " << nEntries << ";\n";
-    std::fprintf(stderr, "[tables] %d of %zu traces tabulated, %d entries per table node\n", nTab, tabs.size(),
-                 nEntries);
+    out << "static inline constexpr int tab_size = " << slots * nEntries << ";\n";
+    std::fprintf(stderr, "[tables] %d of %zu traces tabulated, %d entries per table node%s\n", nTab, tabs.size(),
+                 nEntries, pairs ? " (fp64, stored as float pairs)" : "");
   }
 #endif // NUMTRACER_DEFINE_BODIES
 

@@ -967,6 +967,7 @@ ntGenTablesPhaseB[ttSpec_, dressed_] :=
       "          throw;\n",
       "          std::fprintf(stderr, \"[tables] trace %zu stays inline: %s\\n\", gi, e.what());\n          tabs.push_back(std::nullopt);\n"],
     "        } });\n",
+    If[TrueQ[ttSpec["Fp64"]], "  numtracer::codegen::table_fp64_entries() = true;\n", ""],
     "  select_table_traces(tabs, progs, " <> ToString[CForm[N @ ttSpec["Balance"]]] <> ", tsc, genv);\n"];
 
 (* After the traces, whose dedup loop fills ttCanon: tab_fill, one ttrN per group, tab_size. *)

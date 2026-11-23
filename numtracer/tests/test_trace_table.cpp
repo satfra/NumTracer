@@ -261,6 +261,43 @@ int main()
           "fills, reads and forwarders are templates: compiled only where called");
   }
 
+  std::printf("== float emission: fp64 tables as float pairs (\"Precision\" -> \"fp64\") ==\n");
+  {
+    nt::GlobalEnv g;
+    std::vector<std::optional<nt::TabulatedTrace>> tabs = {dt, std::nullopt, dt};
+    std::vector<nt::GenProg> progs(3);
+    nt::select_table_traces(tabs, progs, 0.0, sc, g);
+    nt::FillFormulas fm;
+    fm.var = [&](int id) { return F.symbol_names().at(static_cast<std::size_t>(id)); };
+    // float emission with and without "Precision" -> "fp64"
+    auto emit_float = [&](bool fp64) {
+      std::ostringstream os;
+      const auto saved = nt::codegen::emit_precision();
+      nt::codegen::emit_precision() = nt::codegen::EmitPrecision::Single;
+      nt::codegen::table_fp64_entries() = fp64;
+      nt::emit_trace_tables(os, tabs, {0, 1, 0}, fm, "double cos_chi, double cos_theta, double cos_phi",
+                            {"cos_chi", "cos_theta", "cos_phi"}, sc, g, "static inline");
+      nt::codegen::table_fp64_entries() = false;
+      nt::codegen::emit_precision() = saved;
+      return os.str();
+    };
+    const std::string plain = emit_float(false);
+    check(plain.find("tab_size = " + std::to_string(dt->entries()) + ";") != std::string::npos &&
+              plain.find("static_cast<double>(row[") == std::string::npos &&
+              plain.find("const float r_ = ") != std::string::npos,
+          "float, ctype tables (default): one float slot per entry, reconstruction in float");
+    const std::string s = emit_float(true);
+    auto has = [&](const std::string &x) { return s.find(x) != std::string::npos; };
+    check(has("tab_size = " + std::to_string(2 * dt->entries()) + ";"), "float: two slots per entry");
+    check(has("static_cast<double>(static_cast<float>(v_))") && has("void tab_fill0(double *out"),
+          "float: the fill writes (hi, lo) in fp64");
+    check(has("ttr0([[maybe_unused]] const float *row") &&
+              has("static_cast<double>(row[0 * st]) + static_cast<double>(row[1 * st])") && has("const double r_ = ") &&
+              has("NT_FMAD(h_, r_,") && has("static_cast<float>(re_)"),
+          "float: float row, reconstruction and Horner in double, float result");
+    check(has("double tab_scale(double h, const double x)"), "float: a double tab_scale for the reconstruction");
+  }
+
   std::printf("== guards ==\n");
   check(throws([&] { (void)nt::table_form(cases[0].T, F.denominators(), {L.id, -1}); }),
         "missing external scale -> not homogeneous -> throws");

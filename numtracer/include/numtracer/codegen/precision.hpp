@@ -29,6 +29,15 @@ namespace numtracer::codegen
 
   inline bool emit_single() { return emit_precision() == EmitPrecision::Single; }
 
+  /// Trace tables of a float kernel in fp64 ("TraceTables" -> <|"Precision" -> "fp64"|>): each entry is stored as an
+  /// exact float pair and the reconstruction runs in double (trace_table.hpp). Set by the emitted generator's main()
+  /// before the tables are selected; off: the table has the kernel's own type.
+  inline bool &table_fp64_entries()
+  {
+    static bool fp64 = false;
+    return fp64;
+  }
+
   /// The emitted real type.
   inline const char *emit_real_type() { return emit_single() ? "float" : "double"; }
 

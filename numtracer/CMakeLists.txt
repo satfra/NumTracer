@@ -671,6 +671,13 @@ if(NUMTRACER_BUILD_TESTS)
                      -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_equal_momenta.wls")
     set_tests_properties(wolfram_equal_momenta PROPERTIES LABELS wolfram TIMEOUT 300)
 
+    # The proof behind DiFfRG's phi_even trait (ntPhiEvenQ): the frame reflection, no pseudotensors or fixed axes in
+    # the diagrams, phi only in Cos and even powers of Sin in the scalar body.
+    add_test(NAME wolfram_phi_even
+             COMMAND "${NT_WOLFRAM_EXE}" -noprompt
+                     -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_phi_even.wls")
+    set_tests_properties(wolfram_phi_even PROPERTIES LABELS wolfram TIMEOUT 300)
+
     # Collected Dirac slots: diracSlotDecompose must be an exact re-grouping of the vertex sum
     # (expanding the slot back gives the sum), and the collection gate must turn a dressed k=1 and
     # k=2 vertex into an ntDiracSlot under vertex collection.

@@ -84,6 +84,29 @@ ntMatsubaraVar[Automatic, integrator_, vars_List] :=
         True, ToString[v]]]];
 ntMatsubaraVar[v_, _, _] := v;
 
+(* the name of an "IntegrationVariables" entry *)
+ntIntegrationVarName[v_] := Which[StringQ[v], v, AssociationQ[v] && KeyExistsQ[v, "Name"], v["Name"], True, ToString[v]];
+
+(* Resolve the "PhiEvenVar" option to the integration variable that is the integrator's periodic azimuth, or None.
+   Automatic: the 4th variable of Integrator_p2_4D_3ang and the 3rd of Integrator_fT_p2_4D_2ang, the integrators
+   that fold their phi rule for a `phi_even` kernel; every other integrator has no such angle. *)
+ntPhiEvenVar[None, _, _] := None;
+ntPhiEvenVar[Automatic, integrator_, vars_List] :=
+  With[{pos = Which[
+        !StringQ[integrator], None,
+        StringContainsQ[integrator, "Integrator_fT_p2_4D_2ang"], 3,
+        StringContainsQ[integrator, "Integrator_p2_4D_3ang"], 4,
+        True, None]},
+    If[pos === None || Length[vars] < pos, None, ntIntegrationVarName[vars[[pos]]]]];
+ntPhiEvenVar[v_, _, _] := v;
+
+(* The innermost integration variable of an integrator that evaluates it in an inner loop for a split kernel
+   (kernel_has_split, DiFfRG's QuadratureIntegrator): the 4th variable of Integrator_p2_4D_3ang, None otherwise. *)
+ntInnerSplitVar[integrator_, vars_List] :=
+  If[StringQ[integrator] && StringContainsQ[integrator, "Integrator_p2_4D_3ang"] && Length[vars] >= 4,
+    ntIntegrationVarName[vars[[4]]],
+    None];
+
 (* ---- DiFfRG flow directory: an explicit path, or DiFfRG's session flowDir ---- *)
 ntFlowDir[dir_String] :=
   dir;
@@ -119,6 +142,10 @@ Options[MakeNTKernelDiFfRG] =
    name matching no frame symbol is reported loudly. MakeKernel's own "MatsubaraEven" cannot be used:
    it sees the placeholder `body = 0.`, so it would stamp the trait on every kernel. *)
     "MatsubaraVar" -> Automatic,
+(* The integrator's periodic azimuth, for the `phi_even` trait (see MakeNTKernel's "PhiEvenVar"): NumTracer PROVES
+   that the integrand is even in it, and DiFfRG then evaluates half the phi nodes. Automatic = the integrator's phi
+   (ntPhiEvenVar); None skips the check. *)
+    "PhiEvenVar" -> Automatic,
 (* Passed straight through to MakeNTKernel; see the options there. Together they decide whether the
    `matsubara_finite_extent` trait is emitted, i.e. whether DiFfRG replaces the Gaussian Matsubara rule
    with the exact sum over the modes inside the regulator's support. *)
@@ -333,6 +360,16 @@ ntPointArguments[names_, _, _] := names;
 ntShareableDressings[params_List] :=
   Cases[params, a_?AssociationQ /; !ntScalarTypeQ[a["Type"]] && ntShareableInterpTypeQ[a["Type"]] :> a["Name"]];
 
+(* The dressings whose lookups may share coordinate transforms (ntShareAxisIndices), by interpolator dimension; only types
+   with index()/at() (1-D) or index_axis()/at() (2-D, 3-D). Double kernels only: in float kernels the shared indices
+   made the YM ZA3 kernel 25-50% slower (2026-11-14). *)
+ntIndexShareKinds[params_List, computeType_] := None /; computeType =!= "double";
+ntIndexShareKinds[params_List, computeType_] :=
+  With[{named = Function[rx, Cases[params, a_?AssociationQ /; StringQ[a["Type"]] && StringMatchQ[a["Type"], rx ~~ "<" ~~ ___] :>
+      a["Name"]]]},
+    <|"1D" -> named["SplineInterpolator1D" | "LinearInterpolator1D"], "2D" -> named["LinearInterpolator2D"],
+      "3D" -> named["LinearInterpolator3D" | "PeriodicCubicInterpolator3D"]|>];
+
 (* "SharedGrids" for DiFfRG's MakeKernel/MakeKernelGroup, which emit the run-time grid check. Passed only when
    set, so that a DiFfRG without the option keeps working. *)
 ntSharedGridsOpt[groups_] := If[groups === {}, {}, {"SharedGrids" -> groups}];
@@ -493,6 +530,9 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
       "Offline" -> OptionValue["Offline"],
       "CoordinateArgs" -> OptionValue["CoordinateArguments"],
       "MatsubaraVar" -> ntMatsubaraVar[OptionValue["MatsubaraVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]],
+      "PhiEvenVar" -> ntPhiEvenVar[OptionValue["PhiEvenVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]],
+      "InnerSplitVar" -> ntInnerSplitVar[OptionValue["Integrator"], OptionValue["IntegrationVariables"]],
+      "IndexShareKinds" -> ntIndexShareKinds[params, computeType],
       "DecayingRegulators" -> OptionValue["DecayingRegulators"],
       "MatsubaraFiniteExtent" -> OptionValue["MatsubaraFiniteExtent"],
       "RuntimeInclude" -> None,
@@ -587,6 +627,9 @@ MakeNTKernelGroupDiFfRG[ntks : {__NTKernel}, opts : OptionsPattern[]] :=
       "ADParams" -> {}, "ParameterOrder" -> Cases[params, a_?AssociationQ :> a], "Constant" -> 0.,
       "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"],
       "MatsubaraVar" -> ntMatsubaraVar[OptionValue["MatsubaraVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]],
+      "PhiEvenVar" -> ntPhiEvenVar[OptionValue["PhiEvenVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]],
+      "InnerSplitVar" -> ntInnerSplitVar[OptionValue["Integrator"], OptionValue["IntegrationVariables"]],
+      "IndexShareKinds" -> ntIndexShareKinds[params, computeType], "SharedGrids" -> OptionValue["SharedGrids"],
       "DecayingRegulators" -> OptionValue["DecayingRegulators"], "MatsubaraFiniteExtent" -> OptionValue["MatsubaraFiniteExtent"],
       "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"},
       "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True}];
